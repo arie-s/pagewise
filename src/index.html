@@ -549,7 +549,7 @@
       return (async () => {
         const st = await window.pdfAPI.engineStatus();
         const box = document.getElementById('engineStatusText');
-        if (box) box.textContent = st.running ? 'Running at ' + st.endpoint : st.installed ? 'Installed — not running' : 'Not installed';
+        if (box) box.textContent = (st.running ? 'Running at ' + st.endpoint : st.installed ? 'Installed — not running' : 'Not installed') + (st.installed && st.device ? ' · uses ' + st.device : '');
         const rm = document.getElementById('engineRemoveBtn'); if (rm) rm.style.display = st.hasFiles ? '' : 'none';
         return st;
       })();
@@ -612,7 +612,9 @@
         for (let i = 1; i <= state.pdfDoc.numPages; i++) {
           $('loadingText').textContent = 'Smart Extract: page ' + i + ' of ' + state.pdfDoc.numPages + '...';
           const page = await state.pdfDoc.getPage(i);
-          const vp = page.getViewport({ scale: S });
+          // Cap very large pages (posters, drawings) at ~9 MP so the image fits the engine's 16k context.
+          const base = page.getViewport({ scale: 1 });
+          const vp = page.getViewport({ scale: Math.min(S, Math.sqrt(9e6 / (base.width * base.height))) });
           const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
           await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
           const r = await window.pdfAPI.smartExtract({ pngBase64: canvas.toDataURL('image/png').split(',')[1] });
