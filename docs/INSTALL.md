@@ -111,7 +111,7 @@ Open the generated `.dmg` in `dist/`, drag **Pagewise.app** into **Applications*
 
 Signing and notarization credentials are not configured in this repository. If macOS blocks an unsigned build that you trust, try opening it once, then use **System Settings → Privacy & Security → Open Anyway**, following [Apple's instructions](https://support.apple.com/en-us/102445).
 
-The base editor can be built for Intel or Apple Silicon; the automatic AI engine installer currently selects an **arm64** macOS binary, so Intel Macs do not have a supported automatic AI setup.
+The base editor can be built for Intel or Apple Silicon; the automatic AI engine installer downloads the matching arm64 or x64 macOS llama.cpp build. Intel Macs run Smart Extract on the CPU.
 
 ### Updating and the previous name
 
@@ -125,7 +125,7 @@ This app was previously named **Local PDF Desk** and, before that, **PDF Studio 
 
 **Smart Extract:** choose **Tools → Setup AI Reading Engine…**, then **Download & Install**, and **Test Engine**. The installer downloads [llama.cpp](https://github.com/ggml-org/llama.cpp) from GitHub and a `dots.ocr` model plus vision encoder from Hugging Face. Allow several GB of free disk space; the exact download size depends on the selected model files. Linux/macOS extraction needs `unzip` (or Python 3 for ZIP files), or `tar` for a tar archive.
 
-The current automatic installer selects Windows Vulkan x64, Ubuntu/Linux x64 and macOS arm64 release assets. Availability depends on matching upstream assets and system compatibility; it does not provide every CUDA/Vulkan/Metal variant or support every architecture. GPU acceleration and speed depend on the build, drivers and hardware. CPU inference can be much slower.
+On Windows and Linux x64 the installer tries the Vulkan (GPU) build of llama.cpp and keeps it only if llama.cpp finds a real GPU; otherwise it installs the CPU build. On Linux the Vulkan build is tried only when a GPU device and the Vulkan loader (`libvulkan.so.1`) are present. macOS uses the arm64 or x64 build. The setup dialog shows whether the engine uses a GPU or the CPU. Engines installed by older versions keep their previous build until you choose **Remove Engine** and install again. Speed depends on the hardware: as a rough guide, a page takes a few seconds on a GPU and around a minute on a fast desktop CPU.
 
 The AI server binds to `127.0.0.1:8731`; page images are sent to that local server, not a cloud service. Use **Tools → Smart Extract** after setup. Smart Extract produces a Markdown transcript and does not add a searchable text layer to the PDF.
 

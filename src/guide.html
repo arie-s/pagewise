@@ -32,7 +32,7 @@
   <table>
     <tr><th></th><th>Base (installed with the app)</th><th>AI Reading (optional add-on)</th></tr>
     <tr><td><b>What</b></td><td>Everything: viewing, annotating, page tools, merge/split, encryption, offline OCR, CLI</td><td><b>Smart Extract</b> — AI model (dots.ocr) that reads tables, multi-column layouts, formulas and handwriting into clean markdown</td></tr>
-    <tr><td><b>Hardware</b></td><td>No GPU required</td><td>Installer targets Windows x64, Linux x64 and Apple Silicon Macs. GPU acceleration depends on the downloaded llama.cpp build and drivers; Intel Macs have no automatic AI installer.</td></tr>
+    <tr><td><b>Hardware</b></td><td>No GPU required</td><td>Installer targets Windows x64, Linux x64 and Macs (Apple Silicon and Intel). The installer uses a GPU when llama.cpp can find one (Vulkan on Windows/Linux, Metal on Apple Silicon) and otherwise falls back to the CPU.</td></tr>
     <tr><td><b>Internet</b></td><td>Not needed (one-time 15MB language pack for OCR)</td><td>One-time ~4.5GB download, then fully offline</td></tr>
   </table>
 
