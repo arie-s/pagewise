@@ -47,6 +47,11 @@
         }
       ]
     },
+    "mac": {
+      "icon": "build/icon.png",
+      "category": "public.app-category.productivity",
+      "identity": "-"
+    },
     "linux": {
       "category": "Office",
       "target": [
