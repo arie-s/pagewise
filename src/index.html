@@ -597,10 +597,10 @@
       })();
     }
 
-    // Render scale for Smart Extract: follow the largest image's own resolution (photos, scans)
-    // instead of a fixed 2x. A sharper image raises the scale; a smaller one lowers it only on pages
-    // without text, so a low-res logo never blurs a text page. Every page is capped at 4 MP
-    // (~5k vision tokens at 28 px/token), well inside the engine context.
+    // Render scale for Smart Extract: 2x, except image-only pages (screenshots, small scans) whose image
+    // has fewer pixels than that; upscaling them adds vision tokens without adding detail. Never above 2x:
+    // on a 12 MP photo, 4 MP and 9 MP renders read no better than 2x but took 3x and 12x longer on CPU.
+    // Every page is capped at 4 MP (~5k vision tokens) so oversized pages fit the engine context.
     async function extractScale(page) {
       const vp = page.getViewport({ scale: 1 }), area = vp.width * vp.height;
       const ops = await page.getOperatorList(), O = pdfjsLib.OPS;
@@ -609,8 +609,7 @@
         if (fn === O.showText || fn === O.showSpacedText) hasText = true;
         else if (fn === O.paintImageXObject) imgPx = Math.max(imgPx, ops.argsArray[k][1] * ops.argsArray[k][2]);
       });
-      const native = Math.sqrt(imgPx / area);
-      const scale = imgPx && (native > 2 || !hasText) ? native : 2;
+      const scale = imgPx && !hasText ? Math.min(2, Math.sqrt(imgPx / area)) : 2;
       return Math.min(scale, Math.sqrt(4e6 / area));
     }
     async function runSmartExtract() {
