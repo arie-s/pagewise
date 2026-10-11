@@ -674,41 +674,98 @@ app.on('activate', () => {
 
 // IPC Handlers
 
+// ---------- image import ----------
+const IMAGE_EXT = /\.(png|jpe?g)$/i;
+const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true });
+function jpegOrientation(buf) {
+  try {
+    let i = 2;
+    while (i + 4 <= buf.length && buf[i] === 0xFF) {
+      const m = buf[i + 1], len = buf.readUInt16BE(i + 2);
+      if (m === 0xDA) return 1;
+      if (m === 0xE1 && buf.toString('latin1', i + 4, i + 10) === 'Exif\0\0') {
+        const t = i + 10, le = buf.toString('latin1', t, t + 2) === 'II';
+        const r16 = o => le ? buf.readUInt16LE(o) : buf.readUInt16BE(o);
+        const r32 = o => le ? buf.readUInt32LE(o) : buf.readUInt32BE(o);
+        const ifd = t + r32(t + 4), n = r16(ifd);
+        for (let k = 0; k < n; k++) if (r16(ifd + 2 + k * 12) === 0x0112) return r16(ifd + 2 + k * 12 + 8);
+        return 1;
+      }
+      i += 2 + len;
+    }
+  } catch (e) {}
+  return 1;
+}
+async function imagesToPdf(images) {
+  const doc = await PDFDocument.create();
+  for (const { name, buffer } of images) {
+    const isPng = buffer.length > 4 && buffer.readUInt32BE(0) === 0x89504E47;
+    const isJpg = buffer.length > 3 && buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF;
+    let img;
+    try {
+      if (isPng) img = await doc.embedPng(buffer);
+      else if (isJpg) img = await doc.embedJpg(buffer);
+    } catch (e) { img = null; }
+    if (!img) throw new Error(`Unsupported image: ${name}`);
+    const rot = isJpg ? { 3: 180, 6: 90, 8: 270 }[jpegOrientation(buffer)] || 0 : 0;
+    const k = 792 / Math.max(img.width, img.height), w = img.width * k, h = img.height * k;
+    const page = doc.addPage([w, h]);
+    page.drawImage(img, { x: 0, y: 0, width: w, height: h });
+    if (rot) page.setRotation(degrees(rot));
+  }
+  return Buffer.from(await doc.save());
+}
+const isImagePath = p => IMAGE_EXT.test(p);
+
+async function readDocument(filePaths) {
+  const images = filePaths.filter(isImagePath), pdfs = filePaths.filter(p => !isImagePath(p));
+  if (filePaths.length === 0 || (images.length && pdfs.length) || pdfs.length > 1) {
+    throw new Error('Open either one PDF or one or more images');
+  }
+  if (pdfs.length) {
+    const buffer = await fs.promises.readFile(pdfs[0]);
+    currentFilePath = pdfs[0];
+    rememberFile(pdfs[0]);
+    return { path: pdfs[0], name: path.basename(pdfs[0]), data: buffer.toString('base64') };
+  }
+  const sorted = images.map(p => ({ name: path.basename(p), p })).sort(byName);
+  const pdf = await imagesToPdf(await Promise.all(sorted.map(async f => ({ name: f.name, buffer: await fs.promises.readFile(f.p) }))));
+  currentFilePath = null;
+  if (sorted.length === 1) rememberFile(sorted[0].p);
+  return { path: null, name: sorted[0].name.replace(/\.[^.]*$/, '') + '.pdf', data: pdf.toString('base64') };
+}
+
 // Open file dialog
 ipcMain.handle('open-file', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openFile'],
-    filters: [{ name: 'PDF Files', extensions: ['pdf'] }]
-  });
-
-  if (result.canceled) return null;
-
-  const filePath = result.filePaths[0];
-  const buffer = await fs.promises.readFile(filePath);
-  currentFilePath = filePath;
-  rememberFile(filePath);
-
-  return {
-    path: filePath,
-    name: path.basename(filePath),
-    data: buffer.toString('base64')
-  };
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'PDF and Images', extensions: ['pdf', 'png', 'jpg', 'jpeg'] }, { name: 'PDF Files', extensions: ['pdf'] }, { name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }]
+    });
+    if (result.canceled) return null;
+    return await readDocument(result.filePaths);
+  } catch (error) {
+    return { error: error.message };
+  }
 });
 
 // Open specific file
 ipcMain.handle('open-specific-file', async (event, filePath) => {
   try {
-    const buffer = await fs.promises.readFile(filePath);
-    currentFilePath = filePath;
-    rememberFile(filePath);
-
-    return {
-      path: filePath,
-      name: path.basename(filePath),
-      data: buffer.toString('base64')
-    };
+    return await readDocument([filePath]);
   } catch (error) {
     return { error: error.message };
+  }
+});
+
+// Convert images (e.g. dropped files) to a PDF
+ipcMain.handle('images-to-pdf', async (event, files) => {
+  try {
+    const sorted = [...files].sort(byName);
+    const pdf = await imagesToPdf(sorted.map(f => ({ name: f.name, buffer: Buffer.from(f.data, 'base64') })));
+    return { success: true, data: pdf.toString('base64'), name: sorted[0].name.replace(/\.[^.]*$/, '') + '.pdf' };
+  } catch (error) {
+    return { success: false, error: error.message };
   }
 });
 
@@ -716,14 +773,18 @@ ipcMain.handle('open-specific-file', async (event, filePath) => {
 ipcMain.handle('open-multiple-files', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile', 'multiSelections'],
-    filters: [{ name: 'PDF Files', extensions: ['pdf'] }]
+    filters: [{ name: 'PDF and Images', extensions: ['pdf', 'png', 'jpg', 'jpeg'] }, { name: 'PDF Files', extensions: ['pdf'] }, { name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }]
   });
 
   if (result.canceled) return null;
 
   const files = [];
   for (const filePath of result.filePaths) {
-    const buffer = await fs.promises.readFile(filePath);
+    let buffer = await fs.promises.readFile(filePath);
+    if (isImagePath(filePath)) {
+      try { buffer = await imagesToPdf([{ name: path.basename(filePath), buffer }]); }
+      catch (error) { return { error: error.message }; }
+    }
     files.push({
       path: filePath,
       name: path.basename(filePath),
@@ -1155,7 +1216,7 @@ let initialPdfPath = null;
 (function findInitialPdf() {
   const raw = process.argv;
   for (let i = 1; i < raw.length; i++) {
-    if (raw[i].endsWith('.pdf')) { initialPdfPath = raw[i]; break; }
+    if (/\.(pdf|png|jpe?g)$/i.test(raw[i])) { initialPdfPath = raw[i]; break; }
   }
 })();
 
