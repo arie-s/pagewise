@@ -621,6 +621,9 @@ async function runCli(args) {
       console.log('engine running at ' + out.endpoint);
     } else if (cmd === 'engine-stop') {
       stopEngine(); console.log('engine stopped');
+    } else if (cmd === 'engine-remove') {
+      const r = removeEngine(); if (!r.success) throw new Error(r.error);
+      console.log(`engine removed (${Math.round(r.freedBytes / 1048576)} MB freed)`);
     } else if (cmd === 'engine-extract') {
       const img = args[1];
       if (!img) throw new Error('usage: cli engine-extract <image.png>');
@@ -635,7 +638,7 @@ async function runCli(args) {
       console.log(JSON.stringify({ pages: doc.getPageCount(), title: doc.getTitle(), author: doc.getAuthor() }, null, 2));
 
     } else {
-      throw new Error('unknown command. Available: merge, split, encrypt, decrypt, info, engine-install, engine-start, engine-stop, engine-extract');
+      throw new Error('unknown command. Available: merge, split, encrypt, decrypt, info, engine-install, engine-start, engine-stop, engine-remove, engine-extract');
     }
     app.exit(0);
   } catch (e) {
@@ -653,6 +656,9 @@ function openGuide() {
 
 const cliArgs = getCliArgs();
 app.whenReady().then(() => { loadSettings(); cliArgs ? runCli(cliArgs) : createWindow(); });
+
+// Don't leave llama-server running (and holding engine files) after the app exits.
+app.on('will-quit', () => { if (engineProc) stopEngine(); });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -1015,6 +1021,28 @@ function stopEngine() {
   } catch (e) { return { success: false, error: e.message }; }
 }
 
+function dirSize(dir) {
+  let total = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, entry.name);
+    total += entry.isDirectory() ? dirSize(p) : fs.lstatSync(p).size;
+  }
+  return total;
+}
+
+// Deletes llama.cpp and the model; settings and OCR language data stay.
+function removeEngine() {
+  try {
+    stopEngine();
+    const dir = enginePaths().dir;
+    if (!fs.existsSync(dir)) return { success: true, freedBytes: 0 };
+    const freedBytes = dirSize(dir);
+    // Retries cover a just-killed llama-server still holding files on Windows.
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+    return { success: true, freedBytes };
+  } catch (e) { return { success: false, error: e.message }; }
+}
+
 async function smartExtract(pngBase64, prompt) {
   const r = engineProc ? {} : await startEngine();
   if (r.success === false) throw new Error(r.error);
@@ -1042,13 +1070,14 @@ async function smartExtract(pngBase64, prompt) {
   });
 }
 
-ipcMain.handle('engine-status', () => ({ installed: engineInstalled(), running: !!engineProc, endpoint: `http://127.0.0.1:${ENGINE_PORT}` }));
+ipcMain.handle('engine-status', () => ({ installed: engineInstalled(), hasFiles: fs.existsSync(enginePaths().dir), running: !!engineProc, endpoint: `http://127.0.0.1:${ENGINE_PORT}` }));
 ipcMain.handle('engine-install', async (event, opts) => { try { return await installEngine(opts || {}); } catch (e) { return { success: false, error: e.message }; } });
 ipcMain.handle('engine-start', async () => { try { return await startEngine(); } catch (e) { return { success: false, error: e.message }; } });
 ipcMain.handle('engine-stop', () => stopEngine());
+ipcMain.handle('engine-remove', () => removeEngine());
 ipcMain.handle('smart-extract', async (event, { pngBase64, prompt }) => { try { return await smartExtract(pngBase64, prompt); } catch (e) { return { success: false, error: e.message }; } });
 
-// CLI: cli engine-install | cli engine-start | cli engine-stop | cli engine-extract <image.png>
+// CLI: cli engine-install | cli engine-start | cli engine-stop | cli engine-remove | cli engine-extract <image.png>
 
 // Unsaved-changes flag synced from renderer
 ipcMain.on('set-unsaved', (event, flag) => { unsavedFlag = !!flag; });

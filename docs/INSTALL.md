@@ -128,3 +128,22 @@ This app was previously named **Local PDF Desk** and, before that, **PDF Studio 
 The current automatic installer selects Windows Vulkan x64, Ubuntu/Linux x64 and macOS arm64 release assets. Availability depends on matching upstream assets and system compatibility; it does not provide every CUDA/Vulkan/Metal variant or support every architecture. GPU acceleration and speed depend on the build, drivers and hardware. CPU inference can be much slower.
 
 The AI server binds to `127.0.0.1:8731`; page images are sent to that local server, not a cloud service. Use **Tools → Smart Extract** after setup. Smart Extract produces a Markdown transcript and does not add a searchable text layer to the PDF.
+
+**Removing the AI engine:** open **Tools → Setup AI Reading Engine…** and choose **Remove Engine**, or run `pagewise cli engine-remove`. This deletes llama.cpp and the model, which frees several GB. Settings and OCR language data are kept. Smart Extract can be set up again later.
+
+## Uninstalling and removing data
+
+Pagewise keeps settings, OCR language data (`tesseract-data`) and the optional AI engine and model (`ocr-engine`) in its app-data folder:
+
+| Platform | App-data folder |
+|---|---|
+| Windows | `%APPDATA%\Pagewise` |
+| macOS | `~/Library/Application Support/Pagewise` |
+| Linux | `~/.config/Pagewise` |
+
+If you used an earlier version, the data may be in a folder with an old name instead: `Local PDF Desk`, `local-pdf-desk`, `PDF Studio Pro` or `pdf-studio-pro`, in the same parent folder.
+
+- **Windows:** the uninstaller asks whether to delete this data, including the AI engine and model. Updating the app never deletes it.
+- **macOS and Linux:** removing the app, the AppImage or the `.deb` package leaves this folder in place. To free the space, first use **Remove Engine** as above, or delete the app-data folder yourself after uninstalling.
+
+Your PDF files are never stored there and are not affected.

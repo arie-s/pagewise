@@ -550,6 +550,7 @@
         const st = await window.pdfAPI.engineStatus();
         const box = document.getElementById('engineStatusText');
         if (box) box.textContent = st.running ? 'Running at ' + st.endpoint : st.installed ? 'Installed — not running' : 'Not installed';
+        const rm = document.getElementById('engineRemoveBtn'); if (rm) rm.style.display = st.hasFiles ? '' : 'none';
         return st;
       })();
     }
@@ -561,7 +562,7 @@
         '<div class="panel-row"><span class="panel-label" id="engineStatusText">Checking...</span></div>' +
         '<div id="engineProgress" style="display:none;"><div class="form-section-title" id="enginePhase"></div><div style="background:var(--bg-hover);border-radius:4px;height:8px;overflow:hidden;"><div id="engineBar" style="background:var(--primary);height:100%;width:0%;transition:width 0.2s;"></div></div></div>' +
         '<div id="engineError" style="color:var(--danger);font-size:12px;margin-top:8px;"></div>' +
-        '</div><div class="modal-footer"><button class="modal-btn" id="engineStopBtn">Stop Server</button><button class="modal-btn" id="engineInstallBtn">Download &amp; Install</button><button class="modal-btn primary" id="engineStartBtn">Test Engine</button></div></div>';
+        '</div><div class="modal-footer"><button class="modal-btn" id="engineRemoveBtn" style="margin-right:auto;display:none;color:var(--danger);">Remove Engine</button><button class="modal-btn" id="engineStopBtn">Stop Server</button><button class="modal-btn" id="engineInstallBtn">Download &amp; Install</button><button class="modal-btn primary" id="engineStartBtn">Test Engine</button></div></div>';
       $('modalContainer').appendChild(m);
       m.querySelector('[data-close]').onclick = () => { m.remove(); progi && clearInterval(progi); };
       let progi = null;
@@ -585,6 +586,11 @@
         if (!r.success) err(r.error); else { await refreshStatus(); showNotification('Engine running'); }
       };
       m.querySelector('#engineStopBtn').onclick = async () => { await window.pdfAPI.engineStop(); await refreshStatus(); };
+      m.querySelector('#engineRemoveBtn').onclick = async () => {
+        if (!confirm('Remove the AI engine and model? This frees several GB. Smart Extract will need to download them again.')) return;
+        err(''); const r = await window.pdfAPI.engineRemove();
+        if (!r.success) err(r.error); else { const mb = r.freedBytes / 1048576; showNotification('AI engine removed, ' + (mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB') + ' freed'); await refreshStatus(); }
+      };
       (async () => { await refreshStatus(); progi = setInterval(refreshStatus, 3000);
         const obs = new MutationObserver(() => { if (!document.getElementById('engineSetupModal')) { clearInterval(progi); obs.disconnect(); } });
         obs.observe($('modalContainer'), { childList: true });

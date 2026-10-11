@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   engineInstall: (opts) => ipcRenderer.invoke('engine-install', opts),
   engineStart: () => ipcRenderer.invoke('engine-start'),
   engineStop: () => ipcRenderer.invoke('engine-stop'),
+  engineRemove: () => ipcRenderer.invoke('engine-remove'),
   smartExtract: (options) => ipcRenderer.invoke('smart-extract', options),
   onEngineProgress: (callback) => ipcRenderer.on('engine-progress', (ev, m) => callback(m)),
   onMenuSmartExtract: (callback) => ipcRenderer.on('menu-smart-extract', callback),

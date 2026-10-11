@@ -51,7 +51,7 @@ npm ci
 npm start
 ```
 
-Linux needs a graphical desktop and Electron's system libraries. To build installers for Windows, Linux or macOS, set up the AI engine, or troubleshoot AppImage/FUSE issues, see [docs/INSTALL.md](docs/INSTALL.md).
+Linux needs a graphical desktop and Electron's system libraries. To build installers for Windows, Linux or macOS, set up the AI engine, or troubleshoot AppImage/FUSE issues, see [docs/INSTALL.md](docs/INSTALL.md). It also covers removing the AI engine and uninstalling.
 
 ## CLI
 
@@ -63,7 +63,7 @@ npm run cli -- info doc.pdf
 npm run cli -- engine-extract page.png --prompt "Convert the document to markdown."
 ```
 
-Commands: `merge`, `split`, `encrypt`, `decrypt`, `info`, `engine-install`, `engine-start`, `engine-stop`, `engine-extract`. A packaged app takes the literal `cli` argument (for example `pagewise cli info doc.pdf` on Linux). GUI editing and base OCR are not exposed as CLI commands. The CLI runs through Electron; operation on a Linux server without a display has not been verified.
+Commands: `merge`, `split`, `encrypt`, `decrypt`, `info`, `engine-install`, `engine-start`, `engine-stop`, `engine-remove`, `engine-extract`. A packaged app takes the literal `cli` argument (for example `pagewise cli info doc.pdf` on Linux). GUI editing and base OCR are not exposed as CLI commands. The CLI runs through Electron; operation on a Linux server without a display has not been verified.
 
 Menu shortcuts use **Ctrl** (Windows/Linux) or **Cmd** (macOS): **O** open, **S** save, **F** find, **/** full shortcut list.
 
