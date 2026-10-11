@@ -17,6 +17,12 @@
       background: var(--bg); color: var(--text); height: 100vh;
       display: flex; flex-direction: column; overflow: hidden; user-select: none; font-size: 13px;
     }
+    .ui-tip {
+      position: fixed; z-index: 3000; background: #2b2925; color: #fffefb; font-size: 11px;
+      padding: 4px 8px; border-radius: 4px; pointer-events: none; white-space: nowrap;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3); opacity: 0; transition: opacity 0.1s ease;
+    }
+    .ui-tip.show { opacity: 1; }
     .toolbar {
       display: flex; align-items: center; padding: 6px 12px; background: var(--bg-light);
       border-bottom: 1px solid var(--border); gap: 4px; flex-shrink: 0; min-height: 48px;
@@ -213,42 +219,42 @@
 <body>
   <div class="toolbar" id="toolbar">
     <div class="toolbar-group">
-      <button class="tool-btn" id="newBtn" title="New"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></button>
-      <button class="tool-btn" id="openBtn" title="Open"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg></button>
-      <button class="tool-btn" id="saveBtn" title="Save" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17,21 17,13 7,13 7,21"/><polyline points="7,3 7,8 15,8"/></svg></button>
-      <button class="tool-btn" id="printBtn" title="Print" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6,9 6,2 18,2 18,9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg></button>
+      <button class="tool-btn" id="newBtn" data-tip="New"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></button>
+      <button class="tool-btn" id="openBtn" data-tip="Open"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg></button>
+      <button class="tool-btn" id="saveBtn" data-tip="Save" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17,21 17,13 7,13 7,21"/><polyline points="7,3 7,8 15,8"/></svg></button>
+      <button class="tool-btn" id="printBtn" data-tip="Print" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6,9 6,2 18,2 18,9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg></button>
     </div>
     <div class="toolbar-group">
-      <button class="tool-btn" id="undoBtn" title="Undo" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13"/></svg></button>
-      <button class="tool-btn" id="redoBtn" title="Redo" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 019-9 9 9 0 016 2.3l3 2.7"/></svg></button>
+      <button class="tool-btn" id="undoBtn" data-tip="Undo" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13"/></svg></button>
+      <button class="tool-btn" id="redoBtn" data-tip="Redo" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 019-9 9 9 0 016 2.3l3 2.7"/></svg></button>
     </div>
     <div class="toolbar-group">
-      <button class="tool-btn" id="zoomOutBtn" title="Zoom Out" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg></button>
+      <button class="tool-btn" id="zoomOutBtn" data-tip="Zoom Out" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg></button>
       <span class="zoom-display" id="zoomDisplay">100%</span>
-      <button class="tool-btn" id="zoomInBtn" title="Zoom In" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg></button>
+      <button class="tool-btn" id="zoomInBtn" data-tip="Zoom In" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg></button>
     </div>
     <div class="toolbar-group">
-      <button class="tool-btn active" data-tool="select" title="Select (V)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/></svg></button>
-      <button class="tool-btn" data-tool="hand" title="Hand (H)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 11V6a2 2 0 00-4 0v5M14 10V4a2 2 0 00-4 0v6M10 10V6a2 2 0 00-4 0v8a8 8 0 0016 0v-4a2 2 0 00-4 0"/></svg></button>
+      <button class="tool-btn active" data-tool="select" data-tip="Select (V)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/></svg></button>
+      <button class="tool-btn" data-tool="hand" data-tip="Hand (H)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 11V6a2 2 0 00-4 0v5M14 10V4a2 2 0 00-4 0v6M10 10V6a2 2 0 00-4 0v8a8 8 0 0016 0v-4a2 2 0 00-4 0"/></svg></button>
       <div class="toolbar-separator"></div>
-      <button class="tool-btn" data-tool="text" title="Text (T)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4,7 4,4 20,4 20,7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg></button>
-      <button class="tool-btn" data-tool="highlight" title="Highlight"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="10" width="18" height="8" rx="1" fill="#fef08a" opacity="0.7"/></svg></button>
-      <button class="tool-btn" data-tool="underline" title="Underline"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v7a6 6 0 0012 0V3"/><line x1="4" y1="21" x2="20" y2="21"/></svg></button>
-      <button class="tool-btn" data-tool="strikethrough" title="Strikethrough"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="12" x2="20" y2="12"/></svg></button>
+      <button class="tool-btn" data-tool="text" data-tip="Text (T)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4,7 4,4 20,4 20,7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg></button>
+      <button class="tool-btn" data-tool="highlight" data-tip="Highlight"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="10" width="18" height="8" rx="1" fill="#fef08a" opacity="0.7"/></svg></button>
+      <button class="tool-btn" data-tool="underline" data-tip="Underline"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v7a6 6 0 0012 0V3"/><line x1="4" y1="21" x2="20" y2="21"/></svg></button>
+      <button class="tool-btn" data-tool="strikethrough" data-tip="Strikethrough"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="12" x2="20" y2="12"/></svg></button>
       <div class="toolbar-separator"></div>
-      <button class="tool-btn" data-tool="draw" title="Pen (P)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg></button>
-      <button class="tool-btn" data-tool="eraser" title="Eraser (E)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 20H7L3 16a2 2 0 010-2.8L13.4 3a2 2 0 012.8 0l6 6a2 2 0 010 2.8L12 22"/></svg></button>
+      <button class="tool-btn" data-tool="draw" data-tip="Pen (P)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg></button>
+      <button class="tool-btn" data-tool="eraser" data-tip="Eraser (E)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 20H7L3 16a2 2 0 010-2.8L13.4 3a2 2 0 012.8 0l6 6a2 2 0 010 2.8L12 22"/></svg></button>
       <div class="toolbar-separator"></div>
-      <button class="tool-btn" data-tool="line" title="Line (L)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="19" x2="19" y2="5"/></svg></button>
-      <button class="tool-btn" data-tool="arrow" title="Arrow (A)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="19" x2="19" y2="5"/><polyline points="10,5 19,5 19,14"/></svg></button>
-      <button class="tool-btn" data-tool="rectangle" title="Rectangle (R)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg></button>
-      <button class="tool-btn" data-tool="circle" title="Circle (C)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg></button>
+      <button class="tool-btn" data-tool="line" data-tip="Line (L)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="19" x2="19" y2="5"/></svg></button>
+      <button class="tool-btn" data-tool="arrow" data-tip="Arrow (A)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="19" x2="19" y2="5"/><polyline points="10,5 19,5 19,14"/></svg></button>
+      <button class="tool-btn" data-tool="rectangle" data-tip="Rectangle (R)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg></button>
+      <button class="tool-btn" data-tool="circle" data-tip="Circle (C)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg></button>
       <div class="toolbar-separator"></div>
-      <button class="tool-btn" data-tool="redact" title="Redact"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="8" width="18" height="8" fill="#000"/></svg></button>
-      <button class="tool-btn" data-tool="stamp" title="Stamp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 21h14"/><path d="M12 17V9"/><path d="M8 9a4 4 0 018 0"/><rect x="6" y="4" width="12" height="3" rx="1"/></svg></button>
-      <button class="tool-btn" id="imageBtn" title="Add Image"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg></button>
+      <button class="tool-btn" data-tool="redact" data-tip="Redact"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="8" width="18" height="8" fill="#000"/></svg></button>
+      <button class="tool-btn" data-tool="stamp" data-tip="Stamp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 21h14"/><path d="M12 17V9"/><path d="M8 9a4 4 0 018 0"/><rect x="6" y="4" width="12" height="3" rx="1"/></svg></button>
+      <button class="tool-btn" id="imageBtn" data-tip="Add Image"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg></button>
       <div class="toolbar-separator"></div>
-      <button class="tool-btn" id="signatureBtn" title="Add Signature"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="M15 5l4 4"/></svg></button>
+      <button class="tool-btn" id="signatureBtn" data-tip="Add Signature"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="M15 5l4 4"/></svg></button>
     </div>
     <div class="toolbar-group">
       <span class="toolbar-label">Color:</span>
@@ -259,7 +265,7 @@
       <input type="number" class="toolbar-input" id="fontSize" value="14" min="6" max="144">
     </div>
     <div class="toolbar-group" style="margin-left: auto;">
-      <button class="tool-btn" id="searchBtn" title="Find"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+      <button class="tool-btn" id="searchBtn" data-tip="Find"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
     </div>
   </div>
 
@@ -278,8 +284,8 @@
 
     <div class="sidebar hidden" id="sidebar">
       <div class="sidebar-tabs">
-        <button class="sidebar-tab active" data-tab="thumbnails" title="Page thumbnails">Pages</button>
-        <button class="sidebar-tab" data-tab="bookmarks" title="Bookmarks">Bookmarks</button>
+        <button class="sidebar-tab active" data-tab="thumbnails" data-tip="Page thumbnails">Pages</button>
+        <button class="sidebar-tab" data-tab="bookmarks" data-tip="Bookmarks">Bookmarks</button>
       </div>
       <div class="sidebar-content">
         <div class="thumbnail-container" id="thumbnailContainer"></div>
@@ -301,28 +307,28 @@
         </div>
         <div class="panel-section">
           <div class="panel-section-title">Page Actions</div>
-          <div class="panel-btn-group"><button class="panel-btn" id="rotateLeftBtn" title="Rotate left">↺ Left</button><button class="panel-btn" id="rotateRightBtn" title="Rotate right">↻ Right</button></div>
-          <button class="panel-btn" id="insertPageBtn" title="Insert blank page after current page">+ Insert Blank Page</button>
-          <button class="panel-btn" id="insertFromFileBtn" title="Insert pages from another PDF after current page">+ Insert from File</button>
-          <button class="panel-btn danger" id="deletePageBtn" title="Delete current page">Delete Page</button>
+          <div class="panel-btn-group"><button class="panel-btn" id="rotateLeftBtn" data-tip="Rotate left">↺ Left</button><button class="panel-btn" id="rotateRightBtn" data-tip="Rotate right">↻ Right</button></div>
+          <button class="panel-btn" id="insertPageBtn" data-tip="Insert blank page after current page">+ Insert Blank Page</button>
+          <button class="panel-btn" id="insertFromFileBtn" data-tip="Insert pages from another PDF after current page">+ Insert from File</button>
+          <button class="panel-btn danger" id="deletePageBtn" data-tip="Delete current page">Delete Page</button>
         </div>
         <div class="panel-section">
           <div class="panel-section-title">Annotations</div>
           <div class="panel-row"><span class="panel-label">Count:</span><span class="panel-value" id="annotationCount">0</span></div>
-          <button class="panel-btn danger" id="clearAnnotationsBtn" title="Clear all annotations and redaction marks">Clear All</button>
+          <button class="panel-btn danger" id="clearAnnotationsBtn" data-tip="Clear all annotations and redaction marks">Clear All</button>
         </div>
         <div class="panel-section">
           <div class="panel-section-title">Document Tools</div>
-          <button class="panel-btn" id="addWatermarkBtn" title="Add a text watermark to pages">Add Watermark</button>
-          <button class="panel-btn" id="addPageNumbersBtn" title="Add page numbers">Add Page Numbers</button>
-          <button class="panel-btn" id="propertiesBtn" title="Document title, author, subject">Document Properties</button>
+          <button class="panel-btn" id="addWatermarkBtn" data-tip="Add a text watermark to pages">Add Watermark</button>
+          <button class="panel-btn" id="addPageNumbersBtn" data-tip="Add page numbers">Add Page Numbers</button>
+          <button class="panel-btn" id="propertiesBtn" data-tip="Document title, author, subject">Document Properties</button>
         </div>
       </div>
     </div>
   </div>
 
   <div class="status-bar"><div><span id="statusText">Ready</span></div><div class="status-separator"></div><div>Tool: <span id="currentToolDisplay">Select</span></div><div style="margin-left: auto;"><span id="filePath">No file loaded</span></div></div>
-  <div class="search-bar hidden" id="searchBar"><input type="text" class="search-input" id="searchInput" placeholder="Find..."><span class="search-results" id="searchResults"></span><button class="search-btn" id="searchPrev" title="Previous match">◀</button><button class="search-btn" id="searchNext" title="Next match">▶</button><button class="search-btn" id="searchClose" title="Close search (Esc)">✕</button></div>
+  <div class="search-bar hidden" id="searchBar"><input type="text" class="search-input" id="searchInput" placeholder="Find..."><span class="search-results" id="searchResults"></span><button class="search-btn" id="searchPrev" data-tip="Previous match">◀</button><button class="search-btn" id="searchNext" data-tip="Next match">▶</button><button class="search-btn" id="searchClose" data-tip="Close search (Esc)">✕</button></div>
   <div class="loading-overlay hidden" id="loadingOverlay"><div class="loading-spinner"></div><div class="loading-text" id="loadingText">Loading...</div></div>
   <div class="notification hidden" id="notification"></div>
   <div id="modalContainer"></div>
@@ -1190,6 +1196,31 @@
       document.body.style.cursor = 'grabbing';
       document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
     });
+
+    (function() {
+      let tip = null, timer = null;
+      const show = (el) => {
+        hide();
+        tip = document.createElement('div');
+        tip.className = 'ui-tip'; tip.textContent = el.dataset.tip;
+        document.body.appendChild(tip);
+        const r = el.getBoundingClientRect(), tr = tip.getBoundingClientRect();
+        let x = r.left + r.width / 2 - tr.width / 2;
+        x = Math.max(4, Math.min(window.innerWidth - tr.width - 4, x));
+        tip.style.left = x + 'px';
+        tip.style.top = (r.top + r.height + 6 > window.innerHeight - tr.height ? r.top - tr.height - 6 : r.bottom + 6) + 'px';
+        requestAnimationFrame(() => tip.classList.add('show'));
+      };
+      const hide = () => { if (tip) { tip.remove(); tip = null; } if (timer) { clearTimeout(timer); timer = null; } };
+      document.addEventListener('mouseover', e => {
+        const el = e.target.closest('[data-tip]');
+        if (tip && (!el || el.dataset.tip !== tip.textContent)) hide();
+        if (el && !tip) timer = setTimeout(() => show(el), 150);
+      });
+      document.addEventListener('mouseout', e => { if (e.target.closest('[data-tip]')) hide(); });
+      document.addEventListener('mousedown', hide, true);
+      window.addEventListener('blur', hide);
+    })();
 
     function selectTool(tool) {
       state.currentTool = tool;
