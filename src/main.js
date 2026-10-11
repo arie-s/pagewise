@@ -863,13 +863,49 @@ function enginePaths() {
     bin: path.join(d, isWin ? 'llama-server.exe' : 'llama-server'),
     model: path.join(d, 'dots-ocr-text-Q8_0.gguf'),
     mmproj: path.join(d, 'dots-ocr-mmproj.gguf'),
-    pid: path.join(d, 'server.pid')
+    pid: path.join(d, 'server.pid'),
+    device: path.join(d, 'device.txt')
   };
 }
 
 function engineInstalled() {
   const ep = enginePaths();
   return fs.existsSync(ep.bin) && fs.existsSync(ep.model) && fs.existsSync(ep.mmproj);
+}
+
+// llama.cpp release asset for this OS. Linux/Windows have separate Vulkan (GPU) and CPU builds;
+// macOS builds use Metal on Apple Silicon.
+function engineAssetPattern(platform, arch, gpu) {
+  if (platform === 'darwin') return new RegExp(`bin-macos-${arch === 'arm64' ? 'arm64' : 'x64'}\\.(zip|tar\\.gz)$`);
+  if (platform === 'win32') return gpu ? /bin-win-vulkan-x64\.zip$/ : /bin-win-cpu-x64\.zip$/;
+  return gpu ? /bin-ubuntu-vulkan-x64\.(zip|tar\.gz)$/ : /bin-ubuntu-x64\.(zip|tar\.gz)$/;
+}
+
+// Cheap pre-check before downloading the Vulkan build: a GPU render node and the Vulkan loader.
+function linuxGpuLikely() {
+  let node = false;
+  try { node = fs.readdirSync('/dev/dri').some(f => f.startsWith('renderD')); } catch (e) {}
+  return node && ['/usr/lib/x86_64-linux-gnu', '/lib/x86_64-linux-gnu', '/usr/lib64', '/usr/lib']
+    .some(d => fs.existsSync(path.join(d, 'libvulkan.so.1')));
+}
+
+// Real GPUs llama.cpp can use, from `llama-server --list-devices`. Software renderers don't count.
+function parseEngineDevices(text) {
+  return text.split('\n').map(l => l.match(/^\s+\w+: (.+?) \(/)).filter(Boolean).map(m => m[1])
+    .filter(name => !/llvmpipe|lavapipe|swiftshader/i.test(name));
+}
+
+// Resolves null if the binary can't run at all.
+function engineDevices(bin) {
+  return new Promise(resolve => execFile(bin, ['--list-devices'], { timeout: 30000 },
+    (e, stdout, stderr) => resolve(e ? null : parseEngineDevices(stdout + '\n' + stderr))));
+}
+
+// Removes a previously unpacked llama.cpp build; downloaded models (.gguf) stay.
+function clearEngineBinary(ep) {
+  for (const f of fs.readdirSync(ep.dir)) {
+    if (!f.endsWith('.gguf')) fs.rmSync(path.join(ep.dir, f), { recursive: true, force: true });
+  }
 }
 
 async function downloadTo(url, dest, phase, lastPctRef) {
@@ -905,62 +941,79 @@ async function downloadTo(url, dest, phase, lastPctRef) {
   });
 }
 
+// Downloads and unpacks the llama.cpp release asset matching `pattern` into the engine dir.
+async function downloadEngineBinary(ep, pattern, prog, ref) {
+  prog('Fetching llama.cpp release info', 0);
+  const apiRes = await new Promise((resolve, reject) => {
+    const req = net.request({ method: 'GET', url: 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30' });
+    req.setHeader('User-Agent', 'pagewise');
+    req.on('response', resolve); req.on('error', reject); req.end();
+  });
+  let body = '';
+  apiRes.setEncoding('utf8');
+  for await (const chunk of apiRes) body += chunk;
+  const releases = JSON.parse(body);
+  let asset = null;
+  for (const rel of releases) { asset = rel.assets.find(a => pattern.test(a.name)); if (asset) break; }
+  if (!asset) throw new Error('No llama.cpp release asset matching ' + pattern);
+  prog('Downloading llama-server', 1);
+  const archive = path.join(ep.dir, asset.name);
+  await downloadTo(asset.browser_download_url, archive, 'Downloading llama-server', ref);
+  prog('Extracting', 50);
+  if (process.platform === 'win32') {
+    await new Promise((res, rej) => execFile('powershell', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${archive}' -DestinationPath '${ep.dir}' -Force`], e => e ? rej(e) : res()));
+  } else if (archive.endsWith('.zip')) {
+    try { await new Promise((res, rej) => execFile('unzip', ['-o', archive, '-d', ep.dir], e => e ? rej(e) : res())); }
+    catch (e) { await new Promise((res, rej) => execFile('python3', ['-c', `import zipfile,sys;zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])`, archive, ep.dir], e => e ? rej(e) : res())); }
+  } else {
+    await new Promise((res, rej) => execFile('tar', ['xzf', archive, '-C', ep.dir], e => e ? rej(e) : res()));
+  }
+  // binary may be nested in the archive's top-level dir
+  if (!fs.existsSync(ep.bin)) {
+    const found = (function find(start) {
+      for (const f of fs.readdirSync(start, { withFileTypes: true })) {
+        const full = path.join(start, f.name);
+        if (f.isDirectory()) { const r = find(full); if (r) return r; }
+        if (f.name === (process.platform === 'win32' ? 'llama-server.exe' : 'llama-server')) return full;
+      }
+      return null;
+    })(ep.dir);
+    if (!found) throw new Error('llama-server not found in archive');
+    const libDir = path.dirname(found);
+    for (const f of fs.readdirSync(libDir, { withFileTypes: true })) {
+      if ((f.isFile() || f.isSymbolicLink()) && (f.name.startsWith('lib') || f.name.startsWith('ggml') || f.name === (process.platform === 'win32' ? 'llama-server.exe' : 'llama-server') || f.name.endsWith('.dll') || f.name.endsWith('.so') || /\.so\.\d/.test(f.name))) {
+        // Keep versioned .so symlinks (libfoo.so.0 -> libfoo.so.0.6.0) as links; the binary loads them by link name.
+        if (f.isSymbolicLink()) fs.symlinkSync(fs.readlinkSync(path.join(libDir, f.name)), path.join(ep.dir, f.name));
+        else fs.copyFileSync(path.join(libDir, f.name), path.join(ep.dir, f.name));
+      }
+    }
+    if (process.platform !== 'win32') {
+      fs.chmodSync(ep.bin, 0o755);
+      for (const f of fs.readdirSync(ep.dir)) if (f.endsWith('.so') || /\.so\.\d/.test(f)) try { fs.chmodSync(path.join(ep.dir, f), 0o755); } catch (e) {}
+    }
+  }
+}
+
 async function installEngine(opts = {}) {
   const ep = enginePaths();
   if (!fs.existsSync(ep.dir)) fs.mkdirSync(ep.dir, { recursive: true });
   const ref = { pct: -1 };
   const prog = (phase, pct) => { const m = { phase, pct }; if (mainWindow) mainWindow.webContents.send('engine-progress', m); else console.log(`  ${phase}: ${pct}%`); };
 
-  // 1. llama-server binary (llama.cpp release, GPU-agnostic builds)
+  // 1. llama-server binary (llama.cpp release). Try the GPU build where one may work;
+  // fall back to the CPU build if llama.cpp can't see a real GPU with it.
   if (!fs.existsSync(ep.bin) || opts.forceBinary) {
-    prog('Fetching llama.cpp release info', 0);
-    const apiRes = await new Promise((resolve, reject) => {
-      const req = net.request({ method: 'GET', url: 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30' });
-      req.setHeader('User-Agent', 'pagewise');
-      req.on('response', resolve); req.on('error', reject); req.end();
-    });
-    let body = '';
-    apiRes.setEncoding('utf8');
-    for await (const chunk of apiRes) body += chunk;
-    const releases = JSON.parse(body);
-    const pattern = { linux: /bin-ubuntu-x64\.(zip|tar\.gz)$/, win32: /bin-win-vulkan-x64\.zip$/, darwin: /bin-macos-arm64\.zip$/ }[process.platform];
-    let asset = null;
-    for (const rel of releases) { asset = rel.assets.find(a => pattern.test(a.name)); if (asset) break; }
-    if (!asset) throw new Error('No llama.cpp release asset for ' + process.platform);
-    prog('Downloading llama-server', 1);
-    const archive = path.join(ep.dir, asset.name);
-    await downloadTo(asset.browser_download_url, archive, 'Downloading llama-server', ref);
-    prog('Extracting', 50);
-    if (process.platform === 'win32') {
-      await new Promise((res, rej) => execFile('powershell', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${archive}' -DestinationPath '${ep.dir}' -Force`], e => e ? rej(e) : res()));
-    } else if (archive.endsWith('.zip')) {
-      try { await new Promise((res, rej) => execFile('unzip', ['-o', archive, '-d', ep.dir], e => e ? rej(e) : res())); }
-      catch (e) { await new Promise((res, rej) => execFile('python3', ['-c', `import zipfile,sys;zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])`, archive, ep.dir], e => e ? rej(e) : res())); }
-    } else {
-      await new Promise((res, rej) => execFile('tar', ['xzf', archive, '-C', ep.dir], e => e ? rej(e) : res()));
+    clearEngineBinary(ep);
+    const tryGpu = process.platform === 'win32' || (process.platform === 'linux' && linuxGpuLikely());
+    await downloadEngineBinary(ep, engineAssetPattern(process.platform, process.arch, tryGpu), prog, ref);
+    if (tryGpu && !(await engineDevices(ep.bin) || []).length) {
+      prog('No usable GPU found, switching to CPU build', 50);
+      clearEngineBinary(ep);
+      await downloadEngineBinary(ep, engineAssetPattern(process.platform, process.arch, false), prog, ref);
     }
-    // binary may be nested in the archive's top-level dir
-    if (!fs.existsSync(ep.bin)) {
-      const found = (function find(start) {
-        for (const f of fs.readdirSync(start, { withFileTypes: true })) {
-          const full = path.join(start, f.name);
-          if (f.isDirectory()) { const r = find(full); if (r) return r; }
-          if (f.name === (process.platform === 'win32' ? 'llama-server.exe' : 'llama-server')) return full;
-        }
-        return null;
-      })(ep.dir);
-      if (!found) throw new Error('llama-server not found in archive');
-      const libDir = path.dirname(found);
-      for (const f of fs.readdirSync(libDir, { withFileTypes: true })) {
-        if (f.isFile() && (f.name.startsWith('lib') || f.name.startsWith('ggml') || f.name === (process.platform === 'win32' ? 'llama-server.exe' : 'llama-server') || f.name.endsWith('.dll') || f.name.endsWith('.so') || /\.so\.\d/.test(f.name))) {
-          fs.copyFileSync(path.join(libDir, f.name), path.join(ep.dir, f.name));
-        }
-      }
-      if (process.platform !== 'win32') {
-        fs.chmodSync(ep.bin, 0o755);
-        for (const f of fs.readdirSync(ep.dir)) if (f.endsWith('.so') || /\.so\.\d/.test(f)) try { fs.chmodSync(path.join(ep.dir, f), 0o755); } catch (e) {}
-      }
-    }
+    const devices = await engineDevices(ep.bin);
+    if (!devices) throw new Error('llama-server failed to run after install');
+    fs.writeFileSync(ep.device, devices.length ? 'GPU (' + [...new Set(devices)].join(', ') + ')' : 'CPU');
   }
 
   // 2. model + mmproj from Hugging Face
@@ -991,7 +1044,10 @@ async function startEngine() {
   engineProc = require('child_process').spawn(ep.bin, [
     '-m', ep.model, '--mmproj', ep.mmproj,
     '--host', '127.0.0.1', '--port', String(ENGINE_PORT),
-    '--no-webui', '-ngl', '999'
+    '--no-webui', '-ngl', '999',
+    // One request at a time; 16k fits a page image (≤ ~12k tokens at the renderer's pixel cap) plus 4096 output tokens.
+    // Without this llama-server reserves a 131k-token context (~12 GB RAM on CPU).
+    '-c', '16384', '-np', '1'
   ], { stdio: 'ignore' });
   fs.writeFileSync(ep.pid, String(engineProc.pid));
   // wait for health
@@ -1070,7 +1126,7 @@ async function smartExtract(pngBase64, prompt) {
   });
 }
 
-ipcMain.handle('engine-status', () => ({ installed: engineInstalled(), hasFiles: fs.existsSync(enginePaths().dir), running: !!engineProc, endpoint: `http://127.0.0.1:${ENGINE_PORT}` }));
+ipcMain.handle('engine-status', () => ({ installed: engineInstalled(), hasFiles: fs.existsSync(enginePaths().dir), running: !!engineProc, device: fs.existsSync(enginePaths().device) ? fs.readFileSync(enginePaths().device, 'utf8') : null, endpoint: `http://127.0.0.1:${ENGINE_PORT}` }));
 ipcMain.handle('engine-install', async (event, opts) => { try { return await installEngine(opts || {}); } catch (e) { return { success: false, error: e.message }; } });
 ipcMain.handle('engine-start', async () => { try { return await startEngine(); } catch (e) { return { success: false, error: e.message }; } });
 ipcMain.handle('engine-stop', () => stopEngine());
