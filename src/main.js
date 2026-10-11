@@ -6,7 +6,7 @@ const fs = require('fs');
 const hasUserData = dir => ['settings.json', 'ocr-engine', 'tesseract-data']
   .some(name => fs.existsSync(path.join(dir, name)));
 if (!hasUserData(app.getPath('userData'))) {
-  const legacyData = ['PDF Studio Pro', 'pdf-studio-pro']
+  const legacyData = ['Local PDF Desk', 'local-pdf-desk', 'PDF Studio Pro', 'pdf-studio-pro']
     .map(name => path.join(app.getPath('appData'), name))
     .find(hasUserData);
   if (legacyData) app.setPath('userData', legacyData);
@@ -459,12 +459,12 @@ function createWindow() {
         },
         { type: 'separator' },
         {
-          label: 'About Local PDF Desk',
+          label: 'About Pagewise',
           click: () => {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
-              title: 'About Local PDF Desk',
-              message: `Local PDF Desk v${app.getVersion()}`,
+              title: 'About Pagewise',
+              message: `Pagewise v${app.getVersion()}`,
               detail: `Private PDF editing with local AI.
 
 Features:
@@ -640,7 +640,7 @@ async function runCli(args) {
 }
 
 function openGuide() {
-  const g = new BrowserWindow({ width: 920, height: 880, title: 'Local PDF Desk — User Guide',
+  const g = new BrowserWindow({ width: 920, height: 880, title: 'Pagewise — User Guide',
     webPreferences: { contextIsolation: true }, autoHideMenuBar: true });
   g.loadFile(path.join(__dirname, 'guide.html'));
   g.once('ready-to-show', () => g.show());
@@ -866,7 +866,7 @@ async function downloadTo(url, dest, phase, lastPctRef) {
     const req = net.request(url);
     let received = 0, total = 0;
     const file = fs.createWriteStream(dest);
-    req.setHeader('User-Agent', 'local-pdf-desk');
+    req.setHeader('User-Agent', 'pagewise');
     req.on('response', res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         file.end(); fs.unlink(dest, () => {});
@@ -905,7 +905,7 @@ async function installEngine(opts = {}) {
     prog('Fetching llama.cpp release info', 0);
     const apiRes = await new Promise((resolve, reject) => {
       const req = net.request({ method: 'GET', url: 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30' });
-      req.setHeader('User-Agent', 'local-pdf-desk');
+      req.setHeader('User-Agent', 'pagewise');
       req.on('response', resolve); req.on('error', reject); req.end();
     });
     let body = '';
@@ -957,7 +957,7 @@ async function installEngine(opts = {}) {
   prog('Fetching model listing', 0);
   const treeRes = await new Promise((resolve, reject) => {
     const req = net.request({ method: 'GET', url: `https://huggingface.co/api/models/${repo}/tree/main` });
-    req.setHeader('User-Agent', 'local-pdf-desk');
+    req.setHeader('User-Agent', 'pagewise');
     req.on('response', resolve); req.on('error', reject); req.end();
   });
   let tbody = '';

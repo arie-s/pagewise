@@ -1,8 +1,8 @@
 {
-  "name": "local-pdf-desk",
-  "productName": "Local PDF Desk",
+  "name": "pagewise",
+  "productName": "Pagewise",
   "version": "1.0.0",
-  "description": "Private PDF editing with local OCR and optional local AI",
+  "description": "Private PDF editor that reads your documents with local AI.",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
@@ -15,7 +15,7 @@
     "name": "arie-s",
     "email": "44439774+arie-s@users.noreply.github.com"
   },
-  "homepage": "https://github.com/arie-s/local-pdf-desk",
+  "homepage": "https://github.com/arie-s/pagewise",
   "license": "MIT",
   "devDependencies": {
     "electron": "^44.7.0",
@@ -27,8 +27,8 @@
     "tesseract.js": "^7.0.0"
   },
   "build": {
-    "appId": "com.localpdfdesk.app",
-    "productName": "Local PDF Desk",
+    "appId": "com.pagewise.app",
+    "productName": "Pagewise",
     "directories": {
       "output": "dist"
     },

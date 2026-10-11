@@ -6,9 +6,9 @@ const path = require('node:path');
 const { loadMainHandlers } = require('./helpers.cjs');
 
 function launchWithData(t, directories) {
-  const appData = fs.mkdtempSync(path.join(os.tmpdir(), 'local-pdf-desk-'));
+  const appData = fs.mkdtempSync(path.join(os.tmpdir(), 'pagewise-'));
   t.after(() => fs.rmSync(appData, { recursive: true, force: true }));
-  let userData = path.join(appData, 'Local PDF Desk');
+  let userData = path.join(appData, 'Pagewise');
   fs.mkdirSync(userData);
   for (const [name, entry] of directories) {
     const dir = path.join(appData, name);
@@ -34,14 +34,26 @@ test('rename reuses source-app model downloads without requiring a settings file
   assert.equal(userData, path.join(appData, 'pdf-studio-pro'));
 });
 
-test('rename keeps existing data for the new name instead of reverting to legacy data', t => {
+test('rename reuses Local PDF Desk data', t => {
+  const { appData, userData } = launchWithData(t, [['Local PDF Desk', 'settings.json']]);
+  assert.equal(userData, path.join(appData, 'Local PDF Desk'));
+});
+
+test('rename prefers Local PDF Desk data over older PDF Studio Pro data', t => {
   const { appData, userData } = launchWithData(t, [
-    ['Local PDF Desk', 'settings.json'], ['PDF Studio Pro', 'settings.json']
+    ['PDF Studio Pro', 'settings.json'], ['Local PDF Desk', 'settings.json']
   ]);
   assert.equal(userData, path.join(appData, 'Local PDF Desk'));
 });
 
+test('rename keeps existing data for the new name instead of reverting to legacy data', t => {
+  const { appData, userData } = launchWithData(t, [
+    ['Pagewise', 'settings.json'], ['Local PDF Desk', 'settings.json'], ['PDF Studio Pro', 'settings.json']
+  ]);
+  assert.equal(userData, path.join(appData, 'Pagewise'));
+});
+
 test('fresh installs keep the new data path', t => {
   const { appData, userData } = launchWithData(t, []);
-  assert.equal(userData, path.join(appData, 'Local PDF Desk'));
+  assert.equal(userData, path.join(appData, 'Pagewise'));
 });

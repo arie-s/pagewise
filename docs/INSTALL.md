@@ -1,0 +1,130 @@
+# Installing and building Pagewise
+
+See the [README](../README.md) for an overview.
+
+## Run from source
+
+Install [Node.js 24 or newer](https://nodejs.org/en/download) with npm, and Git. Node 24 is the recommended development baseline; the test command uses Node's `--test-isolation` option. Packaged apps include their own runtime and do **not** require Node.js or Git.
+
+The same commands work in Windows PowerShell, a Linux terminal and macOS Terminal:
+
+```sh
+git clone https://github.com/arie-s/pagewise.git
+cd pagewise
+npm ci
+npm start
+```
+
+For an existing checkout, run `npm ci` and `npm start` from its root. Linux needs a graphical desktop and Electron's system libraries; a minimal server installation may not have them.
+
+## Build and install
+
+Run the source setup above before building. Build on the target operating system for the simplest path; macOS builds should be produced on a Mac. Output goes into `dist/`. Builds can require internet access to fetch Electron and packaging tools. See [electron-builder's platform guidance](https://www.electron.build/docs/features/multi-platform-build/) for cross-platform limitations.
+
+| Platform | Build targets | Architecture |
+|---|---|---|
+| Windows | NSIS installer or portable EXE | x64 |
+| Linux | AppImage or Debian package | x64 |
+| macOS | DMG and ZIP | Apple Silicon arm64 or Intel x64, built separately |
+
+Windows and macOS installation have not been verified in this checkout. The commands below use version `1.0.0`; substitute the filename actually produced by your build.
+
+### Windows
+
+Build the installer from PowerShell in the repository root:
+
+```powershell
+npm run build
+```
+
+Open `dist\Pagewise Setup 1.0.0.exe`, follow the installation wizard, choose an installation directory, then launch **Pagewise** from the Start menu or desktop shortcut.
+
+For a portable app:
+
+```powershell
+npm run build:portable -- --x64
+```
+
+Run `dist\Pagewise 1.0.0.exe`. No installation wizard is needed; settings and model downloads are still stored in your user profile. Signing credentials are not configured in this repository, so a locally built executable may show an unknown-publisher warning.
+
+### Linux
+
+Build both formats:
+
+```sh
+npx electron-builder --linux AppImage deb --x64
+```
+
+**AppImage:** make it executable and launch it:
+
+```sh
+chmod +x "dist/Pagewise-1.0.0.AppImage"
+"./dist/Pagewise-1.0.0.AppImage"
+```
+
+For a permanent installation in your home directory and an application-menu entry, run from the repository root:
+
+```sh
+mkdir -p "$HOME/.local/bin" "$HOME/.local/share/icons" "$HOME/.local/share/applications"
+install -m 755 "dist/Pagewise-1.0.0.AppImage" "$HOME/.local/bin/pagewise"
+install -m 644 build/icon.png "$HOME/.local/share/icons/pagewise.png"
+cat > "$HOME/.local/share/applications/pagewise.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Pagewise
+Comment=Private PDF editor that reads your documents with local AI
+Exec="$HOME/.local/bin/pagewise" %f
+Icon=$HOME/.local/share/icons/pagewise.png
+Terminal=false
+Categories=Office;
+MimeType=application/pdf;
+EOF
+```
+
+Launch it from your application menu or with `~/.local/bin/pagewise`. To use the shorter command `pagewise`, ensure `~/.local/bin` is on your `PATH`. Set the default PDF viewer through your desktop's **Open With** settings if desired.
+
+If the AppImage reports a FUSE error, follow the [AppImage FUSE instructions](https://docs.appimage.org/user-guide/troubleshooting/fuse.html). On Ubuntu 24.04 the compatibility package is `libfuse2t64`; Ubuntu 22.04 uses `libfuse2`. Alternatively, run without a FUSE mount:
+
+```sh
+"./dist/Pagewise-1.0.0.AppImage" --appimage-extract-and-run
+```
+
+**Debian/Ubuntu package:** install the `.deb` and launch from your application menu:
+
+```sh
+sudo apt install ./dist/pagewise_1.0.0_amd64.deb
+```
+
+### macOS
+
+Build for your Mac's processor from Terminal in the repository root:
+
+```sh
+# Apple Silicon (M-series)
+npx electron-builder --mac dmg zip --arm64
+
+# Intel: use this instead
+npx electron-builder --mac dmg zip --x64
+```
+
+Open the generated `.dmg` in `dist/`, drag **Pagewise.app** into **Applications**, eject the disk image, and open the app from Applications. The ZIP is an alternative: extract it and move the app into Applications.
+
+Signing and notarization credentials are not configured in this repository. If macOS blocks an unsigned build that you trust, try opening it once, then use **System Settings → Privacy & Security → Open Anyway**, following [Apple's instructions](https://support.apple.com/en-us/102445).
+
+The base editor can be built for Intel or Apple Silicon; the automatic AI engine installer currently selects an **arm64** macOS binary, so Intel Macs do not have a supported automatic AI setup.
+
+### Updating and the previous name
+
+Rebuild after source changes; existing files in `dist/` do not update automatically. Replace an AppImage/portable executable or install the newly built package. There is no automatic update service configured.
+
+This app was previously named **Local PDF Desk** and, before that, **PDF Studio Pro**. On first launch, when the new app data directory has no settings or OCR downloads, it reuses existing `Local PDF Desk`, `local-pdf-desk`, `PDF Studio Pro` or `pdf-studio-pro` data under Electron's app-data directory. Settings, cached OCR languages and downloaded AI models remain in that old directory. Your PDF files are not moved. The operating system may keep an old app shortcut or installation alongside the renamed app.
+
+## OCR and local AI setup
+
+**Searchable PDF OCR:** choose **Tools → Make Searchable — offline OCR**. The first use of a language downloads and caches its Tesseract language data; subsequent use can work offline. No GPU is needed.
+
+**Smart Extract:** choose **Tools → Setup AI Reading Engine…**, then **Download & Install**, and **Test Engine**. The installer downloads [llama.cpp](https://github.com/ggml-org/llama.cpp) from GitHub and a `dots.ocr` model plus vision encoder from Hugging Face. Allow several GB of free disk space; the exact download size depends on the selected model files. Linux/macOS extraction needs `unzip` (or Python 3 for ZIP files), or `tar` for a tar archive.
+
+The current automatic installer selects Windows Vulkan x64, Ubuntu/Linux x64 and macOS arm64 release assets. Availability depends on matching upstream assets and system compatibility; it does not provide every CUDA/Vulkan/Metal variant or support every architecture. GPU acceleration and speed depend on the build, drivers and hardware. CPU inference can be much slower.
+
+The AI server binds to `127.0.0.1:8731`; page images are sent to that local server, not a cloud service. Use **Tools → Smart Extract** after setup. Smart Extract produces a Markdown transcript and does not add a searchable text layer to the PDF.
