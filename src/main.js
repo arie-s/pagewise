@@ -2,6 +2,15 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, shell, clipboard, net } = req
 const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+// Reuse settings and downloaded models after the app rename, without moving user data.
+const hasUserData = dir => ['settings.json', 'ocr-engine', 'tesseract-data']
+  .some(name => fs.existsSync(path.join(dir, name)));
+if (!hasUserData(app.getPath('userData'))) {
+  const legacyData = ['PDF Studio Pro', 'pdf-studio-pro']
+    .map(name => path.join(app.getPath('appData'), name))
+    .find(hasUserData);
+  if (legacyData) app.setPath('userData', legacyData);
+}
 // @cantoo/pdf-lib encryption needs Web Crypto; Electron <=28's bundled Node lacks the global
 if (!globalThis.crypto) globalThis.crypto = require('crypto').webcrypto;
 const { PDFDocument, rgb, degrees, StandardFonts, PDFName, PDFArray, PDFDict, PDFString, PDFNumber, grayscale, cmyk } = require('@cantoo/pdf-lib');
@@ -41,6 +50,7 @@ function persistBoundsSoon() {
 }
 
 function createWindow() {
+  forceClose = false; unsavedFlag = false;
   const b = settings.bounds || {};
   mainWindow = new BrowserWindow({
     width: b.width || 1600,
@@ -449,13 +459,13 @@ function createWindow() {
         },
         { type: 'separator' },
         {
-          label: 'About PDF Studio Pro',
+          label: 'About Local PDF Desk',
           click: () => {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
-              title: 'About PDF Studio Pro',
-              message: 'PDF Studio Pro v2.1.0',
-              detail: `A local-first PDF editor.
+              title: 'About Local PDF Desk',
+              message: `Local PDF Desk v${app.getVersion()}`,
+              detail: `Private PDF editing with local AI.
 
 Features:
 • View, create, and edit PDFs
@@ -465,7 +475,7 @@ Features:
 • Watermarks, headers, and page numbers
 • AES-256 password protection
 • Export to images
-• Headless CLI for batch automation
+• CLI for batch automation
 
 Everything stays on your machine.`
             });
@@ -630,7 +640,7 @@ async function runCli(args) {
 }
 
 function openGuide() {
-  const g = new BrowserWindow({ width: 920, height: 880, title: 'PDF Studio Pro — User Guide',
+  const g = new BrowserWindow({ width: 920, height: 880, title: 'Local PDF Desk — User Guide',
     webPreferences: { contextIsolation: true }, autoHideMenuBar: true });
   g.loadFile(path.join(__dirname, 'guide.html'));
   g.once('ready-to-show', () => g.show());
@@ -856,7 +866,7 @@ async function downloadTo(url, dest, phase, lastPctRef) {
     const req = net.request(url);
     let received = 0, total = 0;
     const file = fs.createWriteStream(dest);
-    req.setHeader('User-Agent', 'pdf-studio-pro');
+    req.setHeader('User-Agent', 'local-pdf-desk');
     req.on('response', res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         file.end(); fs.unlink(dest, () => {});
@@ -895,7 +905,7 @@ async function installEngine(opts = {}) {
     prog('Fetching llama.cpp release info', 0);
     const apiRes = await new Promise((resolve, reject) => {
       const req = net.request({ method: 'GET', url: 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30' });
-      req.setHeader('User-Agent', 'pdf-studio-pro');
+      req.setHeader('User-Agent', 'local-pdf-desk');
       req.on('response', resolve); req.on('error', reject); req.end();
     });
     let body = '';
@@ -947,7 +957,7 @@ async function installEngine(opts = {}) {
   prog('Fetching model listing', 0);
   const treeRes = await new Promise((resolve, reject) => {
     const req = net.request({ method: 'GET', url: `https://huggingface.co/api/models/${repo}/tree/main` });
-    req.setHeader('User-Agent', 'pdf-studio-pro');
+    req.setHeader('User-Agent', 'local-pdf-desk');
     req.on('response', resolve); req.on('error', reject); req.end();
   });
   let tbody = '';
@@ -1064,6 +1074,9 @@ ipcMain.handle('get-initial-file', () => initialPdfPath || settings.lastFile || 
 // Apply annotations and modifications to PDF
 ipcMain.handle('apply-modifications', async (event, { originalData, modifications }) => {
   try {
+    if (modifications.some(m => m.type === 'redaction')) {
+      throw new Error('Redactions must be flattened before saving; an overlay does not remove content.');
+    }
     const buffer = Buffer.from(originalData, 'base64');
     const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
     const helveticaFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -1089,7 +1102,7 @@ ipcMain.handle('apply-modifications', async (event, { originalData, modification
             size: mod.fontSize || 12,
             font: textFont,
             color: rgb(mod.color?.r || 0, mod.color?.g || 0, mod.color?.b || 0),
-            opacity: mod.opacity || 1
+            opacity: mod.opacity ?? 1
           });
           break;
 
@@ -1268,16 +1281,6 @@ ipcMain.handle('apply-modifications', async (event, { originalData, modification
           });
           break;
 
-        case 'redaction':
-          page.drawRectangle({
-            x: mod.x * width,
-            y: height - (mod.y * height) - (mod.height * height),
-            width: mod.width * width,
-            height: mod.height * height,
-            color: rgb(0, 0, 0)
-          });
-          break;
-
         case 'watermark':
           const wmFont = helveticaBold;
           const wmText = mod.text || 'WATERMARK';
@@ -1398,6 +1401,25 @@ ipcMain.handle('apply-modifications', async (event, { originalData, modification
     };
   } catch (error) {
     console.error('Modification error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Redaction output contains only the rendered, masked pixels. Never copy source
+// objects: old content streams, attachments and metadata can retain secrets.
+ipcMain.handle('redact-pdf', async (event, { pages }) => {
+  try {
+    if (!Array.isArray(pages) || !pages.length) throw new Error('No redacted pages supplied');
+    const out = await PDFDocument.create();
+    for (const page of pages) {
+      if (!Number.isFinite(page.width) || !Number.isFinite(page.height) || page.width <= 0 || page.height <= 0) {
+        throw new Error('Invalid redacted page dimensions');
+      }
+      const image = await out.embedPng(Buffer.from(page.imageData, 'base64'));
+      out.addPage([page.width, page.height]).drawImage(image, { x: 0, y: 0, width: page.width, height: page.height });
+    }
+    return { success: true, data: Buffer.from(await out.save()).toString('base64') };
+  } catch (error) {
     return { success: false, error: error.message };
   }
 });

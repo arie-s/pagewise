@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:;">
-  <title>PDF Studio Pro</title>
+  <title>Local PDF Desk</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -283,8 +283,8 @@
   <div class="main-container">
     <div class="welcome-screen" id="welcomeScreen">
       <div class="welcome-logo">📄</div>
-      <div class="welcome-title">PDF Studio Pro</div>
-      <div class="welcome-subtitle">Professional PDF Editor - Create, Edit, and Manage PDFs</div>
+      <div class="welcome-title">Local PDF Desk</div>
+      <div class="welcome-subtitle">Private PDF editing with local AI</div>
       <div class="welcome-actions">
         <button class="welcome-btn primary" id="welcomeOpenBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>Open PDF</button>
         <button class="welcome-btn" id="welcomeNewBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>Create New</button>
@@ -361,10 +361,12 @@
       updateUndoRedo();
     }
     function updateUndoRedo() { $('undoBtn').disabled = state.undoStack.length === 0; $('redoBtn').disabled = state.redoStack.length === 0; }
+    function setUnsavedChanges(flag) { state.hasUnsavedChanges = flag; window.pdfAPI.setUnsaved(flag); }
     function hexToRgb(hex) { const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex); return r ? { r: parseInt(r[1], 16) / 255, g: parseInt(r[2], 16) / 255, b: parseInt(r[3], 16) / 255 } : { r: 0, g: 0, b: 0 }; }
-    function saveState() { state.undoStack.push(JSON.stringify(state.annotations)); if (state.undoStack.length > 50) state.undoStack.shift(); state.redoStack = []; state.hasUnsavedChanges = true; updateUndoRedo(); }
-    function undo() { if (state.undoStack.length === 0) return; state.redoStack.push(JSON.stringify(state.annotations)); state.annotations = JSON.parse(state.undoStack.pop()); for (let i = 1; i <= state.pdfDoc.numPages; i++) renderAnnotations(i); updateAnnotationCount(); updateUndoRedo(); }
-    function redo() { if (state.redoStack.length === 0) return; state.undoStack.push(JSON.stringify(state.annotations)); state.annotations = JSON.parse(state.redoStack.pop()); for (let i = 1; i <= state.pdfDoc.numPages; i++) renderAnnotations(i); updateAnnotationCount(); updateUndoRedo(); }
+    function editSnapshot() { return JSON.stringify({ annotations: state.annotations, redactionMarks: state.redactionMarks, textEdits: state.textEdits }); }
+    function saveState() { state.undoStack.push(editSnapshot()); if (state.undoStack.length > 50) state.undoStack.shift(); state.redoStack = []; setUnsavedChanges(true); updateUndoRedo(); }
+    async function undo() { if (state.undoStack.length === 0) return; state.redoStack.push(editSnapshot()); Object.assign(state, JSON.parse(state.undoStack.pop())); setUnsavedChanges(true); await renderAllPages(); updateAnnotationCount(); updateUndoRedo(); }
+    async function redo() { if (state.redoStack.length === 0) return; state.undoStack.push(editSnapshot()); Object.assign(state, JSON.parse(state.redoStack.pop())); setUnsavedChanges(true); await renderAllPages(); updateAnnotationCount(); updateUndoRedo(); }
 
     async function showSplitDialog() {
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
@@ -387,12 +389,13 @@
         }
         setLoading(true, 'Splitting...');
         try {
-          const r = await window.pdfAPI.splitPdf({ data: state.originalData, ranges });
-          if (r.success) {
-            const files = r.files.map(f => ({ name: (path.basename(state.currentName || 'document', '.pdf')) + '_' + f.name, data: f.data }));
-            const s = await window.pdfAPI.saveMultipleFiles({ files });
-            showNotification(s.success ? 'Split into ' + ranges.length + ' files -> ' + s.folder : 'Save canceled', s.success ? 'success' : 'warning');
-          }
+          const r = await window.pdfAPI.splitPdf({ data: await buildDocumentData(), ranges });
+          if (!r.success) throw new Error(r.error || 'Split failed');
+          const baseName = (state.fileName || 'document').replace(/\.pdf$/i, '');
+          const files = r.files.map(f => ({ name: baseName + '_' + f.name, data: f.data }));
+          const s = await window.pdfAPI.saveMultipleFiles({ files });
+          if (!s.success && !s.canceled) throw new Error(s.error || 'Could not save split files');
+          showNotification(s.success ? 'Split into ' + ranges.length + ' files -> ' + s.folder : 'Save canceled', s.success ? 'success' : 'warning');
         } catch (e) { showNotification('Error: ' + e.message, 'error'); }
         setLoading(false);
       } }]);
@@ -409,7 +412,7 @@
         if (nums.some(n => isNaN(n) || n < 1 || n > state.pdfDoc.numPages)) { showNotification('Out of range', 'warning'); return; }
         setLoading(true, 'Extracting...');
         try {
-          const r = await window.pdfAPI.extractPages({ data: state.originalData, pageNumbers: nums });
+          const r = await window.pdfAPI.extractPages({ data: await buildDocumentData(), pageNumbers: nums });
           if (r.success) await window.pdfAPI.saveFileAs({ data: r.data, defaultName: 'extracted.pdf' });
         } catch (e) { showNotification('Error: ' + e.message, 'error'); }
         setLoading(false);
@@ -427,7 +430,7 @@
         if (pw !== pw2) { showNotification('Passwords do not match', 'error'); return; }
         setLoading(true, 'Encrypting...');
         try {
-          const r = await window.pdfAPI.encryptPdf({ data: state.originalData, userPassword: pw, ownerPassword: owner || pw });
+          const r = await window.pdfAPI.encryptPdf({ data: await buildDocumentData(), userPassword: pw, ownerPassword: owner || pw });
           if (r.success) { await window.pdfAPI.saveFileAs({ data: r.data, defaultName: 'protected.pdf' }); showNotification('Document encrypted (AES-256)'); }
           else showNotification('Error: ' + r.error, 'error');
         } catch (e) { showNotification('Error: ' + e.message, 'error'); }
@@ -454,8 +457,17 @@
     let dragPageIdx = null;
 
     function remapForReorder(newOrder) {
-      const remap = obj => { const out = {}; newOrder.forEach((oldIdx, j) => { const k = String(oldIdx + 1); if (obj[k]) out[String(j + 1)] = obj[k]; }); return out; };
+      const remap = obj => { const out = {}; newOrder.forEach((oldIdx, j) => { if (oldIdx === null) return; const k = String(oldIdx + 1); if (obj[k]) out[String(j + 1)] = obj[k]; }); return out; };
       state.annotations = remap(state.annotations); state.redactionMarks = remap(state.redactionMarks);
+      const edits = {};
+      for (const [key, value] of Object.entries(state.textEdits)) {
+        const dash = key.indexOf('-');
+        const page = newOrder.indexOf(Number(key.slice(0, dash)) - 1);
+        if (page !== -1) edits[(page + 1) + key.slice(dash)] = value;
+      }
+      state.textEdits = edits;
+      // History predates the new page numbering and must not restore stale keys.
+      state.undoStack = []; state.redoStack = []; updateUndoRedo();
     }
 
     async function reorderPages(newOrder) {
@@ -463,15 +475,15 @@
       try {
         const r = await window.pdfAPI.reorderPages({ data: state.originalData, newOrder });
         if (r.success) {
-          const focusOld = newOrder[state.currentPage - 1];
-          remapForReorder(newOrder);
-          state.originalData = r.data;
+          const focusOld = state.currentPage - 1;
           const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
-          state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
+          const pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
+          remapForReorder(newOrder);
+          state.originalData = r.data; state.pdfDoc = pdfDoc;
+          setUnsavedChanges(true);
           state.currentPage = Math.min(state.currentPage, state.pdfDoc.numPages);
           await renderThumbnails(); await renderAllPages();
           goToPage(Math.min(newOrder.indexOf(focusOld) + 1, state.pdfDoc.numPages));
-          state.hasUnsavedChanges = true;
           showNotification('Pages reordered');
         } else showNotification('Reorder failed: ' + r.error, 'error');
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
@@ -493,32 +505,43 @@
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
       if (!confirm('Adds an invisible, searchable text layer to this PDF.\n\nRuns offline on any computer — no GPU or download needed beyond a one-time 15MB language pack.\n\nBest for typed/printed pages. For scans with tables, columns, or handwriting, use "Smart Extract" instead.\n\nProceed?')) return;
       setLoading(true, 'OCR: preparing...');
+      let stagingDoc = null;
       try {
         const S = 2;
-        let data = state.originalData;
-        for (let i = 1; i <= state.pdfDoc.numPages; i++) {
-          $('loadingText').textContent = 'OCR: recognizing page ' + i + ' of ' + state.pdfDoc.numPages + '...';
-          const page = await state.pdfDoc.getPage(i);
+        let data = await buildDocumentData();
+        const stagingBytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+        stagingDoc = await pdfjsLib.getDocument({ data: stagingBytes }).promise;
+        let recognizedPages = 0;
+        for (let i = 1; i <= stagingDoc.numPages; i++) {
+          $('loadingText').textContent = 'OCR: recognizing page ' + i + ' of ' + stagingDoc.numPages + '...';
+          const page = await stagingDoc.getPage(i);
           const vp = page.getViewport({ scale: S });
           const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
           await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
           const ocr = await window.pdfAPI.ocrPage({ pngBase64: canvas.toDataURL('image/png').split(',')[1], lang: 'eng' });
-          if (!ocr.success || !ocr.words.length) continue;
+          if (!ocr.success) throw new Error(ocr.error || 'Recognition failed on page ' + i);
+          if (!ocr.words.length) continue;
           const mods = ocr.words
-            .filter(w => w.text && w.text.trim() && w.bbox && Number.isFinite(w.bbox.x0) && w.bbox.y1 - w.bbox.y0 > 0)
-            .map(w => ({ type: 'text', pageIndex: i - 1, text: w.text, x: w.bbox.x0 / canvas.width, y: w.bbox.y1 / canvas.height, fontSize: Math.max(4, Math.round((w.bbox.y1 - w.bbox.y0) / S * 0.9)), opacity: 0 }));
+            .filter(w => w.text && w.text.trim() && Number.isFinite(w.x0) && Number.isFinite(w.y0) && Number.isFinite(w.x1) && Number.isFinite(w.y1) && w.y1 > w.y0)
+            .map(w => ({ type: 'text', pageIndex: i - 1, text: w.text, x: w.x0 / canvas.width, y: w.y1 / canvas.height, fontSize: Math.max(4, Math.round((w.y1 - w.y0) / S * 0.9)), opacity: 0 }));
           if (!mods.length) continue;
           const r = await window.pdfAPI.applyModifications({ originalData: data, modifications: mods });
-          if (r.success) data = r.data;
+          if (!r.success) throw new Error(r.error || 'Could not apply OCR text on page ' + i);
+          data = r.data;
+          recognizedPages++;
         }
-        state.originalData = data;
         const d = Uint8Array.from(atob(data), c => c.charCodeAt(0));
-        state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
+        const finalDoc = await pdfjsLib.getDocument({ data: d }).promise;
+        state.originalData = data;
+        state.pdfDoc = finalDoc;
+        state.annotations = {}; state.redactionMarks = {}; state.textEdits = {};
+        state.undoStack = []; state.redoStack = [];
+        setUnsavedChanges(true);
+        updateUndoRedo(); updateAnnotationCount();
         await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage);
-        state.hasUnsavedChanges = true;
-        showNotification('OCR complete — document is now searchable');
+        showNotification(recognizedPages ? 'OCR complete — document is now searchable' : 'OCR finished, but no text was recognized', recognizedPages ? 'success' : 'warning');
       } catch (e) { showNotification('OCR error: ' + e.message, 'error'); }
-      setLoading(false);
+      finally { if (stagingDoc && stagingDoc.destroy) await stagingDoc.destroy(); setLoading(false); }
     }
 
     // ---------- Advanced OCR engine (tier 2) ----------
@@ -611,21 +634,25 @@
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
       const folder = await window.pdfAPI.selectExportFolder(); if (!folder) return;
       setLoading(true, 'Exporting images...');
+      let doc;
       try {
+        const data = await buildDocumentData();
+        doc = await pdfjsLib.getDocument({ data: Uint8Array.from(atob(data), c => c.charCodeAt(0)) }).promise;
         const base = (state.fileName || 'document').replace(/\.pdf$/i, '');
-        for (let i = 1; i <= state.pdfDoc.numPages; i++) {
-          const page = await state.pdfDoc.getPage(i);
+        for (let i = 1; i <= doc.numPages; i++) {
+          const page = await doc.getPage(i);
           const viewport = page.getViewport({ scale: 2 });
           const canvas = document.createElement('canvas');
           canvas.width = viewport.width; canvas.height = viewport.height;
           await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
           const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
           const dataUrl = canvas.toDataURL(mime, 0.92);
-          await window.pdfAPI.saveImage({ folderPath: folder, fileName: base + '_' + String(i).padStart(3, '0') + (format === 'jpeg' ? '.jpg' : '.png'), imageData: dataUrl });
+          const saved = await window.pdfAPI.saveImage({ folderPath: folder, fileName: base + '_' + String(i).padStart(3, '0') + (format === 'jpeg' ? '.jpg' : '.png'), imageData: dataUrl });
+          if (!saved.success) throw new Error(saved.error);
         }
-        showNotification('Exported ' + state.pdfDoc.numPages + ' images to ' + folder);
+        showNotification('Exported ' + doc.numPages + ' images to ' + folder);
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
-      setLoading(false);
+      finally { if (doc) await doc.destroy(); setLoading(false); }
     }
 
     async function showInsertFromFile() {
@@ -640,14 +667,20 @@
           if (!r.success) throw new Error(r.error || 'Insert failed');
           data = r.data;
           const info = await window.pdfAPI.getDocumentInfo({ data: r.data });
-          if (info.success) { insertIndex += info.info.pageCount - pageCount; pageCount = info.info.pageCount; }
+          if (!info.success) throw new Error(info.error || 'Could not read inserted page count');
+          insertIndex += info.info.pageCount - pageCount; pageCount = info.info.pageCount;
         }
-        state.originalData = data;
+        const oldPageCount = state.pdfDoc.numPages;
         const d = Uint8Array.from(atob(data), c => c.charCodeAt(0));
-        state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
+        const pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
+        const order = Array.from({ length: oldPageCount }, (_, i) => i);
+        order.splice(state.currentPage, 0, ...Array(pdfDoc.numPages - oldPageCount).fill(null));
+        remapForReorder(order);
+        state.originalData = data; state.pdfDoc = pdfDoc;
+        setUnsavedChanges(true);
+        $('pageCount').textContent = state.pdfDoc.numPages;
         await renderThumbnails(); await renderAllPages();
         goToPage(Math.min(insertIndex + 1, state.pdfDoc.numPages));
-        state.hasUnsavedChanges = true;
         showNotification('Inserted ' + sources.length + ' file(s)');
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
       setLoading(false);
@@ -660,9 +693,9 @@
         const mods = []; for (let i = 0; i < state.pdfDoc.numPages; i++) mods.push({ type: 'rotate', pageIndex: i, angle });
         const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
         if (r.success) {
-          state.originalData = r.data; const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
+          state.originalData = r.data; setUnsavedChanges(true); const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
           state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
-          await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); state.hasUnsavedChanges = true;
+          await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); setUnsavedChanges(true);
           showNotification('All pages rotated');
         } else showNotification('Error: ' + r.error, 'error');
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
@@ -682,7 +715,7 @@
         const mods = [];
         for (let i = 0; i < n; i++) mods.push({ type: 'pageNumber', pageIndex: i, text: numText(i), position: pos, fontSize: size, x: 0.4 });
         const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
-        if (r.success) { state.originalData = r.data; const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); state.hasUnsavedChanges = true; showNotification('Page numbers added'); }
+        if (r.success) { state.originalData = r.data; setUnsavedChanges(true); const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); showNotification('Page numbers added'); }
         else showNotification('Error: ' + r.error, 'error');
         setLoading(false);
       } }]);
@@ -699,7 +732,7 @@
         const mods = [];
         for (let i = 0; i < state.pdfDoc.numPages; i++) mods.push({ type: 'headerFooter', pageIndex: i, header: header || '', footer: footer || '' });
         const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
-        if (r.success) { state.originalData = r.data; const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); state.hasUnsavedChanges = true; showNotification('Header & footer added'); }
+        if (r.success) { state.originalData = r.data; setUnsavedChanges(true); const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); showNotification('Header & footer added'); }
         else showNotification('Error: ' + r.error, 'error');
         setLoading(false);
       } }]);
@@ -725,26 +758,41 @@
       showNotification(t === 'dark' ? 'Dark theme' : 'Light theme');
     }
 
-    // keep main process informed about unsaved state (close guard)
-    setInterval(() => window.pdfAPI.setUnsaved(state.hasUnsavedChanges), 800);
-
     async function initPdfJs() { pdfjsLib.GlobalWorkerOptions.workerSrc = await window.pdfAPI.getPdfjsWorkerPath(); }
 
     async function openFile() { const result = await window.pdfAPI.openFile(); if (result) await loadPdf(result); }
+    async function confirmDocumentReplacement() {
+      if (state.saving) { showNotification('Wait until saving finishes', 'info'); return false; }
+      if (!state.hasUnsavedChanges) return true;
+      const { response } = await window.pdfAPI.showMessageBox({
+        type: 'warning', title: 'Unsaved changes', message: 'Save changes before opening another document?',
+        buttons: ['Save', 'Discard Changes', 'Cancel'], defaultId: 0, cancelId: 2, noLink: true
+      });
+      if (response === 0) return await saveDocument();
+      return response === 1;
+    }
     async function loadPdf(result) {
+      if (!(await confirmDocumentReplacement())) return false;
       setLoading(true, 'Loading PDF...');
       try {
         const data = Uint8Array.from(atob(result.data), c => c.charCodeAt(0));
+        const pdfDoc = await pdfjsLib.getDocument({ data }).promise;
         state.originalData = result.data; state.filePath = result.path; state.fileName = result.name;
-        state.pdfDoc = await pdfjsLib.getDocument({ data }).promise;
-        state.annotations = {}; state.undoStack = []; state.redoStack = []; state.hasUnsavedChanges = false; state.textEdits = {};
+        const oldDoc = state.pdfDoc;
+        state.pdfDoc = pdfDoc;
+        state.annotations = {}; state.redactionMarks = {}; state.undoStack = []; state.redoStack = []; setUnsavedChanges(false); state.textEdits = {};
+        state.currentPage = 1; state.isDrawing = false; state.currentPath = [];
+        state.pendingStamp = null; state.pendingImage = null; state.pendingSignature = null;
+        if (oldDoc) await oldDoc.destroy();
         updateUIState(true); await renderThumbnails(); await renderAllPages();
         $('pageCount').textContent = state.pdfDoc.numPages;
         $('filePath').textContent = state.fileName;
         $('statusText').textContent = 'Loaded: ' + state.fileName;
         goToPage(1); showNotification('Opened: ' + state.fileName);
+        return true;
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
-      setLoading(false);
+      finally { setLoading(false); }
+      return false;
     }
     async function createNewPdf() {
       setLoading(true, 'Creating...');
@@ -755,26 +803,70 @@
       setLoading(false);
     }
     async function saveDocument(saveAs = false) {
-      if (!state.pdfDoc) return;
+      if (!state.pdfDoc || state.saving) return false;
+      state.saving = true;
       setLoading(true, 'Saving...');
       try {
-        const mods = collectModifications();
-        const result = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
-        if (!result.success) throw new Error(result.error);
-        let saveResult = saveAs || !state.filePath ? await window.pdfAPI.saveFileAs({ data: result.data, defaultName: state.fileName || 'document.pdf' }) : await window.pdfAPI.saveFile({ data: result.data, path: state.filePath });
+        const data = await buildDocumentData();
+        const saveResult = saveAs || !state.filePath ? await window.pdfAPI.saveFileAs({ data, defaultName: state.fileName || 'document.pdf' }) : await window.pdfAPI.saveFile({ data, path: state.filePath });
+        if (!saveResult.success) {
+          if (!saveResult.canceled) showNotification('Error: ' + saveResult.error, 'error');
+          return false;
+        }
         if (saveResult.success) {
-          state.hasUnsavedChanges = false; state.filePath = saveResult.path; state.fileName = saveResult.path.split(/[\\/]/).pop(); $('filePath').textContent = state.fileName;
+          setUnsavedChanges(false); state.filePath = saveResult.path; state.fileName = saveResult.path.split(/[\\/]/).pop(); $('filePath').textContent = state.fileName;
           // annotations were just baked into the saved data — clear them so the next save doesn't duplicate everything
-          state.originalData = result.data;
-          state.annotations = {}; state.redactionMarks = {}; state.undoStack = []; state.redoStack = []; updateUndoRedo();
-          const d = Uint8Array.from(atob(result.data), c => c.charCodeAt(0));
+          state.originalData = data;
+          state.annotations = {}; state.redactionMarks = {}; state.textEdits = {}; state.undoStack = []; state.redoStack = []; updateUndoRedo();
+          const d = Uint8Array.from(atob(data), c => c.charCodeAt(0));
           state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
           await renderThumbnails(); await renderAllPages(); goToPage(Math.min(state.currentPage, state.pdfDoc.numPages));
           updateAnnotationCount();
           showNotification('Saved!');
+          return true;
         }
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
-      setLoading(false);
+      finally { state.saving = false; setLoading(false); }
+      return false;
+    }
+    async function buildDocumentData() {
+      const mods = collectModifications();
+      if (mods.some(m => !Number.isInteger(m.pageIndex) || m.pageIndex < 0 || m.pageIndex >= state.pdfDoc.numPages)) {
+        throw new Error('An edit refers to a missing page');
+      }
+      const redactions = mods.filter(m => m.type === 'redaction');
+      if (redactions.length && !confirm('Apply redactions permanently?\n\nThe saved document will be flattened into images to remove hidden content. Text selection, forms, links, bookmarks and document metadata will be removed. Your pending edits remain intact if saving is canceled.')) {
+        throw new Error('Redaction canceled');
+      }
+      const result = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods.filter(m => m.type !== 'redaction') });
+      if (!result.success) throw new Error(result.error);
+      if (!redactions.length) return result.data;
+      const data = Uint8Array.from(atob(result.data), c => c.charCodeAt(0));
+      const doc = await pdfjsLib.getDocument({ data }).promise;
+      try {
+        const pages = [];
+        for (let i = 1; i <= doc.numPages; i++) {
+          const page = await doc.getPage(i);
+          const viewport = page.getViewport({ scale: 2 });
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
+          const ctx = canvas.getContext('2d');
+          await page.render({ canvasContext: ctx, viewport, background: 'rgb(255,255,255)' }).promise;
+          ctx.fillStyle = '#000';
+          for (const mark of redactions.filter(m => m.pageIndex === i - 1)) {
+            if (![mark.x, mark.y, mark.width, mark.height].every(Number.isFinite) || mark.width <= 0 || mark.height <= 0 || mark.x < 0 || mark.y < 0 || mark.x + mark.width > 1 || mark.y + mark.height > 1) {
+              throw new Error('Invalid redaction rectangle');
+            }
+            const x = Math.floor(mark.x * viewport.width) - 1, y = Math.floor(mark.y * viewport.height) - 1;
+            ctx.fillRect(x, y, Math.ceil((mark.x + mark.width) * viewport.width) - x + 1, Math.ceil((mark.y + mark.height) * viewport.height) - y + 1);
+          }
+          pages.push({ imageData: canvas.toDataURL('image/png').split(',')[1], width: viewport.width / 2, height: viewport.height / 2 });
+          canvas.width = 0; canvas.height = 0;
+        }
+        const output = await window.pdfAPI.redactPdf({ pages });
+        if (!output.success) throw new Error(output.error);
+        return output.data;
+      } finally { await doc.destroy(); }
     }
     function collectModifications() {
       const mods = [];
@@ -937,7 +1029,7 @@
           span.classList.add('edited');
           renderAnnotations(pageNum);
           updateAnnotationCount();
-          state.hasUnsavedChanges = true;
+          setUnsavedChanges(true);
           showNotification('Text updated');
         }
         overlay.remove();
@@ -1090,18 +1182,44 @@
     function goToPage(p) { state.currentPage = p; $('currentPage').textContent = p; document.querySelectorAll('.thumbnail').forEach(t => t.classList.remove('active')); document.querySelector('.thumbnail[data-page="' + p + '"]')?.classList.add('active'); document.getElementById('page-' + p)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
     async function rotatePage(angle) {
       if (!state.pdfDoc) return; setLoading(true, 'Rotating...');
-      try { const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: [{ type: 'rotate', pageIndex: state.currentPage - 1, angle }] }); if (r.success) { state.originalData = r.data; const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); state.hasUnsavedChanges = true; showNotification('Page rotated'); } } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      try { const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: [{ type: 'rotate', pageIndex: state.currentPage - 1, angle }] }); if (r.success) { state.originalData = r.data; setUnsavedChanges(true); const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); showNotification('Page rotated'); } } catch (e) { showNotification('Error: ' + e.message, 'error'); }
       setLoading(false);
     }
     async function deletePage() {
       if (!state.pdfDoc || state.pdfDoc.numPages <= 1) { showNotification('Cannot delete only page', 'error'); return; }
       if (!confirm('Delete page ' + state.currentPage + '?')) return; setLoading(true, 'Deleting...');
-      try { const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: [{ type: 'deletePage', pageIndex: state.currentPage - 1 }] }); if (r.success) { delete state.annotations[state.currentPage]; state.originalData = r.data; const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; $('pageCount').textContent = state.pdfDoc.numPages; await renderThumbnails(); await renderAllPages(); if (state.currentPage > state.pdfDoc.numPages) state.currentPage = state.pdfDoc.numPages; goToPage(state.currentPage); state.hasUnsavedChanges = true; showNotification('Page deleted'); } } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      try {
+        const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: [{ type: 'deletePage', pageIndex: state.currentPage - 1 }] });
+        if (!r.success) throw new Error(r.error);
+        const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
+        const pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
+        const order = Array.from({ length: state.pdfDoc.numPages }, (_, i) => i).filter(i => i !== state.currentPage - 1);
+        remapForReorder(order);
+        state.originalData = r.data; state.pdfDoc = pdfDoc;
+        setUnsavedChanges(true);
+        $('pageCount').textContent = state.pdfDoc.numPages;
+        await renderThumbnails(); await renderAllPages();
+        state.currentPage = Math.min(state.currentPage, state.pdfDoc.numPages);
+        goToPage(state.currentPage); showNotification('Page deleted');
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
       setLoading(false);
     }
     async function insertBlankPage() {
       if (!state.pdfDoc) return; setLoading(true, 'Inserting...');
-      try { const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: [{ type: 'insertPage', pageIndex: state.currentPage }] }); if (r.success) { state.originalData = r.data; const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; $('pageCount').textContent = state.pdfDoc.numPages; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage + 1); state.hasUnsavedChanges = true; showNotification('Page inserted'); } } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      try {
+        const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: [{ type: 'insertPage', pageIndex: state.currentPage }] });
+        if (!r.success) throw new Error(r.error);
+        const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
+        const pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
+        const order = Array.from({ length: state.pdfDoc.numPages }, (_, i) => i);
+        order.splice(state.currentPage, 0, null);
+        remapForReorder(order);
+        state.originalData = r.data; state.pdfDoc = pdfDoc;
+        setUnsavedChanges(true);
+        $('pageCount').textContent = state.pdfDoc.numPages;
+        await renderThumbnails(); await renderAllPages();
+        goToPage(state.currentPage + 1); showNotification('Page inserted');
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
       setLoading(false);
     }
     async function mergePdfs() {
@@ -1114,8 +1232,13 @@
       if (!state.originalData) return;
       const r = await window.pdfAPI.getDocumentInfo({ data: state.originalData }); if (!r.success) { showNotification('Error getting properties', 'error'); return; }
       const i = r.info;
-      const content = '<div class="form-group"><label class="form-label">Title</label><input type="text" class="form-input" id="propTitle" value="' + (i.title || '') + '"></div><div class="form-group"><label class="form-label">Author</label><input type="text" class="form-input" id="propAuthor" value="' + (i.author || '') + '"></div><div class="form-group"><label class="form-label">Subject</label><input type="text" class="form-input" id="propSubject" value="' + (i.subject || '') + '"></div><div class="form-section-title" style="margin-top:16px;">Statistics</div><div class="panel-row"><span class="panel-label">Pages:</span><span class="panel-value">' + i.pageCount + '</span></div><div class="panel-row"><span class="panel-label">Creator:</span><span class="panel-value">' + (i.creator || 'Unknown') + '</span></div>';
-      showModal('Document Properties', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Save', action: 'save', primary: true, handler: async m => { const info = { title: m.querySelector('#propTitle').value, author: m.querySelector('#propAuthor').value, subject: m.querySelector('#propSubject').value }; const res = await window.pdfAPI.setDocumentInfo({ data: state.originalData, info }); if (res.success) { state.originalData = res.data; state.hasUnsavedChanges = true; showNotification('Properties updated'); } } }]);
+      const content = '<div class="form-group"><label class="form-label">Title</label><input type="text" class="form-input" id="propTitle"></div><div class="form-group"><label class="form-label">Author</label><input type="text" class="form-input" id="propAuthor"></div><div class="form-group"><label class="form-label">Subject</label><input type="text" class="form-input" id="propSubject"></div><div class="form-section-title" style="margin-top:16px;">Statistics</div><div class="panel-row"><span class="panel-label">Pages:</span><span class="panel-value" id="propPages"></span></div><div class="panel-row"><span class="panel-label">Creator:</span><span class="panel-value" id="propCreator"></span></div>';
+      const modal = showModal('Document Properties', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Save', action: 'save', primary: true, handler: async m => { const info = { title: m.querySelector('#propTitle').value, author: m.querySelector('#propAuthor').value, subject: m.querySelector('#propSubject').value }; const res = await window.pdfAPI.setDocumentInfo({ data: state.originalData, info }); if (res.success) { state.originalData = res.data; setUnsavedChanges(true); showNotification('Properties updated'); } } }]);
+      modal.querySelector('#propTitle').value = i.title || '';
+      modal.querySelector('#propAuthor').value = i.author || '';
+      modal.querySelector('#propSubject').value = i.subject || '';
+      modal.querySelector('#propPages').textContent = i.pageCount;
+      modal.querySelector('#propCreator').textContent = i.creator || 'Unknown';
     }
     async function showWatermarkDialog() {
       const content = '<div class="form-group"><label class="form-label">Watermark Text</label><input type="text" class="form-input" id="wmText" value="CONFIDENTIAL"></div><div class="form-row"><div class="form-group"><label class="form-label">Font Size</label><input type="number" class="form-input" id="wmSize" value="48"></div><div class="form-group"><label class="form-label">Opacity %</label><input type="number" class="form-input" id="wmOpacity" value="30"></div></div><div class="form-group"><label class="form-label">Apply to</label><select class="form-select" id="wmPages"><option value="all">All Pages</option><option value="current">Current Page</option></select></div>';
@@ -1125,7 +1248,7 @@
         const mods = []; const list = pages === 'all' ? Array.from({ length: state.pdfDoc.numPages }, (_, i) => i) : [state.currentPage - 1];
         for (const idx of list) mods.push({ type: 'watermark', pageIndex: idx, text, fontSize, opacity, color: { r: 0.7, g: 0.7, b: 0.7 }, rotation: -45 });
         const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
-        if (r.success) { state.originalData = r.data; const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); state.hasUnsavedChanges = true; showNotification('Watermark added'); }
+        if (r.success) { state.originalData = r.data; setUnsavedChanges(true); const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); showNotification('Watermark added'); }
         setLoading(false);
       } }]);
     }
@@ -1215,7 +1338,7 @@
       state.annotations[pageNum].push({ type: 'signature', x: x / w, y: y / h, width: 0.2, height: 0.08, imageData: state.pendingSignature });
       renderAnnotations(pageNum);
       updateAnnotationCount();
-      state.hasUnsavedChanges = true;
+      setUnsavedChanges(true);
       state.pendingSignature = null;
       selectTool('select');
       showNotification('Signature added');
@@ -1336,7 +1459,7 @@
           state.annotations[pageNum].push({ type: 'text', text: newText, x: selX / canvasW, y: (selY + selH) / canvasH, fontSize: Math.round(selH * 0.8), color: { r: 0, g: 0, b: 0 } });
           renderAnnotations(pageNum);
           updateAnnotationCount();
-          state.hasUnsavedChanges = true;
+          setUnsavedChanges(true);
           showNotification('Text replaced');
         }
         overlay.remove();
@@ -1372,7 +1495,7 @@
       }
       renderAnnotations(pageNum);
       updateAnnotationCount();
-      state.hasUnsavedChanges = true;
+      setUnsavedChanges(true);
       showNotification('Text highlighted');
       window.getSelection().removeAllRanges();
     }
@@ -1396,7 +1519,7 @@
       }
       renderAnnotations(pageNum);
       updateAnnotationCount();
-      state.hasUnsavedChanges = true;
+      setUnsavedChanges(true);
       showNotification('Strikethrough added');
       window.getSelection().removeAllRanges();
     }
@@ -1532,10 +1655,11 @@
 
     window.pdfAPI.onMenuNew(createNewPdf); window.pdfAPI.onMenuOpen(openFile); window.pdfAPI.onMenuSave(() => saveDocument()); window.pdfAPI.onMenuSaveAs(() => saveDocument(true));
     window.pdfAPI.onMenuMerge(mergePdfs); window.pdfAPI.onMenuPrint(() => window.pdfAPI.printDocument()); window.pdfAPI.onMenuProperties(showDocumentProperties);
-    window.pdfAPI.onMenuSplit(showSplitDialog); window.pdfAPI.onMenuExtractPages(showExtractPagesDialog);
+    window.pdfAPI.onMenuSplit(showSplitDialog); window.pdfAPI.onMenuExtractPages(showExtractPagesDialog); window.pdfAPI.onMenuExportPages(showExtractPagesDialog);
     window.pdfAPI.onMenuSetPassword(showSetPasswordDialog); window.pdfAPI.onMenuRemovePassword(showRemovePasswordDialog);
     window.pdfAPI.onMenuOpenRecent(async p => { try { const r = await window.pdfAPI.openSpecificFile(p); if (r && r.data) await loadPdf(r); else showNotification('File not accessible: ' + p, 'error'); } catch (e) { showNotification('Error: ' + e.message, 'error'); } });
     window.pdfAPI.onMenuExportImages(exportImages);
+    window.pdfAPI.onMenuOcr(runOcr); window.pdfAPI.onMenuSmartExtract(runSmartExtract); window.pdfAPI.onMenuEngineSetup(showEngineSetup);
     window.pdfAPI.onMenuToggleBookmarks(() => activateSidebarTab('bookmarks')); window.pdfAPI.onMenuToggleThumbnails(() => activateSidebarTab('thumbnails'));
     window.pdfAPI.onMenuInsertFromFile(showInsertFromFile);
     window.pdfAPI.onMenuAddPageNumbers(showPageNumbersDialog); window.pdfAPI.onMenuAddHeaderFooter(showHeaderFooterDialog);
@@ -1554,7 +1678,7 @@
     });
     window.pdfAPI.onMenuUndo(undo); window.pdfAPI.onMenuRedo(redo); window.pdfAPI.onMenuFind(showSearch);
     window.pdfAPI.onMenuZoomIn(() => setZoom(state.scale + 0.25)); window.pdfAPI.onMenuZoomOut(() => setZoom(state.scale - 0.25)); window.pdfAPI.onMenuZoomReset(() => setZoom(1));
-    window.pdfAPI.onMenuTool(selectTool); window.pdfAPI.onMenuRotate(rotatePage); window.pdfAPI.onMenuDeletePage(deletePage); window.pdfAPI.onMenuInsertPage(insertBlankPage);
+    window.pdfAPI.onMenuTool(selectTool); window.pdfAPI.onMenuRotate(rotatePage); window.pdfAPI.onMenuRotateAll(rotateAllPages); window.pdfAPI.onMenuDeletePage(deletePage); window.pdfAPI.onMenuInsertPage(insertBlankPage);
     window.pdfAPI.onMenuAddWatermark(showWatermarkDialog);
     window.pdfAPI.onMenuStamp(s => { state.pendingStamp = s; selectTool('stamp'); showNotification('Click to place stamp', 'info'); });
     window.pdfAPI.onMenuAddImage(async () => { const img = await window.pdfAPI.selectImage(); if (img) { state.pendingImage = img; selectTool('image'); showNotification('Click to place image', 'info'); } });
@@ -1571,7 +1695,7 @@
     window.pdfAPI.onMenuToggleTheme(toggleTheme);
 
     // save-then-quit flow (from unsaved-changes close dialog)
-    window.pdfAPI.onQuitSave(async () => { await saveDocument(false); await window.pdfAPI.forceClose(); });
+    window.pdfAPI.onQuitSave(async () => { if (await saveDocument(false)) await window.pdfAPI.forceClose(); });
 
     // Auto-open file passed on the command line
     (async () => { const f = await window.pdfAPI.getInitialFile(); if (f) { const r = await window.pdfAPI.openSpecificFile(f); if (r && r.data) await loadPdf(r); } })();

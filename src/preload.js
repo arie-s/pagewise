@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('pdfAPI', {
 
   // PDF modifications
   applyModifications: (options) => ipcRenderer.invoke('apply-modifications', options),
+  redactPdf: (options) => ipcRenderer.invoke('redact-pdf', options),
   mergePdfs: (options) => ipcRenderer.invoke('merge-pdfs', options),
   splitPdf: (options) => ipcRenderer.invoke('split-pdf', options),
   extractPages: (options) => ipcRenderer.invoke('extract-pages', options),

@@ -1,15 +1,21 @@
 {
-  "name": "pdf-studio-pro",
+  "name": "local-pdf-desk",
+  "productName": "Local PDF Desk",
   "version": "1.0.0",
-  "description": "Full-featured PDF editor with visual editing capabilities",
+  "description": "Private PDF editing with local OCR and optional local AI",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "cli": "electron . --cli",
+    "cli": "electron . cli",
+    "test": "node --test --test-isolation=none tests/*.test.cjs",
     "build": "electron-builder --win",
     "build:portable": "electron-builder --win portable"
   },
-  "author": "PDF Studio",
+  "author": {
+    "name": "arie-s",
+    "email": "44439774+arie-s@users.noreply.github.com"
+  },
+  "homepage": "https://github.com/arie-s/pdf-studio-pro",
   "license": "MIT",
   "devDependencies": {
     "electron": "^28.0.0",
@@ -21,8 +27,8 @@
     "tesseract.js": "^7.0.0"
   },
   "build": {
-    "appId": "com.pdfstudiopro.app",
-    "productName": "PDF Studio Pro",
+    "appId": "com.localpdfdesk.app",
+    "productName": "Local PDF Desk",
     "directories": {
       "output": "dist"
     },
