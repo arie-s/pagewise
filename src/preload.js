@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   mergePdfs: (options) => ipcRenderer.invoke('merge-pdfs', options),
   splitPdf: (options) => ipcRenderer.invoke('split-pdf', options),
   extractPages: (options) => ipcRenderer.invoke('extract-pages', options),
+  reorderPages: (options) => ipcRenderer.invoke('reorder-pages', options),
   insertPagesFromFile: (options) => ipcRenderer.invoke('insert-pages-from-file', options),
 
   // Document operations

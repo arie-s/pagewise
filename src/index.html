@@ -86,6 +86,9 @@
       position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
       background: rgba(0,0,0,0.75); color: white; font-size: 10px; padding: 2px 8px; border-radius: 10px;
     }
+    .thumbnail.dragging { opacity: 0.4; }
+    .thumbnail.drag-over-top { border-top: 3px solid var(--primary); border-radius: 2px; }
+    .thumbnail.drag-over-bottom { border-bottom: 3px solid var(--primary); border-radius: 2px; }
     .bookmarks-container { padding: 8px; }
     .bookmark-item { padding: 8px 12px; cursor: pointer; border-radius: 4px; font-size: 12px; }
     .bookmark-item:hover { background: var(--bg-hover); }
@@ -448,6 +451,44 @@
       } }]);
     }
 
+    let dragPageIdx = null;
+
+    function remapForReorder(newOrder) {
+      const remap = obj => { const out = {}; newOrder.forEach((oldIdx, j) => { const k = String(oldIdx + 1); if (obj[k]) out[String(j + 1)] = obj[k]; }); return out; };
+      state.annotations = remap(state.annotations); state.redactionMarks = remap(state.redactionMarks);
+    }
+
+    async function reorderPages(newOrder) {
+      setLoading(true, 'Reordering pages...');
+      try {
+        const r = await window.pdfAPI.reorderPages({ data: state.originalData, newOrder });
+        if (r.success) {
+          const focusOld = newOrder[state.currentPage - 1];
+          remapForReorder(newOrder);
+          state.originalData = r.data;
+          const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
+          state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
+          state.currentPage = Math.min(state.currentPage, state.pdfDoc.numPages);
+          await renderThumbnails(); await renderAllPages();
+          goToPage(Math.min(newOrder.indexOf(focusOld) + 1, state.pdfDoc.numPages));
+          state.hasUnsavedChanges = true;
+          showNotification('Pages reordered');
+        } else showNotification('Reorder failed: ' + r.error, 'error');
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      setLoading(false);
+    }
+
+    function reorderFromThumbnail(fromPage, toPage, above) {
+      const n = state.pdfDoc.numPages;
+      const order = Array.from({ length: n }, (_, i) => i);
+      const item = order.splice(fromPage - 1, 1)[0];
+      let target = toPage - 1;
+      if (fromPage < toPage) target -= 1;
+      if (!above) target += 1;
+      order.splice(target, 0, item);
+      reorderPages(order);
+    }
+
     function activateSidebarTab(name) {
       document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
       $('thumbnailContainer').classList.toggle('hidden', name !== 'thumbnails');
@@ -612,6 +653,24 @@
         div.appendChild(canvas);
         const num = document.createElement('div'); num.className = 'thumbnail-number'; num.textContent = i; div.appendChild(num);
         div.onclick = () => goToPage(i);
+        div.draggable = true;
+        div.addEventListener('dragstart', e => { dragPageIdx = i; e.dataTransfer.setData('application/x-pdf-page', String(i)); e.dataTransfer.effectAllowed = 'move'; div.classList.add('dragging'); });
+        div.addEventListener('dragend', () => { dragPageIdx = null; document.querySelectorAll('.thumbnail').forEach(t => t.classList.remove('dragging', 'drag-over-top', 'drag-over-bottom')); });
+        div.addEventListener('dragover', e => {
+          if (dragPageIdx === null || dragPageIdx === i) return;
+          e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+          const r = div.getBoundingClientRect();
+          const above = (e.clientY - r.top) < r.height / 2;
+          div.classList.toggle('drag-over-top', above); div.classList.toggle('drag-over-bottom', !above);
+        });
+        div.addEventListener('dragleave', () => div.classList.remove('drag-over-top', 'drag-over-bottom'));
+        div.addEventListener('drop', e => {
+          if (dragPageIdx === null || dragPageIdx === i) return;
+          e.preventDefault(); e.stopPropagation();
+          const r = div.getBoundingClientRect();
+          const above = (e.clientY - r.top) < r.height / 2;
+          reorderFromThumbnail(dragPageIdx, i, above);
+        });
         $('thumbnailContainer').appendChild(div);
       }
     }
@@ -1346,6 +1405,7 @@
     document.addEventListener('dragover', e => e.preventDefault());
     document.addEventListener('drop', async e => {
       e.preventDefault();
+      if (e.dataTransfer.types && e.dataTransfer.types.includes('application/x-pdf-page')) return; // page reorder, not file open
       const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
       if (!f || !/\.pdf$/i.test(f.name)) { if (f) showNotification('Only PDF files can be opened', 'warning'); return; }
       const dataUrl = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(f); });

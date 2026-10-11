@@ -732,6 +732,20 @@ ipcMain.handle('decrypt-pdf', async (event, { data, password }) => {
   }
 });
 
+// Reorder pages: newOrder = array of 0-based old indices in their new sequence
+ipcMain.handle('reorder-pages', async (event, { data, newOrder }) => {
+  try {
+    const src = await PDFDocument.load(Buffer.from(data, 'base64'), { ignoreEncryption: true });
+    const out = await PDFDocument.create();
+    const pages = await out.copyPages(src, newOrder);
+    pages.forEach(p => out.addPage(p));
+    const pdfBytes = await out.save();
+    return { success: true, data: Buffer.from(pdfBytes).toString('base64') };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 // Unsaved-changes flag synced from renderer
 ipcMain.on('set-unsaved', (event, flag) => { unsavedFlag = !!flag; });
 
