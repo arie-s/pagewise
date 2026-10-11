@@ -1045,7 +1045,7 @@ async function startEngine() {
     '-m', ep.model, '--mmproj', ep.mmproj,
     '--host', '127.0.0.1', '--port', String(ENGINE_PORT),
     '--no-webui', '-ngl', '999',
-    // One request at a time; 16k fits a page image (≤ ~12k tokens at the renderer's pixel cap) plus 4096 output tokens.
+    // One request at a time; 16k fits a page image (≤ ~5k tokens at the renderer's 4 MP cap) plus 4096 output tokens.
     // Without this llama-server reserves a 131k-token context (~12 GB RAM on CPU).
     '-c', '16384', '-np', '1'
   ], { stdio: 'ignore' });
