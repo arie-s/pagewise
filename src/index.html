@@ -278,8 +278,8 @@
 
     <div class="sidebar hidden" id="sidebar">
       <div class="sidebar-tabs">
-        <button class="sidebar-tab active" data-tab="thumbnails">Pages</button>
-        <button class="sidebar-tab" data-tab="bookmarks">Bookmarks</button>
+        <button class="sidebar-tab active" data-tab="thumbnails" title="Page thumbnails">Pages</button>
+        <button class="sidebar-tab" data-tab="bookmarks" title="Bookmarks">Bookmarks</button>
       </div>
       <div class="sidebar-content">
         <div class="thumbnail-container" id="thumbnailContainer"></div>
@@ -301,28 +301,28 @@
         </div>
         <div class="panel-section">
           <div class="panel-section-title">Page Actions</div>
-          <div class="panel-btn-group"><button class="panel-btn" id="rotateLeftBtn">↺ Left</button><button class="panel-btn" id="rotateRightBtn">↻ Right</button></div>
-          <button class="panel-btn" id="insertPageBtn">+ Insert Blank Page</button>
-          <button class="panel-btn" id="insertFromFileBtn">+ Insert from File</button>
-          <button class="panel-btn danger" id="deletePageBtn">Delete Page</button>
+          <div class="panel-btn-group"><button class="panel-btn" id="rotateLeftBtn" title="Rotate left">↺ Left</button><button class="panel-btn" id="rotateRightBtn" title="Rotate right">↻ Right</button></div>
+          <button class="panel-btn" id="insertPageBtn" title="Insert blank page after current page">+ Insert Blank Page</button>
+          <button class="panel-btn" id="insertFromFileBtn" title="Insert pages from another PDF after current page">+ Insert from File</button>
+          <button class="panel-btn danger" id="deletePageBtn" title="Delete current page">Delete Page</button>
         </div>
         <div class="panel-section">
           <div class="panel-section-title">Annotations</div>
           <div class="panel-row"><span class="panel-label">Count:</span><span class="panel-value" id="annotationCount">0</span></div>
-          <button class="panel-btn danger" id="clearAnnotationsBtn">Clear All</button>
+          <button class="panel-btn danger" id="clearAnnotationsBtn" title="Clear all annotations and redaction marks">Clear All</button>
         </div>
         <div class="panel-section">
           <div class="panel-section-title">Document Tools</div>
-          <button class="panel-btn" id="addWatermarkBtn">Add Watermark</button>
-          <button class="panel-btn" id="addPageNumbersBtn">Add Page Numbers</button>
-          <button class="panel-btn" id="propertiesBtn">Document Properties</button>
+          <button class="panel-btn" id="addWatermarkBtn" title="Add a text watermark to pages">Add Watermark</button>
+          <button class="panel-btn" id="addPageNumbersBtn" title="Add page numbers">Add Page Numbers</button>
+          <button class="panel-btn" id="propertiesBtn" title="Document title, author, subject">Document Properties</button>
         </div>
       </div>
     </div>
   </div>
 
   <div class="status-bar"><div><span id="statusText">Ready</span></div><div class="status-separator"></div><div>Tool: <span id="currentToolDisplay">Select</span></div><div style="margin-left: auto;"><span id="filePath">No file loaded</span></div></div>
-  <div class="search-bar hidden" id="searchBar"><input type="text" class="search-input" id="searchInput" placeholder="Find..."><span class="search-results" id="searchResults"></span><button class="search-btn" id="searchPrev">◀</button><button class="search-btn" id="searchNext">▶</button><button class="search-btn" id="searchClose">✕</button></div>
+  <div class="search-bar hidden" id="searchBar"><input type="text" class="search-input" id="searchInput" placeholder="Find..."><span class="search-results" id="searchResults"></span><button class="search-btn" id="searchPrev" title="Previous match">◀</button><button class="search-btn" id="searchNext" title="Next match">▶</button><button class="search-btn" id="searchClose" title="Close search (Esc)">✕</button></div>
   <div class="loading-overlay hidden" id="loadingOverlay"><div class="loading-spinner"></div><div class="loading-text" id="loadingText">Loading...</div></div>
   <div class="notification hidden" id="notification"></div>
   <div id="modalContainer"></div>
@@ -1178,6 +1178,19 @@
     }
 
     function setZoom(z) { state.scale = Math.max(0.25, Math.min(4, z)); $('zoomDisplay').textContent = Math.round(state.scale * 100) + '%'; renderAllPages(); }
+    document.addEventListener('mousedown', e => {
+      if (state.currentTool !== 'hand' || !state.pdfDoc) return;
+      if (e.target.closest('.toolbar, .sidebar, .properties-panel, .status-bar, .modal-overlay, .search-bar')) return;
+      const scroller = document.querySelector('.viewer-scroll');
+      if (!scroller) return;
+      e.preventDefault();
+      const startX = e.clientX, startY = e.clientY, sl = scroller.scrollLeft, st = scroller.scrollTop;
+      const move = ev => { scroller.scrollLeft = sl - (ev.clientX - startX); scroller.scrollTop = st - (ev.clientY - startY); };
+      const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); document.body.style.cursor = 'grab'; };
+      document.body.style.cursor = 'grabbing';
+      document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+    });
+
     function selectTool(tool) {
       state.currentTool = tool;
       document.querySelectorAll('.tool-btn[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === tool));
@@ -1186,6 +1199,7 @@
       // Disable text layer when using drawing tools so clicks go through to annotation layer
       document.querySelectorAll('.text-layer').forEach(l => { l.style.pointerEvents = isDrawingTool ? 'none' : 'auto'; });
       $('currentToolDisplay').textContent = tool.charAt(0).toUpperCase() + tool.slice(1);
+      document.body.style.cursor = tool === 'hand' ? 'grab' : '';
     }
     function showContextMenu(e, pageNum) {
       e.preventDefault();
