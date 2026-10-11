@@ -26,6 +26,9 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   getDocumentInfo: (options) => ipcRenderer.invoke('get-document-info', options),
   setDocumentInfo: (options) => ipcRenderer.invoke('set-document-info', options),
 
+  // OCR
+  ocrPage: (options) => ipcRenderer.invoke('ocr-page', options),
+
   // Security
   encryptPdf: (options) => ipcRenderer.invoke('encrypt-pdf', options),
   decryptPdf: (options) => ipcRenderer.invoke('decrypt-pdf', options),
@@ -90,6 +93,8 @@ contextBridge.exposeInMainWorld('pdfAPI', {
 
   // Menu event listeners - Page
   onMenuRotate: (callback) => ipcRenderer.on('menu-rotate', (event, angle) => callback(angle)),
+  onMenuRotateAll: (callback) => ipcRenderer.on('menu-rotate-all', (event, angle) => callback(angle)),
+  onMenuOcr: (callback) => ipcRenderer.on('menu-ocr', callback),
   onMenuDeletePage: (callback) => ipcRenderer.on('menu-delete-page', callback),
   onMenuInsertPage: (callback) => ipcRenderer.on('menu-insert-page', callback),
   onMenuInsertFromFile: (callback) => ipcRenderer.on('menu-insert-from-file', callback),

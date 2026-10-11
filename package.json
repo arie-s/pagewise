@@ -17,7 +17,8 @@
   },
   "dependencies": {
     "@cantoo/pdf-lib": "^2.11.1",
-    "pdfjs-dist": "^4.0.379"
+    "pdfjs-dist": "^4.0.379",
+    "tesseract.js": "^7.0.0"
   },
   "build": {
     "appId": "com.pdfstudiopro.app",
@@ -34,7 +35,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
@@ -43,11 +46,15 @@
       "target": [
         {
           "target": "AppImage",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "deb",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },

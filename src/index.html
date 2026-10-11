@@ -489,6 +489,38 @@
       reorderPages(order);
     }
 
+    async function runOcr() {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      if (!confirm('OCR runs locally on your machine. First use may download language data (~15MB, one time, needs internet). Make this PDF searchable?')) return;
+      setLoading(true, 'OCR: preparing...');
+      try {
+        const S = 2;
+        let data = state.originalData;
+        for (let i = 1; i <= state.pdfDoc.numPages; i++) {
+          $('loadingText').textContent = 'OCR: recognizing page ' + i + ' of ' + state.pdfDoc.numPages + '...';
+          const page = await state.pdfDoc.getPage(i);
+          const vp = page.getViewport({ scale: S });
+          const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
+          await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+          const ocr = await window.pdfAPI.ocrPage({ pngBase64: canvas.toDataURL('image/png').split(',')[1], lang: 'eng' });
+          if (!ocr.success || !ocr.words.length) continue;
+          const mods = ocr.words
+            .filter(w => w.text && w.text.trim() && w.bbox && Number.isFinite(w.bbox.x0) && w.bbox.y1 - w.bbox.y0 > 0)
+            .map(w => ({ type: 'text', pageIndex: i - 1, text: w.text, x: w.bbox.x0 / canvas.width, y: w.bbox.y1 / canvas.height, fontSize: Math.max(4, Math.round((w.bbox.y1 - w.bbox.y0) / S * 0.9)), opacity: 0 }));
+          if (!mods.length) continue;
+          const r = await window.pdfAPI.applyModifications({ originalData: data, modifications: mods });
+          if (r.success) data = r.data;
+        }
+        state.originalData = data;
+        const d = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+        state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
+        await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage);
+        state.hasUnsavedChanges = true;
+        showNotification('OCR complete — document is now searchable');
+      } catch (e) { showNotification('OCR error: ' + e.message, 'error'); }
+      setLoading(false);
+    }
+
     function activateSidebarTab(name) {
       document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
       $('thumbnailContainer').classList.toggle('hidden', name !== 'thumbnails');
@@ -541,15 +573,34 @@
       setLoading(false);
     }
 
+    async function rotateAllPages(angle) {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      setLoading(true, 'Rotating all pages...');
+      try {
+        const mods = []; for (let i = 0; i < state.pdfDoc.numPages; i++) mods.push({ type: 'rotate', pageIndex: i, angle });
+        const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
+        if (r.success) {
+          state.originalData = r.data; const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
+          state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
+          await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); state.hasUnsavedChanges = true;
+          showNotification('All pages rotated');
+        } else showNotification('Error: ' + r.error, 'error');
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      setLoading(false);
+    }
+
     function showPageNumbersDialog() {
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
       const content = '<div class="form-group"><label class="form-label">Position</label><select class="form-select" id="pnPos"><option value="bottom">Bottom center</option><option value="top">Top center</option></select></div>' +
+        '<div class="form-group"><label class="form-label">Format</label><select class="form-select" id="pnFormat"><option value="plain">1</option><option value="page">Page 1</option><option value="pageof">Page 1 of N</option><option value="slash">1 / N</option></select></div>' +
         '<div class="form-group"><label class="form-label">Font size</label><input type="number" class="form-input" id="pnSize" value="10" min="6" max="48"></div>';
       showModal('Add Page Numbers', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Add', action: 'add', primary: true, handler: async m => {
         const pos = m.querySelector('#pnPos').value, size = parseInt(m.querySelector('#pnSize').value, 10) || 10;
+        const fmt = m.querySelector('#pnFormat').value, n = state.pdfDoc.numPages;
+        const numText = (i) => fmt === 'plain' ? String(i + 1) : fmt === 'page' ? 'Page ' + (i + 1) : fmt === 'pageof' ? 'Page ' + (i + 1) + ' of ' + n : (i + 1) + ' / ' + n;
         setLoading(true, 'Adding page numbers...');
         const mods = [];
-        for (let i = 0; i < state.pdfDoc.numPages; i++) mods.push({ type: 'pageNumber', pageIndex: i, text: String(i + 1), position: pos, fontSize: size, x: 0.45 });
+        for (let i = 0; i < n; i++) mods.push({ type: 'pageNumber', pageIndex: i, text: numText(i), position: pos, fontSize: size, x: 0.4 });
         const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
         if (r.success) { state.originalData = r.data; const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); state.hasUnsavedChanges = true; showNotification('Page numbers added'); }
         else showNotification('Error: ' + r.error, 'error');
@@ -631,7 +682,17 @@
         const result = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
         if (!result.success) throw new Error(result.error);
         let saveResult = saveAs || !state.filePath ? await window.pdfAPI.saveFileAs({ data: result.data, defaultName: state.fileName || 'document.pdf' }) : await window.pdfAPI.saveFile({ data: result.data, path: state.filePath });
-        if (saveResult.success) { state.hasUnsavedChanges = false; state.originalData = result.data; state.filePath = saveResult.path; state.fileName = saveResult.path.split(/[\\/]/).pop(); $('filePath').textContent = state.fileName; showNotification('Saved!'); }
+        if (saveResult.success) {
+          state.hasUnsavedChanges = false; state.filePath = saveResult.path; state.fileName = saveResult.path.split(/[\\/]/).pop(); $('filePath').textContent = state.fileName;
+          // annotations were just baked into the saved data — clear them so the next save doesn't duplicate everything
+          state.originalData = result.data;
+          state.annotations = {}; state.redactionMarks = {}; state.undoStack = []; state.redoStack = []; updateUndoRedo();
+          const d = Uint8Array.from(atob(result.data), c => c.charCodeAt(0));
+          state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
+          await renderThumbnails(); await renderAllPages(); goToPage(Math.min(state.currentPage, state.pdfDoc.numPages));
+          updateAnnotationCount();
+          showNotification('Saved!');
+        }
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
       setLoading(false);
     }

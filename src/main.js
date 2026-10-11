@@ -313,6 +313,10 @@ function createWindow() {
           accelerator: 'CmdOrCtrl+I',
           click: () => mainWindow.webContents.send('menu-add-image')
         },
+        {
+          label: 'OCR: Make Searchable...',
+          click: () => mainWindow.webContents.send('menu-ocr')
+        },
         { type: 'separator' },
         {
           label: 'Redact',
@@ -341,6 +345,14 @@ function createWindow() {
         {
           label: 'Rotate Counter-Clockwise',
           click: () => mainWindow.webContents.send('menu-rotate', -90)
+        },
+        {
+          label: 'Rotate All Clockwise',
+          click: () => mainWindow.webContents.send('menu-rotate-all', 90)
+        },
+        {
+          label: 'Rotate All Counter-Clockwise',
+          click: () => mainWindow.webContents.send('menu-rotate-all', -90)
         },
         { type: 'separator' },
         {
@@ -741,6 +753,35 @@ ipcMain.handle('reorder-pages', async (event, { data, newOrder }) => {
     pages.forEach(p => out.addPage(p));
     const pdfBytes = await out.save();
     return { success: true, data: Buffer.from(pdfBytes).toString('base64') };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// ---------- OCR (tesseract.js, runs locally in main process) ----------
+let _tesseract = null;
+const ocrWorkers = new Map();
+async function getOcrWorker(lang) {
+  if (!_tesseract) _tesseract = require('tesseract.js');
+  const key = lang || 'eng';
+  if (!ocrWorkers.has(key)) {
+    const w = await _tesseract.createWorker(key, 1, {
+      cachePath: path.join(app.getPath('userData'), 'tesseract-data')
+    });
+    ocrWorkers.set(key, w);
+  }
+  return ocrWorkers.get(key);
+}
+
+ipcMain.handle('ocr-page', async (event, { pngBase64, lang }) => {
+  try {
+    const worker = await getOcrWorker(lang);
+    const { data } = await worker.recognize(Buffer.from(pngBase64, 'base64'), {}, { blocks: true });
+    const words = [];
+    (data.blocks || []).forEach(b => b.paragraphs.forEach(pa => pa.lines.forEach(l => l.words.forEach(w => words.push({
+      text: w.text, x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1
+    })))));
+    return { success: true, words };
   } catch (error) {
     return { success: false, error: error.message };
   }
