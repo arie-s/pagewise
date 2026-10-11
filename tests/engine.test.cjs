@@ -97,6 +97,8 @@ function fakeNet(urls, { tree = [], health = 0 } = {}) {
   };
 }
 
+const BIN = process.platform === 'win32' ? 'llama-server.exe' : 'llama-server';
+
 function withEngine(t, netOpts, { device = true, models = true } = {}) {
   const urls = [];
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'pagewise-engine-'));
@@ -105,7 +107,7 @@ function withEngine(t, netOpts, { device = true, models = true } = {}) {
   const loaded = loadMainHandlers({ electron: { app, net: fakeNet(urls, netOpts) } });
   const dir = path.join(userData, 'ocr-engine');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'llama-server'), 'x');
+  fs.writeFileSync(path.join(dir, BIN), 'x');
   if (device) fs.writeFileSync(path.join(dir, 'device.txt'), 'CPU');
   if (models) {
     fs.writeFileSync(path.join(dir, 'dots-ocr-mmproj.gguf'), Buffer.alloc(10));
@@ -128,7 +130,7 @@ test('engine-install replaces an older binary that has no device.txt and keeps t
   const result = await handlers.get('engine-install')({}, {});
   assert.equal(result.success, false); // the fake network has no llama.cpp release to download
   assert.ok(urls.some(u => u.includes('api.github.com/repos/ggml-org/llama.cpp/releases')), 'binary step ran');
-  assert.equal(fs.existsSync(path.join(dir, 'llama-server')), false, 'old binary cleared');
+  assert.equal(fs.existsSync(path.join(dir, BIN)), false, 'old binary cleared');
   assert.equal(fs.existsSync(path.join(dir, 'dots-ocr-text-Q8_0.gguf')), true, 'models kept');
 });
 
