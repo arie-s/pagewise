@@ -31,7 +31,16 @@ Text replacement covers the original text with a white rectangle and adds new te
 
 ## Quick start
 
-**Download:** prebuilt installers will be listed on the [Releases](https://github.com/arie-s/pagewise/releases) page when available.
+**Download** the latest build from the [Releases](https://github.com/arie-s/pagewise/releases) page:
+
+| Platform | File |
+|---|---|
+| Windows x64 | `Pagewise Setup <version>.exe` (installer) or `Pagewise <version>.exe` (portable) |
+| macOS Apple Silicon | `Pagewise-<version>-arm64.dmg` |
+| macOS Intel | `Pagewise-<version>.dmg` |
+| Linux x64 | `Pagewise-<version>.AppImage` or `pagewise_<version>_amd64.deb` |
+
+The builds are not code-signed yet. On Windows, SmartScreen may show "Windows protected your PC": choose **More info**, then **Run anyway**. On macOS, open the app once, then allow it under **System Settings > Privacy & Security > Open Anyway**. Windows and macOS builds pass automated checks in CI but have had limited hands-on testing; please open an issue if something doesn't work.
 
 **Run from source** (Node.js 24 or newer, and Git):
 
