@@ -8,11 +8,43 @@ const { PDFDocument, rgb, degrees, StandardFonts, PDFName, PDFArray, PDFDict, PD
 let mainWindow;
 let currentFilePath = null;
 let recentFiles = [];
+let forceClose = false;
+let unsavedFlag = false;
+
+// ---------- persistent settings ----------
+const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
+let settings = { recentFiles: [], lastFile: null, bounds: null, theme: '' };
+function loadSettings() {
+  try { settings = { ...settings, ...JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) }; } catch (e) {}
+  recentFiles = Array.isArray(settings.recentFiles) ? settings.recentFiles : [];
+}
+function saveSettings() {
+  try { fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2)); } catch (e) {}
+}
+function rememberFile(filePath) {
+  if (!recentFiles.includes(filePath)) {
+    recentFiles.unshift(filePath);
+    if (recentFiles.length > 10) recentFiles.pop();
+    settings.recentFiles = recentFiles;
+  }
+  settings.lastFile = filePath;
+  saveSettings();
+}
+
+let boundsTimer = null;
+function persistBoundsSoon() {
+  clearTimeout(boundsTimer);
+  boundsTimer = setTimeout(() => {
+    if (mainWindow) { settings.bounds = mainWindow.getBounds(); saveSettings(); }
+  }, 500);
+}
 
 function createWindow() {
+  const b = settings.bounds || {};
   mainWindow = new BrowserWindow({
-    width: 1600,
-    height: 1000,
+    width: b.width || 1600,
+    height: b.height || 1000,
+    x: b.x, y: b.y,
     minWidth: 1200,
     minHeight: 800,
     webPreferences: {
@@ -147,6 +179,11 @@ function createWindow() {
           click: () => mainWindow.webContents.send('menu-zoom-reset')
         },
         { type: 'separator' },
+        {
+          label: 'Light / Dark Theme',
+          accelerator: 'CmdOrCtrl+Shift+T',
+          click: () => mainWindow.webContents.send('menu-toggle-theme')
+        },
         {
           label: 'Show Bookmarks Panel',
           accelerator: 'CmdOrCtrl+B',
@@ -415,6 +452,24 @@ Everything stays on your machine.`
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
 
+  mainWindow.on('close', async (e) => {
+    if (forceClose || !unsavedFlag) return;
+    e.preventDefault();
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      title: 'Unsaved changes',
+      message: 'You have unsaved changes.',
+      detail: 'Do you want to save before closing?',
+      buttons: ['Save', 'Discard Changes', 'Cancel'],
+      defaultId: 0, cancelId: 2, noLink: true
+    });
+    if (response === 2) return;
+    if (response === 1) { forceClose = true; mainWindow.close(); return; }
+    mainWindow.webContents.send('menu-quit-save');
+  });
+  mainWindow.on('resize', persistBoundsSoon);
+  mainWindow.on('move', persistBoundsSoon);
+
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
 
   mainWindow.once('ready-to-show', () => {
@@ -531,7 +586,7 @@ async function runCli(args) {
 }
 
 const cliArgs = getCliArgs();
-app.whenReady().then(() => (cliArgs ? runCli(cliArgs) : createWindow()));
+app.whenReady().then(() => { loadSettings(); cliArgs ? runCli(cliArgs) : createWindow(); });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -559,12 +614,7 @@ ipcMain.handle('open-file', async () => {
   const filePath = result.filePaths[0];
   const buffer = await fs.promises.readFile(filePath);
   currentFilePath = filePath;
-
-  // Add to recent files
-  if (!recentFiles.includes(filePath)) {
-    recentFiles.unshift(filePath);
-    if (recentFiles.length > 10) recentFiles.pop();
-  }
+  rememberFile(filePath);
 
   return {
     path: filePath,
@@ -578,6 +628,7 @@ ipcMain.handle('open-specific-file', async (event, filePath) => {
   try {
     const buffer = await fs.promises.readFile(filePath);
     currentFilePath = filePath;
+    rememberFile(filePath);
 
     return {
       path: filePath,
@@ -681,6 +732,16 @@ ipcMain.handle('decrypt-pdf', async (event, { data, password }) => {
   }
 });
 
+// Unsaved-changes flag synced from renderer
+ipcMain.on('set-unsaved', (event, flag) => { unsavedFlag = !!flag; });
+
+// Force close after renderer finished saving
+ipcMain.handle('force-close', () => { forceClose = true; if (mainWindow) mainWindow.close(); return true; });
+
+// Theme persistence
+ipcMain.handle('get-theme', () => settings.theme || '');
+ipcMain.handle('save-theme', (event, theme) => { settings.theme = theme; saveSettings(); return true; });
+
 // Get PDF.js worker path
 ipcMain.handle('get-pdfjs-worker-path', () => {
   return path.join(__dirname, '..', 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs');
@@ -695,7 +756,7 @@ let initialPdfPath = null;
   }
 })();
 
-ipcMain.handle('get-initial-file', () => initialPdfPath);
+ipcMain.handle('get-initial-file', () => initialPdfPath || settings.lastFile || null);
 
 // Apply annotations and modifications to PDF
 ipcMain.handle('apply-modifications', async (event, { originalData, modifications }) => {

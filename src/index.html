@@ -12,6 +12,14 @@
       --bg-lighter: #f0ede5; --bg-hover: #e8e4d9; --text: #2b2925; --text-dim: #8a857b;
       --border: #ddd8cc; --danger: #d43c3c; --success: #16a34a; --warning: #d97706;
     }
+    body[data-theme="dark"] {
+      --bg: #1a1a1a; --bg-light: #252525; --bg-lighter: #333; --bg-hover: #3a3a3a;
+      --text: #e5e5e5; --text-dim: #888; --border: #404040; --danger: #ef4444;
+      --success: #22c55e; --warning: #f59e0b;
+    }
+    body[data-theme="dark"] .viewer-container { background: #404040; }
+    body[data-theme="dark"] .page-container { box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+    body[data-theme="dark"] .modal { box-shadow: 0 20px 50px rgba(0,0,0,0.5); }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: var(--bg); color: var(--text); height: 100vh;
@@ -537,6 +545,16 @@
       const content = rows.map(r => '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);"><span style="font-family:monospace;color:var(--text-dim);">' + r[0] + '</span><span>' + r[1] + '</span></div>').join('');
       showModal('Keyboard Shortcuts', content, [{ label: 'Close', action: 'close', primary: true }]);
     }
+
+    function toggleTheme() {
+      const t = document.body.dataset.theme === 'dark' ? '' : 'dark';
+      if (t) document.body.dataset.theme = t; else delete document.body.dataset.theme;
+      window.pdfAPI.saveTheme(t);
+      showNotification(t === 'dark' ? 'Dark theme' : 'Light theme');
+    }
+
+    // keep main process informed about unsaved state (close guard)
+    setInterval(() => window.pdfAPI.setUnsaved(state.hasUnsavedChanges), 800);
 
     async function initPdfJs() { pdfjsLib.GlobalWorkerOptions.workerSrc = await window.pdfAPI.getPdfjsWorkerPath(); }
 
@@ -1344,6 +1362,15 @@
     initPdfJs();
     setupSignatureClickHandler();
     setupTextSelectionEditing();
+
+    // restore saved theme
+    (async () => { const t = await window.pdfAPI.getTheme(); if (t === 'dark') document.body.dataset.theme = 'dark'; })();
+
+    // theme toggle from menu
+    window.pdfAPI.onMenuToggleTheme(toggleTheme);
+
+    // save-then-quit flow (from unsaved-changes close dialog)
+    window.pdfAPI.onQuitSave(async () => { await saveDocument(false); await window.pdfAPI.forceClose(); });
 
     // Auto-open file passed on the command line
     (async () => { const f = await window.pdfAPI.getInitialFile(); if (f) { const r = await window.pdfAPI.openSpecificFile(f); if (r && r.data) await loadPdf(r); } })();

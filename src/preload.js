@@ -40,6 +40,14 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   showMessageBox: (options) => ipcRenderer.invoke('show-message-box', options),
   showError: (options) => ipcRenderer.invoke('show-error', options),
 
+  // Session / theme
+  setUnsaved: (flag) => ipcRenderer.send('set-unsaved', flag),
+  forceClose: () => ipcRenderer.invoke('force-close'),
+  getTheme: () => ipcRenderer.invoke('get-theme'),
+  saveTheme: (theme) => ipcRenderer.invoke('save-theme', theme),
+  onQuitSave: (callback) => ipcRenderer.on('menu-quit-save', callback),
+  onMenuToggleTheme: (callback) => ipcRenderer.on('menu-toggle-theme', callback),
+
   // Menu event listeners - File
   onMenuNew: (callback) => ipcRenderer.on('menu-new', callback),
   onMenuOpen: (callback) => ipcRenderer.on('menu-open', callback),
