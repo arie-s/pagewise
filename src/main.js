@@ -629,8 +629,11 @@ async function runCli(args) {
       if (!img) throw new Error('usage: cli engine-extract <image.png>');
       const png = fs.readFileSync(img).toString('base64');
       const promptIdx = args.indexOf('--prompt');
-      const out = await smartExtract(png, promptIdx !== -1 ? args[promptIdx + 1] : undefined);
-      console.log(out.content);
+      const wasRunning = await engineHealthy();
+      try {
+        const out = await smartExtract(png, promptIdx !== -1 ? args[promptIdx + 1] : undefined);
+        console.log(out.content);
+      } finally { if (!wasRunning) stopEngine(); }
     } else if (cmd === 'info') {
       const input = args[1];
       if (!input) throw new Error('usage: cli info input.pdf');
@@ -931,7 +934,7 @@ function enginePaths() {
 
 function engineInstalled() {
   const ep = enginePaths();
-  return fs.existsSync(ep.bin) && fs.existsSync(ep.model) && fs.existsSync(ep.mmproj);
+  return fs.existsSync(ep.bin) && fs.existsSync(ep.device) && fs.existsSync(ep.model) && fs.existsSync(ep.mmproj);
 }
 
 // llama.cpp release asset for this OS. Linux/Windows have separate Vulkan (GPU) and CPU builds;
@@ -1063,7 +1066,8 @@ async function installEngine(opts = {}) {
 
   // 1. llama-server binary (llama.cpp release). Try the GPU build where one may work;
   // fall back to the CPU build if llama.cpp can't see a real GPU with it.
-  if (!fs.existsSync(ep.bin) || opts.forceBinary) {
+  if (!fs.existsSync(ep.bin) || !fs.existsSync(ep.device) || opts.forceBinary) {
+    stopEngine();
     clearEngineBinary(ep);
     const tryGpu = process.platform === 'win32' || (process.platform === 'linux' && linuxGpuLikely());
     await downloadEngineBinary(ep, engineAssetPattern(process.platform, process.arch, tryGpu), prog, ref);
@@ -1088,20 +1092,33 @@ async function installEngine(opts = {}) {
   let tbody = '';
   treeRes.setEncoding('utf8');
   for await (const chunk of treeRes) tbody += chunk;
-  const files = JSON.parse(tbody).map(f => f.path).filter(p => p.endsWith('.gguf'));
+  const entries = JSON.parse(tbody).filter(f => f.path.endsWith('.gguf'));
+  const sizes = Object.fromEntries(entries.map(f => [f.path, f.lfs?.size ?? f.size]));
+  const files = entries.map(f => f.path);
   const mmproj = files.find(f => /mmproj/i.test(f) && /F16|f16|BF16|bf16/i.test(f)) || files.find(f => /mmproj/i.test(f));
   const text = files.filter(f => !/mmproj/i.test(f)).sort((a, b) => (b.includes('Q8_0') ? 1 : 0) - (a.includes('Q8_0') ? 1 : 0))[0] || files.filter(f => !/mmproj/i.test(f))[0];
   if (!mmproj || !text) throw new Error('Could not find model files in ' + repo);
-  await downloadTo(`https://huggingface.co/${repo}/resolve/main/${mmproj}`, ep.mmproj, 'Downloading vision encoder', ref);
-  await downloadTo(`https://huggingface.co/${repo}/resolve/main/${text}`, ep.model, 'Downloading OCR model', ref);
+  const present = (dest, size) => size !== undefined && fs.existsSync(dest) && fs.statSync(dest).size === size;
+  if (!present(ep.mmproj, sizes[mmproj])) await downloadTo(`https://huggingface.co/${repo}/resolve/main/${mmproj}`, ep.mmproj, 'Downloading vision encoder', ref);
+  if (!present(ep.model, sizes[text])) await downloadTo(`https://huggingface.co/${repo}/resolve/main/${text}`, ep.model, 'Downloading OCR model', ref);
   prog('Done', 100);
   return { success: true };
+}
+
+function engineHealthy() {
+  return new Promise(resolve => {
+    const req = net.request(`http://127.0.0.1:${ENGINE_PORT}/health`);
+    req.on('response', r => { r.resume(); resolve(r.statusCode === 200); });
+    req.on('error', () => resolve(false));
+    req.end();
+  });
 }
 
 async function startEngine() {
   if (engineProc) return { success: true, running: true, endpoint: `http://127.0.0.1:${ENGINE_PORT}` };
   const ep = enginePaths();
   if (!engineInstalled()) return { success: false, error: 'Engine not installed' };
+  if (await engineHealthy()) return { success: true, running: true, endpoint: `http://127.0.0.1:${ENGINE_PORT}` };
   engineProc = require('child_process').spawn(ep.bin, [
     '-m', ep.model, '--mmproj', ep.mmproj,
     '--host', '127.0.0.1', '--port', String(ENGINE_PORT),
@@ -1115,13 +1132,7 @@ async function startEngine() {
   for (let i = 0; i < 90; i++) {
     if (engineProc.exitCode !== null) { engineProc = null; return { success: false, error: 'llama-server exited immediately' }; }
     try {
-      const ok = await new Promise((resolve) => {
-        const req = net.request(`http://127.0.0.1:${ENGINE_PORT}/health`);
-        req.on('response', r => { r.resume(); resolve(r.statusCode === 200); });
-        req.on('error', () => resolve(false));
-        req.end();
-      });
-      if (ok) return { success: true, running: true, endpoint: `http://127.0.0.1:${ENGINE_PORT}` };
+      if (await engineHealthy()) return { success: true, running: true, endpoint: `http://127.0.0.1:${ENGINE_PORT}` };
     } catch (e) {}
     await new Promise(r => setTimeout(r, 1000));
   }

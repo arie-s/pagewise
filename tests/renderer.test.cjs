@@ -296,3 +296,31 @@ test('openDroppedFiles converts dropped images and loads them without a path; mi
   assert.equal(calls.loaded.length, 1);
   assert.equal(JSON.stringify(calls.notes.at(-1)), JSON.stringify(['Drop one PDF, or one or more PNG/JPEG images', 'warning']));
 });
+
+test('runSmartExtract goes straight to extraction when the engine is installed but not running', async () => {
+  let setup = 0, extracted = 0;
+  const page = { getViewport: ({ scale }) => ({ width: scale, height: scale }), render: () => ({ promise: Promise.resolve() }) };
+  const { functions } = loadRendererFunctions(['runSmartExtract'], {
+    state: { pdfDoc: { numPages: 1, getPage: async () => page } },
+    api: { engineStatus: async () => ({ installed: true, running: false }), smartExtract: async () => { extracted++; return { success: false, error: 'x' }; } },
+    extra: {
+      setLoading: () => {}, showNotification: () => {}, showEngineSetup: () => { setup++; }, extractScale: async () => 1,
+      document: { getElementById: () => ({}), createElement: () => ({ getContext: () => ({}), toDataURL: () => 'data:image/png;base64,AQ==' }) }
+    }
+  });
+  await functions.runSmartExtract();
+  assert.equal(setup, 0);
+  assert.equal(extracted, 1);
+});
+
+test('runSmartExtract asks for an engine update when files exist but the install is outdated', async () => {
+  let setup = 0; const notes = [];
+  const { functions } = loadRendererFunctions(['runSmartExtract'], {
+    state: { pdfDoc: { numPages: 1 } },
+    api: { engineStatus: async () => ({ installed: false, hasFiles: true }) },
+    extra: { setLoading: () => {}, showNotification: m => notes.push(m), showEngineSetup: () => { setup++; } }
+  });
+  await functions.runSmartExtract();
+  assert.equal(setup, 1);
+  assert.match(notes[0], /AI engine update \(small download\)/);
+});
