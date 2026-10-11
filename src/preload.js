@@ -29,6 +29,16 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   // OCR
   ocrPage: (options) => ipcRenderer.invoke('ocr-page', options),
 
+  // Advanced OCR engine (tier 2)
+  engineStatus: () => ipcRenderer.invoke('engine-status'),
+  engineInstall: (opts) => ipcRenderer.invoke('engine-install', opts),
+  engineStart: () => ipcRenderer.invoke('engine-start'),
+  engineStop: () => ipcRenderer.invoke('engine-stop'),
+  smartExtract: (options) => ipcRenderer.invoke('smart-extract', options),
+  onEngineProgress: (callback) => ipcRenderer.on('engine-progress', (ev, m) => callback(m)),
+  onMenuSmartExtract: (callback) => ipcRenderer.on('menu-smart-extract', callback),
+  onMenuEngineSetup: (callback) => ipcRenderer.on('menu-engine-setup', callback),
+
   // Security
   encryptPdf: (options) => ipcRenderer.invoke('encrypt-pdf', options),
   decryptPdf: (options) => ipcRenderer.invoke('decrypt-pdf', options),

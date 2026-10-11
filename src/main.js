@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, clipboard, net } = require('electron');
+const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 // @cantoo/pdf-lib encryption needs Web Crypto; Electron <=28's bundled Node lacks the global
@@ -317,6 +318,14 @@ function createWindow() {
           label: 'OCR: Make Searchable...',
           click: () => mainWindow.webContents.send('menu-ocr')
         },
+        {
+          label: 'Smart Extract (Advanced)...',
+          click: () => mainWindow.webContents.send('menu-smart-extract')
+        },
+        {
+          label: 'Advanced OCR Engine Setup...',
+          click: () => mainWindow.webContents.send('menu-engine-setup')
+        },
         { type: 'separator' },
         {
           label: 'Redact',
@@ -581,6 +590,24 @@ async function runCli(args) {
       await fs.promises.writeFile(outFile, await out.save());
       console.log(`decrypted -> ${outFile}`);
 
+    } else if (cmd === 'engine-install') {
+      const opts = {};
+      if (flag('--repo')) opts.modelRepo = flag('--repo');
+      const out = await installEngine(opts);
+      if (!out.success) throw new Error(out.error);
+    } else if (cmd === 'engine-start') {
+      const out = await startEngine();
+      if (!out.success) throw new Error(out.error);
+      console.log('engine running at ' + out.endpoint);
+    } else if (cmd === 'engine-stop') {
+      stopEngine(); console.log('engine stopped');
+    } else if (cmd === 'engine-extract') {
+      const img = args[1];
+      if (!img) throw new Error('usage: cli engine-extract <image.png>');
+      const png = fs.readFileSync(img).toString('base64');
+      const promptIdx = args.indexOf('--prompt');
+      const out = await smartExtract(png, promptIdx !== -1 ? args[promptIdx + 1] : undefined);
+      console.log(out.content);
     } else if (cmd === 'info') {
       const input = args[1];
       if (!input) throw new Error('usage: cli info input.pdf');
@@ -588,7 +615,7 @@ async function runCli(args) {
       console.log(JSON.stringify({ pages: doc.getPageCount(), title: doc.getTitle(), author: doc.getAuthor() }, null, 2));
 
     } else {
-      throw new Error('unknown command. Available: merge, split, encrypt, decrypt, info');
+      throw new Error('unknown command. Available: merge, split, encrypt, decrypt, info, engine-install, engine-start, engine-stop, engine-extract');
     }
     app.exit(0);
   } catch (e) {
@@ -786,6 +813,215 @@ ipcMain.handle('ocr-page', async (event, { pngBase64, lang }) => {
     return { success: false, error: error.message };
   }
 });
+
+// ---------- Advanced OCR engine (two-tier system, llama.cpp direct) ----------
+// Tier 1 (base): always available, CPU-only (tesseract, everything else in the app).
+// Tier 2 (advanced): OPTIONAL. On-demand install of llama-server + dots.ocr GGUF.
+//   Runs entirely on the user's machine; GPU optional (CPU/Vulkan/iGPU fine, just slower).
+
+const ENGINE_PORT = 8731;
+let engineProc = null;
+
+function enginePaths() {
+  const d = path.join(app.getPath('userData'), 'ocr-engine');
+  const isWin = process.platform === 'win32';
+  return {
+    dir: d,
+    bin: path.join(d, isWin ? 'llama-server.exe' : 'llama-server'),
+    model: path.join(d, 'dots-ocr-text-Q8_0.gguf'),
+    mmproj: path.join(d, 'dots-ocr-mmproj.gguf'),
+    pid: path.join(d, 'server.pid')
+  };
+}
+
+function engineInstalled() {
+  const ep = enginePaths();
+  return fs.existsSync(ep.bin) && fs.existsSync(ep.model) && fs.existsSync(ep.mmproj);
+}
+
+async function downloadTo(url, dest, phase, lastPctRef) {
+  return new Promise((resolve, reject) => {
+    const req = net.request(url);
+    let received = 0, total = 0;
+    const file = fs.createWriteStream(dest);
+    req.setHeader('User-Agent', 'pdf-studio-pro');
+    req.on('response', res => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        file.end(); fs.unlink(dest, () => {});
+        downloadTo(res.headers.location, dest, phase, lastPctRef).then(resolve, reject); return;
+      }
+      if (res.statusCode !== 200) { file.end(); fs.unlink(dest, () => {}); reject(new Error('HTTP ' + res.statusCode + ' for ' + url)); return; }
+      total = parseInt(res.headers['content-length'] || '0', 10);
+      res.on('data', c => {
+        received += c.length; file.write(c);
+        if (total) {
+          const pct = Math.floor(received / total * 100);
+          if (pct !== lastPctRef.pct) {
+            lastPctRef.pct = pct;
+            const msg = { phase, pct };
+            if (mainWindow) mainWindow.webContents.send('engine-progress', msg); else console.log(`  ${phase}: ${pct}%`);
+          }
+        }
+      });
+      res.on('end', () => file.end());
+      file.on('finish', () => resolve());
+      res.on('error', e => { file.end(); reject(e); });
+    });
+    req.on('error', e => { file.end(); reject(e); });
+    req.end();
+  });
+}
+
+async function installEngine(opts = {}) {
+  const ep = enginePaths();
+  if (!fs.existsSync(ep.dir)) fs.mkdirSync(ep.dir, { recursive: true });
+  const ref = { pct: -1 };
+  const prog = (phase, pct) => { const m = { phase, pct }; if (mainWindow) mainWindow.webContents.send('engine-progress', m); else console.log(`  ${phase}: ${pct}%`); };
+
+  // 1. llama-server binary (llama.cpp release, GPU-agnostic builds)
+  if (!fs.existsSync(ep.bin) || opts.forceBinary) {
+    prog('Fetching llama.cpp release info', 0);
+    const apiRes = await new Promise((resolve, reject) => {
+      const req = net.request({ method: 'GET', url: 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30' });
+      req.setHeader('User-Agent', 'pdf-studio-pro');
+      req.on('response', resolve); req.on('error', reject); req.end();
+    });
+    let body = '';
+    apiRes.setEncoding('utf8');
+    for await (const chunk of apiRes) body += chunk;
+    const releases = JSON.parse(body);
+    const pattern = { linux: /bin-ubuntu-x64\.(zip|tar\.gz)$/, win32: /bin-win-vulkan-x64\.zip$/, darwin: /bin-macos-arm64\.zip$/ }[process.platform];
+    let asset = null;
+    for (const rel of releases) { asset = rel.assets.find(a => pattern.test(a.name)); if (asset) break; }
+    if (!asset) throw new Error('No llama.cpp release asset for ' + process.platform);
+    prog('Downloading llama-server', 1);
+    const archive = path.join(ep.dir, asset.name);
+    await downloadTo(asset.browser_download_url, archive, 'Downloading llama-server', ref);
+    prog('Extracting', 50);
+    if (process.platform === 'win32') {
+      await new Promise((res, rej) => execFile('powershell', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${archive}' -DestinationPath '${ep.dir}' -Force`], e => e ? rej(e) : res()));
+    } else if (archive.endsWith('.zip')) {
+      try { await new Promise((res, rej) => execFile('unzip', ['-o', archive, '-d', ep.dir], e => e ? rej(e) : res())); }
+      catch (e) { await new Promise((res, rej) => execFile('python3', ['-c', `import zipfile,sys;zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])`, archive, ep.dir], e => e ? rej(e) : res())); }
+    } else {
+      await new Promise((res, rej) => execFile('tar', ['xzf', archive, '-C', ep.dir], e => e ? rej(e) : res()));
+    }
+    // binary may be nested in the archive's top-level dir
+    if (!fs.existsSync(ep.bin)) {
+      const found = (function find(start) {
+        for (const f of fs.readdirSync(start, { withFileTypes: true })) {
+          const full = path.join(start, f.name);
+          if (f.isDirectory()) { const r = find(full); if (r) return r; }
+          if (f.name === (process.platform === 'win32' ? 'llama-server.exe' : 'llama-server')) return full;
+        }
+        return null;
+      })(ep.dir);
+      if (!found) throw new Error('llama-server not found in archive');
+      const libDir = path.dirname(found);
+      for (const f of fs.readdirSync(libDir, { withFileTypes: true })) {
+        if (f.isFile() && (f.name.startsWith('lib') || f.name.startsWith('ggml') || f.name === (process.platform === 'win32' ? 'llama-server.exe' : 'llama-server') || f.name.endsWith('.dll') || f.name.endsWith('.so') || /\.so\.\d/.test(f.name))) {
+          fs.copyFileSync(path.join(libDir, f.name), path.join(ep.dir, f.name));
+        }
+      }
+      if (process.platform !== 'win32') {
+        fs.chmodSync(ep.bin, 0o755);
+        for (const f of fs.readdirSync(ep.dir)) if (f.endsWith('.so') || /\.so\.\d/.test(f)) try { fs.chmodSync(path.join(ep.dir, f), 0o755); } catch (e) {}
+      }
+    }
+  }
+
+  // 2. model + mmproj from Hugging Face
+  const repo = opts.modelRepo || 'ggml-org/dots.ocr-GGUF';
+  prog('Fetching model listing', 0);
+  const treeRes = await new Promise((resolve, reject) => {
+    const req = net.request({ method: 'GET', url: `https://huggingface.co/api/models/${repo}/tree/main` });
+    req.setHeader('User-Agent', 'pdf-studio-pro');
+    req.on('response', resolve); req.on('error', reject); req.end();
+  });
+  let tbody = '';
+  treeRes.setEncoding('utf8');
+  for await (const chunk of treeRes) tbody += chunk;
+  const files = JSON.parse(tbody).map(f => f.path).filter(p => p.endsWith('.gguf'));
+  const mmproj = files.find(f => /mmproj/i.test(f) && /F16|f16|BF16|bf16/i.test(f)) || files.find(f => /mmproj/i.test(f));
+  const text = files.filter(f => !/mmproj/i.test(f)).sort((a, b) => (b.includes('Q8_0') ? 1 : 0) - (a.includes('Q8_0') ? 1 : 0))[0] || files.filter(f => !/mmproj/i.test(f))[0];
+  if (!mmproj || !text) throw new Error('Could not find model files in ' + repo);
+  await downloadTo(`https://huggingface.co/${repo}/resolve/main/${mmproj}`, ep.mmproj, 'Downloading vision encoder', ref);
+  await downloadTo(`https://huggingface.co/${repo}/resolve/main/${text}`, ep.model, 'Downloading OCR model', ref);
+  prog('Done', 100);
+  return { success: true };
+}
+
+async function startEngine() {
+  if (engineProc) return { success: true, running: true, endpoint: `http://127.0.0.1:${ENGINE_PORT}` };
+  const ep = enginePaths();
+  if (!engineInstalled()) return { success: false, error: 'Engine not installed' };
+  engineProc = require('child_process').spawn(ep.bin, [
+    '-m', ep.model, '--mmproj', ep.mmproj,
+    '--host', '127.0.0.1', '--port', String(ENGINE_PORT),
+    '--no-webui', '-ngl', '999'
+  ], { stdio: 'ignore' });
+  fs.writeFileSync(ep.pid, String(engineProc.pid));
+  // wait for health
+  for (let i = 0; i < 90; i++) {
+    if (engineProc.exitCode !== null) { engineProc = null; return { success: false, error: 'llama-server exited immediately' }; }
+    try {
+      const ok = await new Promise((resolve) => {
+        const req = net.request(`http://127.0.0.1:${ENGINE_PORT}/health`);
+        req.on('response', r => { r.resume(); resolve(r.statusCode === 200); });
+        req.on('error', () => resolve(false));
+        req.end();
+      });
+      if (ok) return { success: true, running: true, endpoint: `http://127.0.0.1:${ENGINE_PORT}` };
+    } catch (e) {}
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  return { success: false, error: 'Server did not become healthy in 90s' };
+}
+
+function stopEngine() {
+  try {
+    const ep = enginePaths();
+    if (engineProc) { engineProc.kill(); engineProc = null; }
+    else if (fs.existsSync(ep.pid)) { try { process.kill(parseInt(fs.readFileSync(ep.pid, 'utf8').trim(), 10)); } catch (e) {} }
+    if (fs.existsSync(ep.pid)) fs.unlinkSync(ep.pid);
+    return { success: true };
+  } catch (e) { return { success: false, error: e.message }; }
+}
+
+async function smartExtract(pngBase64, prompt) {
+  const r = engineProc ? {} : await startEngine();
+  if (r.success === false) throw new Error(r.error);
+  const body = JSON.stringify({
+    messages: [{ role: 'user', content: [
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,' + pngBase64 } },
+      { type: 'text', text: prompt || 'Convert the document to markdown.' }
+    ]}],
+    max_tokens: 4096, temperature: 0
+  });
+  return new Promise((resolve, reject) => {
+    const req = net.request({ method: 'POST', url: `http://127.0.0.1:${ENGINE_PORT}/v1/chat/completions` });
+    req.setHeader('Content-Type', 'application/json');
+    req.on('response', res => {
+      let out = '';
+      res.setEncoding('utf8');
+      res.on('data', c => out += c);
+      res.on('end', () => {
+        try { const j = JSON.parse(out); resolve({ success: true, content: (j.choices?.[0]?.message?.content || '').trim() }); }
+        catch (e) { reject(new Error('Bad engine response: ' + out.slice(0, 200))); }
+      });
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
+ipcMain.handle('engine-status', () => ({ installed: engineInstalled(), running: !!engineProc, endpoint: `http://127.0.0.1:${ENGINE_PORT}` }));
+ipcMain.handle('engine-install', async (event, opts) => { try { return await installEngine(opts || {}); } catch (e) { return { success: false, error: e.message }; } });
+ipcMain.handle('engine-start', async () => { try { return await startEngine(); } catch (e) { return { success: false, error: e.message }; } });
+ipcMain.handle('engine-stop', () => stopEngine());
+ipcMain.handle('smart-extract', async (event, { pngBase64, prompt }) => { try { return await smartExtract(pngBase64, prompt); } catch (e) { return { success: false, error: e.message }; } });
+
+// CLI: cli engine-install | cli engine-start | cli engine-stop | cli engine-extract <image.png>
 
 // Unsaved-changes flag synced from renderer
 ipcMain.on('set-unsaved', (event, flag) => { unsavedFlag = !!flag; });
