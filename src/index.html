@@ -597,6 +597,22 @@
       })();
     }
 
+    // Render scale for Smart Extract: follow the largest image's own resolution (photos, scans)
+    // instead of a fixed 2x. A sharper image raises the scale; a smaller one lowers it only on pages
+    // without text, so a low-res logo never blurs a text page. Every page is capped at 4 MP
+    // (~5k vision tokens at 28 px/token), well inside the engine context.
+    async function extractScale(page) {
+      const vp = page.getViewport({ scale: 1 }), area = vp.width * vp.height;
+      const ops = await page.getOperatorList(), O = pdfjsLib.OPS;
+      let imgPx = 0, hasText = false;
+      ops.fnArray.forEach((fn, k) => {
+        if (fn === O.showText || fn === O.showSpacedText) hasText = true;
+        else if (fn === O.paintImageXObject) imgPx = Math.max(imgPx, ops.argsArray[k][1] * ops.argsArray[k][2]);
+      });
+      const native = Math.sqrt(imgPx / area);
+      const scale = imgPx && (native > 2 || !hasText) ? native : 2;
+      return Math.min(scale, Math.sqrt(4e6 / area));
+    }
     async function runSmartExtract() {
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
       const st = await window.pdfAPI.engineStatus();
@@ -607,14 +623,11 @@
       }
       setLoading(true, 'Smart Extract: preparing engine...');
       try {
-        const S = 2;
         let results = [];
         for (let i = 1; i <= state.pdfDoc.numPages; i++) {
           $('loadingText').textContent = 'Smart Extract: page ' + i + ' of ' + state.pdfDoc.numPages + '...';
           const page = await state.pdfDoc.getPage(i);
-          // Cap very large pages (posters, drawings) at ~9 MP so the image fits the engine's 16k context.
-          const base = page.getViewport({ scale: 1 });
-          const vp = page.getViewport({ scale: Math.min(S, Math.sqrt(9e6 / (base.width * base.height))) });
+          const vp = page.getViewport({ scale: await extractScale(page) });
           const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
           await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
           const r = await window.pdfAPI.smartExtract({ pngBase64: canvas.toDataURL('image/png').split(',')[1] });
