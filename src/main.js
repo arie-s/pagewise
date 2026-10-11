@@ -315,15 +315,15 @@ function createWindow() {
           click: () => mainWindow.webContents.send('menu-add-image')
         },
         {
-          label: 'OCR: Make Searchable...',
+          label: 'Make Searchable — offline OCR (any computer)',
           click: () => mainWindow.webContents.send('menu-ocr')
         },
         {
-          label: 'Smart Extract (Advanced)...',
+          label: 'Smart Extract — AI reading (tables, handwriting)',
           click: () => mainWindow.webContents.send('menu-smart-extract')
         },
         {
-          label: 'Advanced OCR Engine Setup...',
+          label: 'Setup AI Reading Engine...',
           click: () => mainWindow.webContents.send('menu-engine-setup')
         },
         { type: 'separator' },

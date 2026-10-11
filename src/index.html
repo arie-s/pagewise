@@ -491,7 +491,7 @@
 
     async function runOcr() {
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
-      if (!confirm('OCR runs locally on your machine. First use may download language data (~15MB, one time, needs internet). Make this PDF searchable?')) return;
+      if (!confirm('Adds an invisible, searchable text layer to this PDF.\n\nRuns offline on any computer — no GPU or download needed beyond a one-time 15MB language pack.\n\nBest for typed/printed pages. For scans with tables, columns, or handwriting, use "Smart Extract" instead.\n\nProceed?')) return;
       setLoading(true, 'OCR: preparing...');
       try {
         const S = 2;
@@ -534,7 +534,7 @@
     function showEngineSetup() {
       let m = document.createElement('div'); m.className = 'modal-overlay'; m.id = 'engineSetupModal';
       m.innerHTML = '<div class="modal"><div class="modal-header"><span class="modal-title">Advanced OCR Engine</span><button class="modal-close" data-close>&times;</button></div><div class="modal-body">' +
-        '<div style="margin-bottom:12px;">Tier 2 adds VLM-powered extraction (dots.ocr, ~4.5GB download once). Runs entirely on this machine — CPU works too, just slower. Requires internet for the one-time download.</div>' +
+        '<div style="margin-bottom:12px;"><b>Smart Extract</b> uses an AI document model (dots.ocr) instead of the built-in OCR. It reads tables, multi-column layouts, formulas and handwriting in clean markdown.\n\nRuns entirely on this machine. One-time download of ~4.5GB; after that it works offline. On computers without a GPU it uses the CPU (slower — about a minute per page).</div>' +
         '<div class="panel-row"><span class="panel-label" id="engineStatusText">Checking...</span></div>' +
         '<div id="engineProgress" style="display:none;"><div class="form-section-title" id="enginePhase"></div><div style="background:var(--bg-hover);border-radius:4px;height:8px;overflow:hidden;"><div id="engineBar" style="background:var(--primary);height:100%;width:0%;transition:width 0.2s;"></div></div></div>' +
         '<div id="engineError" style="color:var(--danger);font-size:12px;margin-top:8px;"></div>' +
@@ -571,7 +571,11 @@
     async function runSmartExtract() {
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
       const st = await window.pdfAPI.engineStatus();
-      if (!st.installed || !st.running) { showNotification('Advanced engine not running — opening setup', 'warning'); showEngineSetup(); return; }
+      if (!st.installed || !st.running) {
+        showNotification('Smart Extract needs the AI engine (one-time ~4.5GB download)', 'warning');
+        showEngineSetup();
+        return;
+      }
       setLoading(true, 'Smart Extract: preparing engine...');
       try {
         const S = 2;
