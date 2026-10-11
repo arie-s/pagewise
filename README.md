@@ -13,9 +13,10 @@
 
 ## Features
 
+- **Open images as PDFs:** open or drop PNG/JPEG photos, screenshots and scans; each image becomes a page (phone-photo rotation is applied), ready for OCR, Smart Extract and editing. Saving writes a new PDF and never overwrites the images.
 - **Read and search:** thumbnails, zoom, selectable text, find, bookmarks and printing.
 - **Edit and annotate:** text, highlights, underline, strikethrough, pen, shapes, stamps, images and drawn signatures. Annotations are baked into the PDF on save.
-- **Organize pages:** drag to reorder, rotate one or all pages, insert blank pages or pages from another PDF, extract and delete.
+- **Organize pages:** drag to reorder, rotate one or all pages, insert blank pages or pages from another PDF or image, extract and delete.
 - **Document tools:** merge, split by page count or ranges, add page numbers, headers, footers and watermarks; export pages as PNG/JPEG.
 - **Protect documents:** AES-256 password protection and decryption.
 - **Make scans searchable:** local Tesseract OCR adds an invisible text layer at recognized word positions.

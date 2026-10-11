@@ -290,7 +290,7 @@
         <button class="welcome-btn" id="welcomeNewBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>Create New</button>
         <button class="welcome-btn" id="welcomeMergeBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>Merge PDFs</button>
       </div>
-      <div style="color: var(--text-dim); font-size: 12px; margin-top: 10px;">or drop a PDF anywhere in this window</div>
+      <div style="color: var(--text-dim); font-size: 12px; margin-top: 10px;">or drop a PDF or images anywhere in this window</div>
     </div>
 
     <div class="sidebar hidden" id="sidebar">
@@ -679,6 +679,7 @@
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
       const sources = await window.pdfAPI.openMultipleFiles();
       if (!sources || sources.length === 0) return;
+      if (sources.error) { showNotification(sources.error, 'error'); return; }
       setLoading(true, 'Inserting pages...');
       try {
         let data = state.originalData, insertIndex = state.currentPage, pageCount = state.pdfDoc.numPages;
@@ -780,7 +781,7 @@
 
     async function initPdfJs() { pdfjsLib.GlobalWorkerOptions.workerSrc = await window.pdfAPI.getPdfjsWorkerPath(); }
 
-    async function openFile() { const result = await window.pdfAPI.openFile(); if (result) await loadPdf(result); }
+    async function openFile() { const result = await window.pdfAPI.openFile(); if (result && result.error) showNotification(result.error, 'error'); else if (result) await loadPdf(result); }
     async function confirmDocumentReplacement() {
       if (state.saving) { showNotification('Wait until saving finishes', 'info'); return false; }
       if (!state.hasUnsavedChanges) return true;
@@ -1248,7 +1249,7 @@
       setLoading(false);
     }
     async function mergePdfs() {
-      const files = await window.pdfAPI.openMultipleFiles(); if (!files || files.length < 2) { showNotification('Select at least 2 files', 'warning'); return; }
+      const files = await window.pdfAPI.openMultipleFiles(); if (files && files.error) { showNotification(files.error, 'error'); return; } if (!files || files.length < 2) { showNotification('Select at least 2 files', 'warning'); return; }
       setLoading(true, 'Merging...');
       try { const r = await window.pdfAPI.mergePdfs({ files }); if (r.success) { await loadPdf({ data: r.data, path: null, name: 'merged.pdf' }); showNotification('Merged ' + files.length + ' files'); } } catch (e) { showNotification('Error: ' + e.message, 'error'); }
       setLoading(false);
@@ -1690,15 +1691,24 @@
     window.pdfAPI.onMenuGotoPage(showGotoPageDialog);
     window.pdfAPI.onMenuShortcuts(showShortcutsDialog);
 
-    // Drag & drop PDF open
+    // Drag & drop PDF/image open
     document.addEventListener('dragover', e => e.preventDefault());
+    async function openDroppedFiles(files) {
+      const list = Array.from(files || []);
+      if (!list.length) return;
+      const readB64 = f => new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result.split(',')[1]); r.readAsDataURL(f); });
+      if (list.length === 1 && /\.pdf$/i.test(list[0].name)) {
+        await loadPdf({ data: await readB64(list[0]), path: null, name: list[0].name });
+      } else if (list.every(f => /\.(png|jpe?g)$/i.test(f.name))) {
+        const r = await window.pdfAPI.imagesToPdf(await Promise.all(list.map(async f => ({ name: f.name, data: await readB64(f) }))));
+        if (!r.success) { showNotification(r.error, 'error'); return; }
+        await loadPdf({ data: r.data, path: null, name: r.name });
+      } else showNotification('Drop one PDF, or one or more PNG/JPEG images', 'warning');
+    }
     document.addEventListener('drop', async e => {
       e.preventDefault();
       if (e.dataTransfer.types && e.dataTransfer.types.includes('application/x-pdf-page')) return; // page reorder, not file open
-      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-      if (!f || !/\.pdf$/i.test(f.name)) { if (f) showNotification('Only PDF files can be opened', 'warning'); return; }
-      const dataUrl = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(f); });
-      await loadPdf({ data: dataUrl.split(',')[1], path: null, name: f.name });
+      await openDroppedFiles(e.dataTransfer && e.dataTransfer.files);
     });
     window.pdfAPI.onMenuUndo(undo); window.pdfAPI.onMenuRedo(redo); window.pdfAPI.onMenuFind(showSearch);
     window.pdfAPI.onMenuZoomIn(() => setZoom(state.scale + 0.25)); window.pdfAPI.onMenuZoomOut(() => setZoom(state.scale - 0.25)); window.pdfAPI.onMenuZoomReset(() => setZoom(1));
