@@ -438,6 +438,11 @@ function createWindow() {
       label: 'Help',
       submenu: [
         {
+          label: 'User Guide',
+          accelerator: 'F1',
+          click: () => openGuide()
+        },
+        {
           label: 'Keyboard Shortcuts',
           accelerator: 'CmdOrCtrl+/',
           click: () => mainWindow.webContents.send('menu-shortcuts')
@@ -622,6 +627,13 @@ async function runCli(args) {
     console.error('Error:', e.message);
     app.exit(1);
   }
+}
+
+function openGuide() {
+  const g = new BrowserWindow({ width: 920, height: 880, title: 'PDF Studio Pro — User Guide',
+    webPreferences: { contextIsolation: true }, autoHideMenuBar: true });
+  g.loadFile(path.join(__dirname, 'guide.html'));
+  g.once('ready-to-show', () => g.show());
 }
 
 const cliArgs = getCliArgs();

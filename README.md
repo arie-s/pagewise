@@ -1,187 +1,76 @@
-# PDF Studio Pro - Full-Featured PDF Editor
+# PDF Studio Pro
 
-A desktop PDF editor for Windows with visual editing capabilities similar to Adobe Acrobat. View, annotate, and modify PDF documents with an intuitive interface.
+A local-first PDF editor for Windows, macOS and Linux. Your documents never leave your machine — no accounts, no telemetry, no subscriptions, no cloud inference.
 
-![PDF Studio Pro](https://via.placeholder.com/800x500/1e1e1e/ffffff?text=PDF+Studio+Pro)
+Built with Electron + [pdf-lib](https://github.com/cantoo-scribe/pdf-lib) + [pdf.js](https://mozilla.github.io/pdf.js/). Not a web wrapper: a real desktop app with a headless CLI for automation.
 
 ## Features
 
-### View & Navigate
-- **Visual PDF viewing** - See your entire PDF rendered on screen
-- **Page thumbnails** - Quick navigation sidebar with page previews
-- **Zoom controls** - Zoom in/out, fit to width, fit to page
-- **Multi-page support** - Scroll through all pages seamlessly
+**Base tier — works on any computer, fully offline:**
 
-### Annotation Tools
-- **Add Text** - Click anywhere to add text annotations
-- **Highlight** - Draw highlight boxes over text
-- **Freehand Drawing** - Draw with your mouse/pen
-- **Shapes** - Add rectangles and other shapes
-- **Eraser** - Remove any annotation
+- **Viewer** — thumbnails, zoom, text layer with selection & copy
+- **Annotations** — text, highlight, underline, strikethrough, pen, shapes, eraser, stamps, images, draw-in signatures; baked into the file on save
+- **Page tools** — reorder by dragging thumbnails, rotate (single/all), insert from file, extract, delete
+- **Document ops** — merge, split (every N / custom ranges), page numbers (4 formats), header & footer, watermarks
+- **Security** — AES-256 password protection & decryption
+- **Offline OCR** — make scanned PDFs searchable with an invisible text layer (word-position accurate)
+- **Close protection** — unsaved-changes guard, recent files & last document restore
+- **Instant tooltips** everywhere, light/dark theme, drag-and-drop open
 
-### Page Management
-- **Rotate pages** - Rotate clockwise or counter-clockwise
-- **Delete pages** - Remove unwanted pages
-- **Insert blank pages** - Add new pages to your document
+**AI tier — optional, opt-in (`Tools → Setup AI Reading Engine...`):**
 
-### File Operations
-- **Open any PDF** - Load local PDF files
-- **Save** - Save changes to the original file
-- **Save As** - Export to a new file
-- **Keyboard shortcuts** - Ctrl+O, Ctrl+S, etc.
+- Smart Extract: VLM-powered (`dots.ocr`) page → clean **markdown**, with reading order, tables, formulas and handwriting intact
+- Runs 100% locally via **[llama.cpp](https://github.com/ggml-org/llama.cpp)** (`llama-server`, downloaded on demand — no Ollama, no cloud)
+- GPU recommended but not required: CPU-only inference works (slower); Vulkan/CUDA/Metal all supported by the downloaded build
 
-## Installation
+## CLI
 
-### Prerequisites
+All document operations are scriptable (the app binary followed by `cli`):
 
-1. **Install Node.js** (version 18 or newer)
-   - Download from: https://nodejs.org/
-   - Choose the **LTS** version
-   - Run the installer with default settings
-
-2. **Verify installation** - Open Command Prompt or PowerShell:
-   ```
-   node --version
-   npm --version
-   ```
-   Both commands should show version numbers.
-
-### Build Steps
-
-1. **Extract this folder** to your desired location (e.g., `C:\PDFStudio`)
-
-2. **Open a terminal** in the project folder:
-   - Windows 11: Right-click folder → "Open in Terminal"
-   - Windows 10: Hold Shift + Right-click → "Open PowerShell window here"
-   - Or: Open Command Prompt and type `cd C:\path\to\pdf-studio-pro`
-
-3. **Install dependencies:**
-   ```
-   npm install
-   ```
-   This may take a few minutes to download all required packages.
-
-4. **Test the application:**
-   ```
-   npm start
-   ```
-   The application should open. Try loading a PDF!
-
-5. **Build the Windows executable:**
-   ```
-   npm run build
-   ```
-
-   Windows builds use the icon at `build/icon.ico`.
-   
-6. **Find your installer** in the `dist` folder:
-   - `PDF Studio Pro Setup x.x.x.exe` - Windows installer
-
-## Usage Guide
-
-### Opening a PDF
-- Click the folder icon in the toolbar, or
-- Press `Ctrl+O`, or
-- Use File → Open PDF from the menu
-
-### Annotation Tools
-
-| Tool | Shortcut | Description |
-|------|----------|-------------|
-| Select | V | Default mode, no drawing |
-| Text | T | Click to add text |
-| Highlight | H | Drag to create highlight box |
-| Draw | D | Freehand drawing |
-| Rectangle | R | Draw rectangles |
-| Eraser | E | Click annotations to remove |
-
-### Tool Settings
-- **Color picker** - Change annotation color
-- **Size** - Adjust stroke width for drawing
-- **Font size** - Change text annotation size
-
-### Page Operations
-- Use the right panel buttons to:
-  - Rotate current page left/right
-  - Insert a blank page after current
-  - Delete current page
-
-### Saving
-- `Ctrl+S` - Save to current file
-- `Ctrl+Shift+S` - Save As (new file)
-- File → Save / Save As from menu
-
-## Keyboard Shortcuts
-
-| Action | Shortcut |
-|--------|----------|
-| Open file | Ctrl+O |
-| Save | Ctrl+S |
-| Save As | Ctrl+Shift+S |
-| Zoom in | Ctrl++ |
-| Zoom out | Ctrl+- |
-| Select tool | V |
-| Text tool | T |
-| Highlight | H |
-| Draw | D |
-| Rectangle | R |
-| Eraser | E |
-| Fullscreen | F11 |
-
-## Troubleshooting
-
-### "npm is not recognized"
-- Node.js is not installed or not in PATH
-- Reinstall Node.js, making sure to check "Add to PATH"
-- Restart your terminal after installation
-
-### Build fails with errors
-1. Delete the `node_modules` folder
-2. Delete `package-lock.json`
-3. Run `npm install` again
-4. Run `npm run build`
-
-### PDF doesn't load
-- Make sure the file is a valid PDF
-- Try a different PDF file
-- Check if the PDF is password-protected (not supported)
-
-### Application is slow
-- Very large PDFs may take time to render
-- Try reducing zoom level
-- Close other applications to free up memory
-
-### Annotations don't appear in saved file
-- Make sure to click "Save" after making changes
-- Annotations are burned into the PDF when saved
-
-## Technical Details
-
-- **Framework**: Electron 28
-- **PDF Rendering**: PDF.js (Mozilla)
-- **PDF Editing**: pdf-lib
-- **Platform**: Windows 10/11 (64-bit)
-
-## File Structure
-
+```bash
+pdf-studio-pro cli merge out.pdf a.pdf b.pdf c.pdf
+pdf-studio-pro cli split doc.pdf --every 5            # or --ranges 1-3,5,7-10
+pdf-studio-pro cli encrypt doc.pdf --password pw      # AES-256
+pdf-studio-pro cli decrypt doc.pdf --password pw
+pdf-studio-pro cli info doc.pdf                       # JSON metadata
+pdf-studio-pro cli engine-install                     # tier-2: llama-server + dots.ocr (~4.5GB)
+pdf-studio-pro cli engine-start | engine-stop
+pdf-studio-pro cli engine-extract page.png [--prompt "..."]
 ```
-pdf-studio-pro/
-├── src/
-│   ├── main.js        # Electron main process
-│   ├── preload.js     # IPC bridge
-│   └── index.html     # UI and renderer
-├── package.json       # Dependencies and scripts
-└── README.md          # This file
+
+## Keyboard shortcuts
+
+`Ctrl+O/S/F/G/I` · `Ctrl+/` full list · `V H T P E` select/hand/text/pen/eraser · `L A R C` line/arrow/rect/circle
+
+## Build & install
+
+```bash
+npm install
+npx electron-builder --linux AppImage     # or --win, --mac
 ```
+
+Linux install (user level):
+
+```bash
+cp dist/"PDF Studio Pro-1.0.0.AppImage" ~/.local/bin/pdf-studio-pro
+cp build/icon.png ~/.local/share/icons/pdf-studio-pro.png
+# desktop entry: ~/.local/share/applications/pdf-studio-pro.desktop (MimeType=application/pdf)
+```
+
+The in-app user guide lives in `src/guide.html` — it is bundled with every build (`Help → User Guide`, F1).
+
+## Architecture notes
+
+| Layer | Choice |
+|---|---|
+| UI | Electron renderer, plain JS, themable via CSS variables |
+| Document ops | [pdf-lib fork w/ AES-256](https://www.npmjs.com/package/@cantoo/pdf-lib) |
+| Rendering | pdf.js (pdfjs-dist) |
+| Base OCR | tesseract.js (main process, WASM) |
+| AI OCR | llama-server (llama.cpp) child process, OpenAI-compatible HTTP, dots.ocr GGUF |
+| Settings | `settings.json` in Electron userData (recents, bounds, theme, engine state) |
+| CLI | same main-process handlers, headless |
 
 ## License
 
-MIT License - Free to use, modify, and distribute.
-
-## Support
-
-For issues or feature requests, please check common solutions above first.
-
----
-
-**PDF Studio Pro** - Edit PDFs like a pro! 📄✨
+MIT
