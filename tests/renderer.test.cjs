@@ -256,7 +256,7 @@ function vmRunQuitCallback(callbackSource, context) {
   vm.runInNewContext(`window.pdfAPI.onQuitSave(${callbackSource});`, context);
 }
 
-test('extractScale follows image resolution, never blurs text pages, and caps every page at 4 MP', async () => {
+test('extractScale renders small images at their own size, never above 2x, never blurs text pages, and caps at 4 MP', async () => {
   const OPS = { showText: 44, showSpacedText: 45, paintImageXObject: 85 };
   const { functions } = loadRendererFunctions(['extractScale'], { extra: { pdfjsLib: { OPS } } });
   const page = (w, h, ops) => ({
@@ -270,12 +270,12 @@ test('extractScale follows image resolution, never blurs text pages, and caps ev
   assert.equal(await functions.extractScale(page(612, 792, [text])), 2);
   // small screenshot is rendered at its own size, not upscaled
   near(await px(792, 594, [img(800, 600)]), 800 * 600);
-  // 12 MP phone photo is capped at 4 MP
-  near(await px(792, 594, [img(4032, 3024)]), 4e6);
+  // 12 MP phone photo stays at 2x (higher renders read no better and are much slower)
+  assert.equal(await functions.extractScale(page(792, 594, [img(4032, 3024)])), 2);
   // low-res logo on a text page does not lower the scale
   assert.equal(await functions.extractScale(page(612, 792, [text, img(100, 100)])), 2);
-  // 300 dpi scan with an invisible OCR text layer still uses the scan's resolution, capped
-  near(await px(612, 792, [img(2550, 3300), text]), 4e6);
+  // low-res scan with an invisible OCR text layer is not lowered (text present)
+  assert.equal(await functions.extractScale(page(612, 792, [img(600, 800), text])), 2);
   // a huge vector page is scaled down to the cap instead of overflowing the context
   near(await px(2000, 3000, [text]), 4e6);
 });
