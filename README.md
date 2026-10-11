@@ -35,7 +35,7 @@ Text replacement covers the original text with a white rectangle and adds new te
 
 | Platform | File |
 |---|---|
-| Windows x64 | `Pagewise Setup <version>.exe` (installer) or `Pagewise <version>.exe` (portable) |
+| Windows x64 | `Pagewise.Setup.<version>.exe` (installer) or `Pagewise.<version>.exe` (portable) |
 | macOS Apple Silicon | `Pagewise-<version>-arm64.dmg` |
 | macOS Intel | `Pagewise-<version>.dmg` |
 | Linux x64 | `Pagewise-<version>.AppImage` or `pagewise_<version>_amd64.deb` |
