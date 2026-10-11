@@ -72,3 +72,93 @@ test('clearing the engine binary keeps downloaded models', t => {
   context.clearEngineBinary(context.enginePaths());
   assert.deepEqual(fs.readdirSync(dir).sort(), ['mmproj.gguf', 'model.gguf']);
 });
+
+// Fake electron net: the HF tree listing returns `tree`, /health returns `health`, model downloads fail with 404.
+function fakeNet(urls, { tree = [], health = 0 } = {}) {
+  return {
+    request(opts) {
+      const url = typeof opts === 'string' ? opts : opts.url;
+      urls.push(url);
+      let onResponse;
+      const req = {
+        setHeader() {},
+        on(ev, fn) { if (ev === 'response') onResponse = fn; return req; },
+        end() {
+          setImmediate(() => {
+            if (!onResponse) return;
+            const body = url.includes('/tree/main') ? JSON.stringify(tree) : '';
+            const res = { statusCode: url.includes('/health') ? health : url.includes('/tree/main') ? 200 : 404, headers: {}, setEncoding() {}, resume() {}, on() {}, async *[Symbol.asyncIterator]() { yield body; } };
+            onResponse(res);
+          });
+        }
+      };
+      return req;
+    }
+  };
+}
+
+function withEngine(t, netOpts, { device = true, models = true } = {}) {
+  const urls = [];
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'pagewise-engine-'));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const app = { whenReady: () => ({ then: () => {} }), on: () => {}, quit: () => {}, exit: () => {}, getPath: () => userData };
+  const loaded = loadMainHandlers({ electron: { app, net: fakeNet(urls, netOpts) } });
+  const dir = path.join(userData, 'ocr-engine');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'llama-server'), 'x');
+  if (device) fs.writeFileSync(path.join(dir, 'device.txt'), 'CPU');
+  if (models) {
+    fs.writeFileSync(path.join(dir, 'dots-ocr-mmproj.gguf'), Buffer.alloc(10));
+    fs.writeFileSync(path.join(dir, 'dots-ocr-text-Q8_0.gguf'), Buffer.alloc(20));
+  }
+  return { urls, dir, ...loaded };
+}
+
+const TREE = [{ path: 'mmproj-F16.gguf', lfs: { size: 10 }, size: 134 }, { path: 'dots.ocr-Q8_0.gguf', lfs: { size: 20 } }, { path: 'README.md', size: 5 }];
+
+test('engine-install skips model downloads when files already match the listed sizes', async t => {
+  const { urls, handlers } = withEngine(t, { tree: TREE });
+  const result = await handlers.get('engine-install')({}, {});
+  assert.equal(result.success, true, result.error);
+  assert.deepEqual(urls.filter(u => u.includes('/resolve/')), []);
+});
+
+test('engine-install replaces an older binary that has no device.txt and keeps the models', async t => {
+  const { urls, dir, handlers } = withEngine(t, { tree: TREE }, { device: false });
+  const result = await handlers.get('engine-install')({}, {});
+  assert.equal(result.success, false); // the fake network has no llama.cpp release to download
+  assert.ok(urls.some(u => u.includes('api.github.com/repos/ggml-org/llama.cpp/releases')), 'binary step ran');
+  assert.equal(fs.existsSync(path.join(dir, 'llama-server')), false, 'old binary cleared');
+  assert.equal(fs.existsSync(path.join(dir, 'dots-ocr-text-Q8_0.gguf')), true, 'models kept');
+});
+
+test('engine-install re-downloads a model whose size differs from the listing', async t => {
+  const { urls, dir, handlers } = withEngine(t, { tree: TREE });
+  fs.writeFileSync(path.join(dir, 'dots-ocr-text-Q8_0.gguf'), Buffer.alloc(7));
+  const result = await handlers.get('engine-install')({}, {});
+  assert.equal(result.success, false);
+  assert.match(result.error, /HTTP 404/);
+  const resolved = urls.filter(u => u.includes('/resolve/'));
+  assert.equal(resolved.length, 1);
+  assert.ok(resolved[0].endsWith('/dots.ocr-Q8_0.gguf'));
+});
+
+test('engine-status needs device.txt, so an older CPU-only install counts as not installed', async t => {
+  const old = withEngine(t, {}, { device: false });
+  assert.equal((await old.handlers.get('engine-status')()).installed, false);
+  const current = withEngine(t, {});
+  assert.equal((await current.handlers.get('engine-status')()).installed, true);
+});
+
+test('engine-start reuses a healthy server instead of spawning another', async t => {
+  const cp = require('node:child_process');
+  const realSpawn = cp.spawn;
+  let spawned = 0;
+  cp.spawn = () => { spawned++; throw new Error('spawn should not be called'); };
+  t.after(() => { cp.spawn = realSpawn; });
+  const { handlers } = withEngine(t, { health: 200 });
+  const result = await handlers.get('engine-start')();
+  assert.equal(result.success, true, result.error);
+  assert.equal(result.running, true);
+  assert.equal(spawned, 0);
+});
