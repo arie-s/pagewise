@@ -279,3 +279,20 @@ test('extractScale renders small images at their own size, never above 2x, never
   // a huge vector page is scaled down to the cap instead of overflowing the context
   near(await px(2000, 3000, [text]), 4e6);
 });
+
+test('openDroppedFiles converts dropped images and loads them without a path; mixed drops only warn', async () => {
+  class FileReaderStub { readAsDataURL(f) { this.result = 'data:;base64,' + f.b64; setTimeout_(() => this.onload()); } }
+  const setTimeout_ = fn => Promise.resolve().then(fn);
+  const calls = { convert: null, loaded: [], notes: [] };
+  const mk = (name, b64) => ({ name, b64 });
+  const { functions } = loadRendererFunctions(['openDroppedFiles'], {
+    api: { imagesToPdf: async files => { calls.convert = files; return { success: true, data: 'UERG', name: 'a.pdf' }; } },
+    extra: { FileReader: FileReaderStub, loadPdf: async r => { calls.loaded.push(r); }, showNotification: (m, t) => calls.notes.push([m, t]) }
+  });
+  await functions.openDroppedFiles([mk('a.png', 'QQ=='), mk('b.jpg', 'Qg==')]);
+  assert.equal(JSON.stringify(calls.convert), JSON.stringify([{ name: 'a.png', data: 'QQ==' }, { name: 'b.jpg', data: 'Qg==' }]));
+  assert.equal(JSON.stringify(calls.loaded), JSON.stringify([{ data: 'UERG', path: null, name: 'a.pdf' }]));
+  await functions.openDroppedFiles([mk('a.pdf', 'QQ=='), mk('b.png', 'Qg==')]);
+  assert.equal(calls.loaded.length, 1);
+  assert.equal(JSON.stringify(calls.notes.at(-1)), JSON.stringify(['Drop one PDF, or one or more PNG/JPEG images', 'warning']));
+});

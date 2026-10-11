@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   // File operations
   openFile: () => ipcRenderer.invoke('open-file'),
   openSpecificFile: (path) => ipcRenderer.invoke('open-specific-file', path),
+  imagesToPdf: (files) => ipcRenderer.invoke('images-to-pdf', files),
   openMultipleFiles: () => ipcRenderer.invoke('open-multiple-files'),
   saveFile: (options) => ipcRenderer.invoke('save-file', options),
   saveFileAs: (options) => ipcRenderer.invoke('save-file-as', options),
