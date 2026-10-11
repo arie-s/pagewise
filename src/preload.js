@@ -1,0 +1,115 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('pdfAPI', {
+  // File operations
+  openFile: () => ipcRenderer.invoke('open-file'),
+  openSpecificFile: (path) => ipcRenderer.invoke('open-specific-file', path),
+  openMultipleFiles: () => ipcRenderer.invoke('open-multiple-files'),
+  saveFile: (options) => ipcRenderer.invoke('save-file', options),
+  saveFileAs: (options) => ipcRenderer.invoke('save-file-as', options),
+  saveMultipleFiles: (options) => ipcRenderer.invoke('save-multiple-files', options),
+
+  // PDF.js
+  getPdfjsWorkerPath: () => ipcRenderer.invoke('get-pdfjs-worker-path'),
+  getInitialFile: () => ipcRenderer.invoke('get-initial-file'),
+
+  // PDF modifications
+  applyModifications: (options) => ipcRenderer.invoke('apply-modifications', options),
+  mergePdfs: (options) => ipcRenderer.invoke('merge-pdfs', options),
+  splitPdf: (options) => ipcRenderer.invoke('split-pdf', options),
+  extractPages: (options) => ipcRenderer.invoke('extract-pages', options),
+  insertPagesFromFile: (options) => ipcRenderer.invoke('insert-pages-from-file', options),
+
+  // Document operations
+  createBlankPdf: (options) => ipcRenderer.invoke('create-blank-pdf', options),
+  getDocumentInfo: (options) => ipcRenderer.invoke('get-document-info', options),
+  setDocumentInfo: (options) => ipcRenderer.invoke('set-document-info', options),
+
+  // Security
+  encryptPdf: (options) => ipcRenderer.invoke('encrypt-pdf', options),
+  decryptPdf: (options) => ipcRenderer.invoke('decrypt-pdf', options),
+
+  // Export operations
+  selectExportFolder: () => ipcRenderer.invoke('select-export-folder'),
+  saveImage: (options) => ipcRenderer.invoke('save-image', options),
+  selectImage: () => ipcRenderer.invoke('select-image'),
+
+  // System operations
+  printDocument: () => ipcRenderer.invoke('print-document'),
+  copyToClipboard: (text) => ipcRenderer.invoke('copy-to-clipboard', text),
+  showMessageBox: (options) => ipcRenderer.invoke('show-message-box', options),
+  showError: (options) => ipcRenderer.invoke('show-error', options),
+
+  // Menu event listeners - File
+  onMenuNew: (callback) => ipcRenderer.on('menu-new', callback),
+  onMenuOpen: (callback) => ipcRenderer.on('menu-open', callback),
+  onMenuOpenRecent: (callback) => ipcRenderer.on('menu-open-recent', (event, path) => callback(path)),
+  onMenuSave: (callback) => ipcRenderer.on('menu-save', callback),
+  onMenuSaveAs: (callback) => ipcRenderer.on('menu-save-as', callback),
+  onMenuMerge: (callback) => ipcRenderer.on('menu-merge', callback),
+  onMenuSplit: (callback) => ipcRenderer.on('menu-split', callback),
+  onMenuExportImages: (callback) => ipcRenderer.on('menu-export-images', (event, format) => callback(format)),
+  onMenuExportPages: (callback) => ipcRenderer.on('menu-export-pages', callback),
+  onMenuProperties: (callback) => ipcRenderer.on('menu-properties', callback),
+  onMenuPrint: (callback) => ipcRenderer.on('menu-print', callback),
+
+  // Menu event listeners - Edit
+  onMenuUndo: (callback) => ipcRenderer.on('menu-undo', callback),
+  onMenuRedo: (callback) => ipcRenderer.on('menu-redo', callback),
+  onMenuFind: (callback) => ipcRenderer.on('menu-find', callback),
+  onMenuReplace: (callback) => ipcRenderer.on('menu-replace', callback),
+  onMenuPreferences: (callback) => ipcRenderer.on('menu-preferences', callback),
+
+  // Menu event listeners - View
+  onMenuZoomIn: (callback) => ipcRenderer.on('menu-zoom-in', callback),
+  onMenuZoomOut: (callback) => ipcRenderer.on('menu-zoom-out', callback),
+  onMenuZoomReset: (callback) => ipcRenderer.on('menu-zoom-reset', callback),
+  onMenuFitWidth: (callback) => ipcRenderer.on('menu-fit-width', callback),
+  onMenuFitPage: (callback) => ipcRenderer.on('menu-fit-page', callback),
+  onMenuViewMode: (callback) => ipcRenderer.on('menu-view-mode', (event, mode) => callback(mode)),
+  onMenuToggleBookmarks: (callback) => ipcRenderer.on('menu-toggle-bookmarks', callback),
+  onMenuToggleThumbnails: (callback) => ipcRenderer.on('menu-toggle-thumbnails', callback),
+
+  // Menu event listeners - Tools
+  onMenuTool: (callback) => ipcRenderer.on('menu-tool', (event, tool) => callback(tool)),
+  onMenuStamp: (callback) => ipcRenderer.on('menu-stamp', (event, stamp) => callback(stamp)),
+  onMenuAddImage: (callback) => ipcRenderer.on('menu-add-image', callback),
+  onMenuApplyRedactions: (callback) => ipcRenderer.on('menu-apply-redactions', callback),
+  onMenuFormTool: (callback) => ipcRenderer.on('menu-form-tool', (event, tool) => callback(tool)),
+  onMenuFillSignMode: (callback) => ipcRenderer.on('menu-fill-sign-mode', callback),
+  onMenuResetForm: (callback) => ipcRenderer.on('menu-reset-form', callback),
+
+  // Menu event listeners - Page
+  onMenuRotate: (callback) => ipcRenderer.on('menu-rotate', (event, angle) => callback(angle)),
+  onMenuDeletePage: (callback) => ipcRenderer.on('menu-delete-page', callback),
+  onMenuInsertPage: (callback) => ipcRenderer.on('menu-insert-page', callback),
+  onMenuInsertFromFile: (callback) => ipcRenderer.on('menu-insert-from-file', callback),
+  onMenuExtractPages: (callback) => ipcRenderer.on('menu-extract-pages', callback),
+  onMenuReplacePage: (callback) => ipcRenderer.on('menu-replace-page', callback),
+  onMenuCropPage: (callback) => ipcRenderer.on('menu-crop-page', callback),
+  onMenuResizePage: (callback) => ipcRenderer.on('menu-resize-page', callback),
+  onMenuAddWatermark: (callback) => ipcRenderer.on('menu-add-watermark', callback),
+  onMenuAddHeaderFooter: (callback) => ipcRenderer.on('menu-add-header-footer', callback),
+  onMenuAddPageNumbers: (callback) => ipcRenderer.on('menu-add-page-numbers', callback),
+  onMenuAddBackground: (callback) => ipcRenderer.on('menu-add-background', callback),
+  onMenuGotoPage: (callback) => ipcRenderer.on('menu-goto-page', callback),
+  onMenuGoto: (callback) => ipcRenderer.on('menu-goto', (event, direction) => callback(direction)),
+
+  // Menu event listeners - Security
+  onMenuSetPassword: (callback) => ipcRenderer.on('menu-set-password', callback),
+  onMenuRemovePassword: (callback) => ipcRenderer.on('menu-remove-password', callback),
+  onMenuSignDocument: (callback) => ipcRenderer.on('menu-sign-document', callback),
+  onMenuValidateSignatures: (callback) => ipcRenderer.on('menu-validate-signatures', callback),
+  onMenuManageCertificates: (callback) => ipcRenderer.on('menu-manage-certificates', callback),
+  onMenuSetPermissions: (callback) => ipcRenderer.on('menu-set-permissions', callback),
+
+  // Menu event listeners - Bookmarks
+  onMenuAddBookmark: (callback) => ipcRenderer.on('menu-add-bookmark', callback),
+  onMenuEditBookmark: (callback) => ipcRenderer.on('menu-edit-bookmark', callback),
+  onMenuDeleteBookmark: (callback) => ipcRenderer.on('menu-delete-bookmark', callback),
+  onMenuGenerateBookmarks: (callback) => ipcRenderer.on('menu-generate-bookmarks', callback),
+
+  // Menu event listeners - Help
+  onMenuShortcuts: (callback) => ipcRenderer.on('menu-shortcuts', callback),
+  onMenuCheckUpdates: (callback) => ipcRenderer.on('menu-check-updates', callback)
+});

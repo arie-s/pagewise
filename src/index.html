@@ -1,0 +1,1307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:;">
+  <title>PDF Studio Pro</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --primary: #2563eb; --primary-dark: #1d4ed8; --bg: #f9f7f2; --bg-light: #fffefb;
+      --bg-lighter: #f0ede5; --bg-hover: #e8e4d9; --text: #2b2925; --text-dim: #8a857b;
+      --border: #ddd8cc; --danger: #d43c3c; --success: #16a34a; --warning: #d97706;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: var(--text); height: 100vh;
+      display: flex; flex-direction: column; overflow: hidden; user-select: none; font-size: 13px;
+    }
+    .toolbar {
+      display: flex; align-items: center; padding: 6px 12px; background: var(--bg-light);
+      border-bottom: 1px solid var(--border); gap: 4px; flex-shrink: 0; min-height: 48px;
+    }
+    .toolbar-group { display: flex; align-items: center; gap: 2px; padding: 0 8px; border-right: 1px solid var(--border); }
+    .toolbar-group:last-child { border-right: none; }
+    .tool-btn {
+      display: flex; align-items: center; justify-content: center; width: 32px; height: 32px;
+      background: transparent; border: 1px solid transparent; border-radius: 4px;
+      cursor: pointer; color: var(--text); font-size: 14px; transition: all 0.1s;
+    }
+    .tool-btn:hover { background: var(--bg-hover); border-color: var(--border); }
+    .tool-btn.active { background: var(--primary); color: white; }
+    .tool-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+    .tool-btn svg { width: 18px; height: 18px; }
+    .toolbar-separator { width: 1px; height: 24px; background: var(--border); margin: 0 4px; }
+    .toolbar-label { font-size: 11px; color: var(--text-dim); margin-right: 4px; }
+    .toolbar-input, .toolbar-select {
+      padding: 4px 8px; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text); font-size: 12px;
+    }
+    .toolbar-input { width: 50px; text-align: center; }
+    .color-picker { width: 28px; height: 28px; padding: 0; border: 2px solid var(--border); border-radius: 4px; cursor: pointer; }
+    .color-picker::-webkit-color-swatch-wrapper { padding: 2px; }
+    .color-picker::-webkit-color-swatch { border: none; border-radius: 2px; }
+    .zoom-display { min-width: 50px; text-align: center; font-size: 12px; font-weight: 500; }
+    .main-container { display: flex; flex: 1; overflow: hidden; }
+    .sidebar {
+      width: 200px; background: var(--bg-light); border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; flex-shrink: 0;
+    }
+    .sidebar-header {
+      padding: 10px 12px; font-size: 11px; font-weight: 600; color: var(--text-dim);
+      text-transform: uppercase; border-bottom: 1px solid var(--border);
+    }
+    .sidebar-tabs { display: flex; border-bottom: 1px solid var(--border); }
+    .sidebar-tab {
+      flex: 1; padding: 8px; background: transparent; border: none; color: var(--text-dim);
+      cursor: pointer; font-size: 11px; text-transform: uppercase;
+    }
+    .sidebar-tab:hover { color: var(--text); background: var(--bg-hover); }
+    .sidebar-tab.active { color: var(--primary); border-bottom: 2px solid var(--primary); }
+    .sidebar-content { flex: 1; overflow-y: auto; }
+    .thumbnail-container { padding: 8px; }
+    .thumbnail {
+      position: relative; margin-bottom: 8px; cursor: pointer; border-radius: 4px;
+      overflow: hidden; border: 2px solid transparent; background: white;
+    }
+    .thumbnail:hover { border-color: var(--primary); }
+    .thumbnail.active { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.3); }
+    .thumbnail canvas { width: 100%; height: auto; display: block; }
+    .thumbnail-number {
+      position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.75); color: white; font-size: 10px; padding: 2px 8px; border-radius: 10px;
+    }
+    .bookmarks-container { padding: 8px; }
+    .bookmark-item { padding: 8px 12px; cursor: pointer; border-radius: 4px; font-size: 12px; }
+    .bookmark-item:hover { background: var(--bg-hover); }
+    .viewer-container { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: #eae7df; }
+    .viewer-scroll { flex: 1; overflow: auto; display: flex; flex-direction: column; align-items: center; padding: 20px; gap: 20px; }
+    .page-container { position: relative; background: white; box-shadow: 0 2px 12px rgba(60, 55, 45, 0.18); }
+    .page-canvas { display: block; }
+    .annotation-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+    .annotation-layer.active { pointer-events: auto; cursor: crosshair; }
+    .annotation-layer canvas { position: absolute; top: 0; left: 0; }
+    .text-layer { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden; opacity: 0.2; line-height: 1.0; }
+    .text-layer > span { color: transparent; position: absolute; white-space: pre; cursor: text; }
+    .text-layer > span::selection { background: rgba(0, 0, 255, 0.3); }
+    .text-layer.selecting { opacity: 1; }
+    .text-layer > span.edited { background: rgba(255,255,200,0.7) !important; color: #000 !important; border-radius: 2px; }
+    .text-edit-overlay { position: absolute; background: white; border: 2px solid var(--primary); padding: 2px; z-index: 200; min-width: 50px; }
+    .text-edit-overlay textarea { width: 100%; min-height: 20px; border: none; outline: none; resize: both; font-family: inherit; padding: 2px; background: white; color: black; }
+    .properties-panel {
+      width: 260px; background: var(--bg-light); border-left: 1px solid var(--border);
+      display: flex; flex-direction: column; flex-shrink: 0;
+    }
+    .panel-header {
+      padding: 10px 12px; font-size: 11px; font-weight: 600; color: var(--text-dim);
+      text-transform: uppercase; border-bottom: 1px solid var(--border);
+    }
+    .panel-content { padding: 12px; overflow-y: auto; flex: 1; }
+    .panel-section { margin-bottom: 16px; }
+    .panel-section-title { font-size: 10px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; margin-bottom: 8px; }
+    .panel-row { display: flex; align-items: center; margin-bottom: 8px; gap: 8px; }
+    .panel-label { flex: 1; font-size: 12px; }
+    .panel-value { font-size: 12px; color: var(--text-dim); }
+    .panel-btn {
+      width: 100%; padding: 8px 12px; background: var(--bg-lighter); color: var(--text);
+      border: 1px solid var(--border); border-radius: 4px; font-size: 12px; cursor: pointer; margin-bottom: 6px;
+    }
+    .panel-btn:hover { background: var(--bg-hover); }
+    .panel-btn.primary { background: var(--primary); border-color: var(--primary-dark); color: white; }
+    .panel-btn.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+    .panel-btn.danger:hover { background: var(--danger); color: white; }
+    .panel-btn-group { display: flex; gap: 6px; }
+    .panel-btn-group .panel-btn { flex: 1; margin-bottom: 0; }
+    .status-bar {
+      display: flex; align-items: center; padding: 4px 12px; background: var(--bg-light);
+      border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim); gap: 16px;
+    }
+    .status-separator { width: 1px; height: 12px; background: var(--border); }
+    .welcome-screen {
+      flex: 1; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; background: var(--bg); padding: 40px;
+    }
+    .welcome-logo { font-size: 64px; margin-bottom: 20px; opacity: 0.8; }
+    .welcome-title { font-size: 28px; font-weight: 600; margin-bottom: 8px; }
+    .welcome-subtitle { font-size: 14px; color: var(--text-dim); margin-bottom: 32px; }
+    .welcome-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    .welcome-btn {
+      display: flex; align-items: center; gap: 8px; padding: 12px 24px;
+      background: var(--bg-lighter); color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; font-size: 14px; cursor: pointer;
+    }
+    .welcome-btn:hover { background: var(--bg-hover); transform: translateY(-1px); }
+    .welcome-btn.primary { background: var(--primary); border-color: var(--primary-dark); color: white; }
+    .welcome-btn svg { width: 20px; height: 20px; }
+    .modal-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(43, 41, 37, 0.45);
+      display: flex; align-items: center; justify-content: center; z-index: 1000;
+    }
+    .modal {
+      background: var(--bg-light); border-radius: 8px; min-width: 400px; max-width: 600px;
+      box-shadow: 0 20px 50px rgba(43, 41, 37, 0.35); border: 1px solid var(--border);
+    }
+    .modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+    .modal-title { font-size: 16px; font-weight: 600; }
+    .modal-close { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 20px; }
+    .modal-body { padding: 20px; }
+    .modal-footer { padding: 16px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; }
+    .modal-btn { padding: 8px 16px; border-radius: 4px; font-size: 13px; cursor: pointer; border: 1px solid var(--border); background: var(--bg-lighter); color: var(--text); }
+    .modal-btn.primary { background: var(--primary); border-color: var(--primary-dark); color: white; }
+    .form-group { margin-bottom: 16px; }
+    .form-label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+    .form-input, .form-select { width: 100%; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 13px; }
+    .form-row { display: flex; gap: 12px; }
+    .form-row .form-group { flex: 1; }
+    .text-input-overlay { position: absolute; background: white; border: 2px solid var(--primary); padding: 2px; min-width: 100px; z-index: 100; }
+    .text-input-overlay textarea { width: 100%; min-height: 24px; border: none; outline: none; resize: both; font-family: inherit; padding: 4px; }
+    .search-bar {
+      position: fixed; top: 60px; right: 280px; background: var(--bg-light);
+      border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px;
+      display: flex; align-items: center; gap: 8px; z-index: 500;
+    }
+    .search-input { width: 200px; padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 13px; }
+    .search-results { font-size: 12px; color: var(--text-dim); min-width: 60px; }
+    .search-btn { padding: 4px 8px; background: var(--bg-lighter); border: 1px solid var(--border); border-radius: 4px; color: var(--text); cursor: pointer; font-size: 12px; }
+    .notification {
+      position: fixed; top: 60px; right: 20px; padding: 12px 20px; background: var(--bg-lighter);
+      border-left: 3px solid var(--success); border-radius: 4px; font-size: 13px; z-index: 1000;
+      animation: slideIn 0.3s ease; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .notification.error { border-left-color: var(--danger); }
+    .notification.warning { border-left-color: var(--warning); }
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    .loading-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 2000; gap: 16px;
+    }
+    .loading-spinner { width: 48px; height: 48px; border: 3px solid var(--bg-lighter); border-top-color: var(--primary); border-radius: 50%; animation: spin 1s linear infinite; }
+    .loading-text { color: var(--text); font-size: 14px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .signature-modal { width: 500px; }
+    .signature-tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+    .signature-tab { flex: 1; padding: 10px; background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 13px; }
+    .signature-tab:hover { color: var(--text); }
+    .signature-tab.active { color: var(--primary); border-bottom: 2px solid var(--primary); }
+    .signature-pad { width: 100%; height: 150px; border: 1px solid var(--border); border-radius: 4px; background: white; cursor: crosshair; }
+    .signature-preview { width: 100%; height: 80px; border: 1px dashed var(--border); border-radius: 4px; display: flex; align-items: center; justify-content: center; margin-top: 12px; background: #fafafa; }
+    .signature-preview img { max-height: 70px; max-width: 100%; }
+    .signature-type-input { width: 100%; padding: 12px; font-size: 24px; font-family: 'Brush Script MT', cursive; border: 1px solid var(--border); border-radius: 4px; text-align: center; }
+    .signature-actions { display: flex; gap: 8px; margin-top: 12px; }
+    .signature-actions button { flex: 1; }
+    .context-menu {
+      position: fixed; background: var(--bg-light); border: 1px solid var(--border);
+      border-radius: 6px; padding: 4px 0; min-width: 160px; z-index: 1000;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .context-menu-item {
+      padding: 8px 16px; cursor: pointer; font-size: 13px; display: flex;
+      align-items: center; gap: 10px; color: var(--text);
+    }
+    .context-menu-item:hover { background: var(--bg-hover); }
+    .context-menu-item.disabled { color: var(--text-dim); cursor: default; }
+    .context-menu-item.disabled:hover { background: transparent; }
+    .context-menu-separator { height: 1px; background: var(--border); margin: 4px 0; }
+    .context-menu-item svg { width: 16px; height: 16px; opacity: 0.7; }
+    .hidden { display: none !important; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--bg-lighter); border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <div class="toolbar" id="toolbar">
+    <div class="toolbar-group">
+      <button class="tool-btn" id="newBtn" title="New"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></button>
+      <button class="tool-btn" id="openBtn" title="Open"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg></button>
+      <button class="tool-btn" id="saveBtn" title="Save" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17,21 17,13 7,13 7,21"/><polyline points="7,3 7,8 15,8"/></svg></button>
+      <button class="tool-btn" id="printBtn" title="Print" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6,9 6,2 18,2 18,9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg></button>
+    </div>
+    <div class="toolbar-group">
+      <button class="tool-btn" id="undoBtn" title="Undo" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13"/></svg></button>
+      <button class="tool-btn" id="redoBtn" title="Redo" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 019-9 9 9 0 016 2.3l3 2.7"/></svg></button>
+    </div>
+    <div class="toolbar-group">
+      <button class="tool-btn" id="zoomOutBtn" title="Zoom Out" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg></button>
+      <span class="zoom-display" id="zoomDisplay">100%</span>
+      <button class="tool-btn" id="zoomInBtn" title="Zoom In" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg></button>
+    </div>
+    <div class="toolbar-group">
+      <button class="tool-btn active" data-tool="select" title="Select (V)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/></svg></button>
+      <button class="tool-btn" data-tool="hand" title="Hand (H)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 11V6a2 2 0 00-4 0v5M14 10V4a2 2 0 00-4 0v6M10 10V6a2 2 0 00-4 0v8a8 8 0 0016 0v-4a2 2 0 00-4 0"/></svg></button>
+      <div class="toolbar-separator"></div>
+      <button class="tool-btn" data-tool="text" title="Text (T)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4,7 4,4 20,4 20,7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg></button>
+      <button class="tool-btn" data-tool="highlight" title="Highlight"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="10" width="18" height="8" rx="1" fill="#fef08a" opacity="0.7"/></svg></button>
+      <button class="tool-btn" data-tool="underline" title="Underline"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v7a6 6 0 0012 0V3"/><line x1="4" y1="21" x2="20" y2="21"/></svg></button>
+      <button class="tool-btn" data-tool="strikethrough" title="Strikethrough"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="12" x2="20" y2="12"/></svg></button>
+      <div class="toolbar-separator"></div>
+      <button class="tool-btn" data-tool="draw" title="Pen (P)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg></button>
+      <button class="tool-btn" data-tool="eraser" title="Eraser (E)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 20H7L3 16a2 2 0 010-2.8L13.4 3a2 2 0 012.8 0l6 6a2 2 0 010 2.8L12 22"/></svg></button>
+      <div class="toolbar-separator"></div>
+      <button class="tool-btn" data-tool="line" title="Line (L)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="19" x2="19" y2="5"/></svg></button>
+      <button class="tool-btn" data-tool="arrow" title="Arrow (A)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="19" x2="19" y2="5"/><polyline points="10,5 19,5 19,14"/></svg></button>
+      <button class="tool-btn" data-tool="rectangle" title="Rectangle (R)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg></button>
+      <button class="tool-btn" data-tool="circle" title="Circle (C)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg></button>
+      <div class="toolbar-separator"></div>
+      <button class="tool-btn" data-tool="redact" title="Redact"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="8" width="18" height="8" fill="#000"/></svg></button>
+      <button class="tool-btn" data-tool="stamp" title="Stamp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 21h14"/><path d="M12 17V9"/><path d="M8 9a4 4 0 018 0"/><rect x="6" y="4" width="12" height="3" rx="1"/></svg></button>
+      <button class="tool-btn" id="imageBtn" title="Add Image"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg></button>
+      <div class="toolbar-separator"></div>
+      <button class="tool-btn" id="signatureBtn" title="Add Signature"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="M15 5l4 4"/></svg></button>
+    </div>
+    <div class="toolbar-group">
+      <span class="toolbar-label">Color:</span>
+      <input type="color" class="color-picker" id="colorPicker" value="#000000">
+      <span class="toolbar-label">Size:</span>
+      <input type="number" class="toolbar-input" id="strokeSize" value="2" min="1" max="50">
+      <span class="toolbar-label">Font:</span>
+      <input type="number" class="toolbar-input" id="fontSize" value="14" min="6" max="144">
+    </div>
+    <div class="toolbar-group" style="margin-left: auto;">
+      <button class="tool-btn" id="searchBtn" title="Find"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+    </div>
+  </div>
+
+  <div class="main-container">
+    <div class="welcome-screen" id="welcomeScreen">
+      <div class="welcome-logo">📄</div>
+      <div class="welcome-title">PDF Studio Pro</div>
+      <div class="welcome-subtitle">Professional PDF Editor - Create, Edit, and Manage PDFs</div>
+      <div class="welcome-actions">
+        <button class="welcome-btn primary" id="welcomeOpenBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>Open PDF</button>
+        <button class="welcome-btn" id="welcomeNewBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>Create New</button>
+        <button class="welcome-btn" id="welcomeMergeBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>Merge PDFs</button>
+      </div>
+      <div style="color: var(--text-dim); font-size: 12px; margin-top: 10px;">or drop a PDF anywhere in this window</div>
+    </div>
+
+    <div class="sidebar hidden" id="sidebar">
+      <div class="sidebar-tabs">
+        <button class="sidebar-tab active" data-tab="thumbnails">Pages</button>
+        <button class="sidebar-tab" data-tab="bookmarks">Bookmarks</button>
+      </div>
+      <div class="sidebar-content">
+        <div class="thumbnail-container" id="thumbnailContainer"></div>
+        <div class="bookmarks-container hidden" id="bookmarksContainer"><div style="padding: 12px; color: var(--text-dim); font-size: 12px;">No bookmarks</div></div>
+      </div>
+    </div>
+
+    <div class="viewer-container hidden" id="viewerContainer">
+      <div class="viewer-scroll" id="viewerScroll"><div id="pagesContainer"></div></div>
+    </div>
+
+    <div class="properties-panel hidden" id="propertiesPanel">
+      <div class="panel-header">Properties</div>
+      <div class="panel-content">
+        <div class="panel-section">
+          <div class="panel-section-title">Document</div>
+          <div class="panel-row"><span class="panel-label">Pages:</span><span class="panel-value" id="pageCount">-</span></div>
+          <div class="panel-row"><span class="panel-label">Current:</span><span class="panel-value" id="currentPage">-</span></div>
+        </div>
+        <div class="panel-section">
+          <div class="panel-section-title">Page Actions</div>
+          <div class="panel-btn-group"><button class="panel-btn" id="rotateLeftBtn">↺ Left</button><button class="panel-btn" id="rotateRightBtn">↻ Right</button></div>
+          <button class="panel-btn" id="insertPageBtn">+ Insert Blank Page</button>
+          <button class="panel-btn" id="insertFromFileBtn">+ Insert from File</button>
+          <button class="panel-btn danger" id="deletePageBtn">Delete Page</button>
+        </div>
+        <div class="panel-section">
+          <div class="panel-section-title">Annotations</div>
+          <div class="panel-row"><span class="panel-label">Count:</span><span class="panel-value" id="annotationCount">0</span></div>
+          <button class="panel-btn danger" id="clearAnnotationsBtn">Clear All</button>
+        </div>
+        <div class="panel-section">
+          <div class="panel-section-title">Document Tools</div>
+          <button class="panel-btn" id="addWatermarkBtn">Add Watermark</button>
+          <button class="panel-btn" id="addPageNumbersBtn">Add Page Numbers</button>
+          <button class="panel-btn" id="propertiesBtn">Document Properties</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="status-bar"><div><span id="statusText">Ready</span></div><div class="status-separator"></div><div>Tool: <span id="currentToolDisplay">Select</span></div><div style="margin-left: auto;"><span id="filePath">No file loaded</span></div></div>
+  <div class="search-bar hidden" id="searchBar"><input type="text" class="search-input" id="searchInput" placeholder="Find..."><span class="search-results" id="searchResults"></span><button class="search-btn" id="searchPrev">◀</button><button class="search-btn" id="searchNext">▶</button><button class="search-btn" id="searchClose">✕</button></div>
+  <div class="loading-overlay hidden" id="loadingOverlay"><div class="loading-spinner"></div><div class="loading-text" id="loadingText">Loading...</div></div>
+  <div class="notification hidden" id="notification"></div>
+  <div id="modalContainer"></div>
+
+  <script type="module">
+    import * as pdfjsLib from '../node_modules/pdfjs-dist/build/pdf.mjs';
+
+    const state = { pdfDoc: null, currentPage: 1, scale: 1.0, originalData: null, filePath: null, fileName: null, currentTool: 'select', isDrawing: false, annotations: {}, undoStack: [], redoStack: [], hasUnsavedChanges: false, currentPath: [], pendingStamp: null, pendingImage: null, pendingSignature: null, redactionMarks: {}, textEdits: {} };
+    const $ = id => document.getElementById(id);
+
+    function showNotification(msg, type = 'success') { const n = $('notification'); n.textContent = msg; n.className = `notification ${type}`; n.classList.remove('hidden'); setTimeout(() => n.classList.add('hidden'), 3000); }
+    function setLoading(show, text = 'Loading...') { $('loadingText').textContent = text; $('loadingOverlay').classList.toggle('hidden', !show); }
+    function updateUIState(hasDoc) {
+      $('welcomeScreen').classList.toggle('hidden', hasDoc);
+      $('sidebar').classList.toggle('hidden', !hasDoc);
+      $('viewerContainer').classList.toggle('hidden', !hasDoc);
+      $('propertiesPanel').classList.toggle('hidden', !hasDoc);
+      ['saveBtn', 'printBtn', 'zoomInBtn', 'zoomOutBtn'].forEach(id => $(id).disabled = !hasDoc);
+      updateUndoRedo();
+    }
+    function updateUndoRedo() { $('undoBtn').disabled = state.undoStack.length === 0; $('redoBtn').disabled = state.redoStack.length === 0; }
+    function hexToRgb(hex) { const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex); return r ? { r: parseInt(r[1], 16) / 255, g: parseInt(r[2], 16) / 255, b: parseInt(r[3], 16) / 255 } : { r: 0, g: 0, b: 0 }; }
+    function saveState() { state.undoStack.push(JSON.stringify(state.annotations)); if (state.undoStack.length > 50) state.undoStack.shift(); state.redoStack = []; state.hasUnsavedChanges = true; updateUndoRedo(); }
+    function undo() { if (state.undoStack.length === 0) return; state.redoStack.push(JSON.stringify(state.annotations)); state.annotations = JSON.parse(state.undoStack.pop()); for (let i = 1; i <= state.pdfDoc.numPages; i++) renderAnnotations(i); updateAnnotationCount(); updateUndoRedo(); }
+    function redo() { if (state.redoStack.length === 0) return; state.undoStack.push(JSON.stringify(state.annotations)); state.annotations = JSON.parse(state.redoStack.pop()); for (let i = 1; i <= state.pdfDoc.numPages; i++) renderAnnotations(i); updateAnnotationCount(); updateUndoRedo(); }
+
+    async function showSplitDialog() {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      const total = state.pdfDoc.numPages;
+      const content = '<div class="form-section-title">Split ' + total + ' pages into:</div>' +
+        '<div class="form-group"><label class="form-label"><input type="radio" name="splitMode" value="every" checked> Every</label>' +
+        '<input type="number" class="form-input" id="splitEvery" value="1" min="1" style="width:80px;display:inline-block;margin-left:8px;"> pages</div>' +
+        '<div class="form-group"><label class="form-label"><input type="radio" name="splitMode" value="ranges"> Custom ranges (e.g. 1-3,5,7-10)</label>' +
+        '<input type="text" class="form-input" id="splitRanges" placeholder="1-3,5,7-10" style="margin-top:8px;"></div>';
+      showModal('Split PDF', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Split', action: 'split', primary: true, handler: async m => {
+        const mode = m.querySelector('input[name=splitMode]:checked').value;
+        let ranges = [];
+        if (mode === 'every') {
+          const n = Math.max(1, parseInt(m.querySelector('#splitEvery').value, 10) || 1);
+          for (let s = 1; s <= total; s += n) ranges.push({ start: s, end: Math.min(s + n - 1, total) });
+        } else {
+          const raw = m.querySelector('#splitRanges').value.trim();
+          if (!raw) { showNotification('Enter ranges like 1-3,5,7-10', 'warning'); return; }
+          for (const part of raw.split(',')) { const p = part.split('-'); ranges.push({ start: parseInt(p[0], 10), end: p[1] ? parseInt(p[1], 10) : parseInt(p[0], 10) }); }
+        }
+        setLoading(true, 'Splitting...');
+        try {
+          const r = await window.pdfAPI.splitPdf({ data: state.originalData, ranges });
+          if (r.success) {
+            const files = r.files.map(f => ({ name: (path.basename(state.currentName || 'document', '.pdf')) + '_' + f.name, data: f.data }));
+            const s = await window.pdfAPI.saveMultipleFiles({ files });
+            showNotification(s.success ? 'Split into ' + ranges.length + ' files -> ' + s.folder : 'Save canceled', s.success ? 'success' : 'warning');
+          }
+        } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+        setLoading(false);
+      } }]);
+    }
+
+    async function showExtractPagesDialog() {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      const content = '<div class="form-group"><label class="form-label">Pages to extract (e.g. 1,3,5-8)</label><input type="text" class="form-input" id="extractPagesInput" placeholder="1,3,5-8"></div>';
+      showModal('Extract Pages', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Extract', action: 'extract', primary: true, handler: async m => {
+        const raw = m.querySelector('#extractPagesInput').value.trim();
+        if (!raw) return;
+        const nums = [];
+        for (const part of raw.split(',')) { const p = part.split('-'); if (p.length === 2) { for (let i = parseInt(p[0], 10); i <= parseInt(p[1], 10); i++) nums.push(i); } else nums.push(parseInt(p[0], 10)); }
+        if (nums.some(n => isNaN(n) || n < 1 || n > state.pdfDoc.numPages)) { showNotification('Out of range', 'warning'); return; }
+        setLoading(true, 'Extracting...');
+        try {
+          const r = await window.pdfAPI.extractPages({ data: state.originalData, pageNumbers: nums });
+          if (r.success) await window.pdfAPI.saveFileAs({ data: r.data, defaultName: 'extracted.pdf' });
+        } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+        setLoading(false);
+      } }]);
+    }
+
+    function showSetPasswordDialog() {
+      if (!state.originalData) { showNotification('Open a PDF first', 'warning'); return; }
+      const content = '<div class="form-group"><label class="form-label">Password</label><input type="password" class="form-input" id="pwInput"></div>' +
+        '<div class="form-group"><label class="form-label">Confirm password</label><input type="password" class="form-input" id="pwConfirm"></div>' +
+        '<div class="form-group"><label class="form-label">Owner password (permissions; optional)</label><input type="password" class="form-input" id="pwOwner"></div>';
+      showModal('Set Password Protection (AES-256)', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Encrypt & Save As', action: 'encrypt', primary: true, handler: async m => {
+        const pw = m.querySelector('#pwInput').value, pw2 = m.querySelector('#pwConfirm').value, owner = m.querySelector('#pwOwner').value;
+        if (!pw || pw.length < 4) { showNotification('Password must be at least 4 characters', 'warning'); return; }
+        if (pw !== pw2) { showNotification('Passwords do not match', 'error'); return; }
+        setLoading(true, 'Encrypting...');
+        try {
+          const r = await window.pdfAPI.encryptPdf({ data: state.originalData, userPassword: pw, ownerPassword: owner || pw });
+          if (r.success) { await window.pdfAPI.saveFileAs({ data: r.data, defaultName: 'protected.pdf' }); showNotification('Document encrypted (AES-256)'); }
+          else showNotification('Error: ' + r.error, 'error');
+        } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+        setLoading(false);
+      } }]);
+    }
+
+    function showRemovePasswordDialog() {
+      if (!state.originalData) { showNotification('Open a PDF first', 'warning'); return; }
+      const content = '<div class="form-group"><label class="form-label">Current password</label><input type="password" class="form-input" id="pwCurrent"></div>';
+      showModal('Remove Password', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Decrypt & Save As', action: 'decrypt', primary: true, handler: async m => {
+        const pw = m.querySelector('#pwCurrent').value;
+        if (!pw) return;
+        setLoading(true, 'Decrypting...');
+        try {
+          const r = await window.pdfAPI.decryptPdf({ data: state.originalData, password: pw });
+          if (r.success) { await window.pdfAPI.saveFileAs({ data: r.data, defaultName: 'decrypted.pdf' }); showNotification('Document decrypted'); }
+          else showNotification('Wrong password: ' + r.error, 'error');
+        } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+        setLoading(false);
+      } }]);
+    }
+
+    function activateSidebarTab(name) {
+      document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+      $('thumbnailContainer').classList.toggle('hidden', name !== 'thumbnails');
+      $('bookmarksContainer').classList.toggle('hidden', name !== 'bookmarks');
+    }
+
+    async function exportImages(format) {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      const folder = await window.pdfAPI.selectExportFolder(); if (!folder) return;
+      setLoading(true, 'Exporting images...');
+      try {
+        const base = (state.fileName || 'document').replace(/\.pdf$/i, '');
+        for (let i = 1; i <= state.pdfDoc.numPages; i++) {
+          const page = await state.pdfDoc.getPage(i);
+          const viewport = page.getViewport({ scale: 2 });
+          const canvas = document.createElement('canvas');
+          canvas.width = viewport.width; canvas.height = viewport.height;
+          await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+          const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+          const dataUrl = canvas.toDataURL(mime, 0.92);
+          await window.pdfAPI.saveImage({ folderPath: folder, fileName: base + '_' + String(i).padStart(3, '0') + (format === 'jpeg' ? '.jpg' : '.png'), imageData: dataUrl });
+        }
+        showNotification('Exported ' + state.pdfDoc.numPages + ' images to ' + folder);
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      setLoading(false);
+    }
+
+    async function showInsertFromFile() {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      const sources = await window.pdfAPI.openMultipleFiles();
+      if (!sources || sources.length === 0) return;
+      setLoading(true, 'Inserting pages...');
+      try {
+        let data = state.originalData, insertIndex = state.currentPage, pageCount = state.pdfDoc.numPages;
+        for (const src of sources) {
+          const r = await window.pdfAPI.insertPagesFromFile({ targetData: data, sourceData: src.data, insertIndex, pageNumbers: null });
+          if (!r.success) throw new Error(r.error || 'Insert failed');
+          data = r.data;
+          const info = await window.pdfAPI.getDocumentInfo({ data: r.data });
+          if (info.success) { insertIndex += info.info.pageCount - pageCount; pageCount = info.info.pageCount; }
+        }
+        state.originalData = data;
+        const d = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+        state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
+        await renderThumbnails(); await renderAllPages();
+        goToPage(Math.min(insertIndex + 1, state.pdfDoc.numPages));
+        state.hasUnsavedChanges = true;
+        showNotification('Inserted ' + sources.length + ' file(s)');
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      setLoading(false);
+    }
+
+    function showPageNumbersDialog() {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      const content = '<div class="form-group"><label class="form-label">Position</label><select class="form-select" id="pnPos"><option value="bottom">Bottom center</option><option value="top">Top center</option></select></div>' +
+        '<div class="form-group"><label class="form-label">Font size</label><input type="number" class="form-input" id="pnSize" value="10" min="6" max="48"></div>';
+      showModal('Add Page Numbers', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Add', action: 'add', primary: true, handler: async m => {
+        const pos = m.querySelector('#pnPos').value, size = parseInt(m.querySelector('#pnSize').value, 10) || 10;
+        setLoading(true, 'Adding page numbers...');
+        const mods = [];
+        for (let i = 0; i < state.pdfDoc.numPages; i++) mods.push({ type: 'pageNumber', pageIndex: i, text: String(i + 1), position: pos, fontSize: size, x: 0.45 });
+        const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
+        if (r.success) { state.originalData = r.data; const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); state.hasUnsavedChanges = true; showNotification('Page numbers added'); }
+        else showNotification('Error: ' + r.error, 'error');
+        setLoading(false);
+      } }]);
+    }
+
+    function showHeaderFooterDialog() {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      const content = '<div class="form-group"><label class="form-label">Header text</label><input type="text" class="form-input" id="hfHeader" placeholder="(optional)"></div>' +
+        '<div class="form-group"><label class="form-label">Footer text</label><input type="text" class="form-input" id="hfFooter" placeholder="(optional)"></div>';
+      showModal('Add Header & Footer', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Add', action: 'add', primary: true, handler: async m => {
+        const header = m.querySelector('#hfHeader').value, footer = m.querySelector('#hfFooter').value;
+        if (!header && !footer) { showNotification('Enter header or footer text', 'warning'); return; }
+        setLoading(true, 'Adding header/footer...');
+        const mods = [];
+        for (let i = 0; i < state.pdfDoc.numPages; i++) mods.push({ type: 'headerFooter', pageIndex: i, header: header || '', footer: footer || '' });
+        const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
+        if (r.success) { state.originalData = r.data; const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); state.hasUnsavedChanges = true; showNotification('Header & footer added'); }
+        else showNotification('Error: ' + r.error, 'error');
+        setLoading(false);
+      } }]);
+    }
+
+    function showGotoPageDialog() {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      const content = '<div class="form-group"><label class="form-label">Page number (1-' + state.pdfDoc.numPages + ')</label><input type="number" class="form-input" id="gotoInput" min="1" max="' + state.pdfDoc.numPages + '"></div>';
+      const m = showModal('Go to Page', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Go', action: 'go', primary: true, handler: mm => { const p = parseInt(mm.querySelector('#gotoInput').value, 10); if (p >= 1 && p <= state.pdfDoc.numPages) goToPage(p); } }]);
+      setTimeout(() => m.querySelector('#gotoInput')?.focus(), 50);
+    }
+
+    function showShortcutsDialog() {
+      const rows = [['Ctrl+N', 'New blank PDF'], ['Ctrl+O', 'Open PDF'], ['Ctrl+S', 'Save'], ['Ctrl+Shift+S', 'Save As'], ['Ctrl+P', 'Print'], ['Ctrl+F', 'Find'], ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'], ['Ctrl+Plus / Minus / 0', 'Zoom in / out / reset'], ['Ctrl+G', 'Go to page'], ['Ctrl+I', 'Add image'], ['Ctrl+B', 'Bookmarks panel'], ['V H', 'Select / Hand tool'], ['T P E', 'Text / Pen / Eraser tool'], ['L A', 'Line / Arrow tool'], ['R C', 'Rectangle / Circle tool'], ['Home End PgUp PgDn', 'First / last / prev / next page']];
+      const content = rows.map(r => '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);"><span style="font-family:monospace;color:var(--text-dim);">' + r[0] + '</span><span>' + r[1] + '</span></div>').join('');
+      showModal('Keyboard Shortcuts', content, [{ label: 'Close', action: 'close', primary: true }]);
+    }
+
+    async function initPdfJs() { pdfjsLib.GlobalWorkerOptions.workerSrc = await window.pdfAPI.getPdfjsWorkerPath(); }
+
+    async function openFile() { const result = await window.pdfAPI.openFile(); if (result) await loadPdf(result); }
+    async function loadPdf(result) {
+      setLoading(true, 'Loading PDF...');
+      try {
+        const data = Uint8Array.from(atob(result.data), c => c.charCodeAt(0));
+        state.originalData = result.data; state.filePath = result.path; state.fileName = result.name;
+        state.pdfDoc = await pdfjsLib.getDocument({ data }).promise;
+        state.annotations = {}; state.undoStack = []; state.redoStack = []; state.hasUnsavedChanges = false; state.textEdits = {};
+        updateUIState(true); await renderThumbnails(); await renderAllPages();
+        $('pageCount').textContent = state.pdfDoc.numPages;
+        $('filePath').textContent = state.fileName;
+        $('statusText').textContent = 'Loaded: ' + state.fileName;
+        goToPage(1); showNotification('Opened: ' + state.fileName);
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      setLoading(false);
+    }
+    async function createNewPdf() {
+      setLoading(true, 'Creating...');
+      try {
+        const result = await window.pdfAPI.createBlankPdf({ pageCount: 1, width: 612, height: 792 });
+        if (result.success) await loadPdf({ data: result.data, path: null, name: 'Untitled.pdf' });
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      setLoading(false);
+    }
+    async function saveDocument(saveAs = false) {
+      if (!state.pdfDoc) return;
+      setLoading(true, 'Saving...');
+      try {
+        const mods = collectModifications();
+        const result = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
+        if (!result.success) throw new Error(result.error);
+        let saveResult = saveAs || !state.filePath ? await window.pdfAPI.saveFileAs({ data: result.data, defaultName: state.fileName || 'document.pdf' }) : await window.pdfAPI.saveFile({ data: result.data, path: state.filePath });
+        if (saveResult.success) { state.hasUnsavedChanges = false; state.originalData = result.data; state.filePath = saveResult.path; state.fileName = saveResult.path.split(/[\\/]/).pop(); $('filePath').textContent = state.fileName; showNotification('Saved!'); }
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      setLoading(false);
+    }
+    function collectModifications() {
+      const mods = [];
+      for (const p in state.annotations) { const idx = parseInt(p) - 1; for (const a of state.annotations[p]) mods.push({ ...a, pageIndex: idx }); }
+      for (const p in state.redactionMarks) { const idx = parseInt(p) - 1; for (const m of state.redactionMarks[p]) mods.push({ type: 'redaction', pageIndex: idx, ...m }); }
+      return mods;
+    }
+
+    async function renderThumbnails() {
+      $('thumbnailContainer').innerHTML = '';
+      for (let i = 1; i <= state.pdfDoc.numPages; i++) {
+        const page = await state.pdfDoc.getPage(i);
+        const vp = page.getViewport({ scale: 0.2 });
+        const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+        const div = document.createElement('div'); div.className = 'thumbnail' + (i === 1 ? ' active' : ''); div.dataset.page = i;
+        div.appendChild(canvas);
+        const num = document.createElement('div'); num.className = 'thumbnail-number'; num.textContent = i; div.appendChild(num);
+        div.onclick = () => goToPage(i);
+        $('thumbnailContainer').appendChild(div);
+      }
+    }
+    async function renderAllPages() {
+      const container = $('pagesContainer');
+      while (container.firstChild) container.removeChild(container.firstChild);
+      for (let i = 1; i <= state.pdfDoc.numPages; i++) {
+        const pageDiv = document.createElement('div'); pageDiv.className = 'page-container'; pageDiv.id = 'page-' + i; pageDiv.dataset.page = i;
+        const page = await state.pdfDoc.getPage(i);
+        const vp = page.getViewport({ scale: state.scale });
+        const canvas = document.createElement('canvas'); canvas.className = 'page-canvas'; canvas.width = vp.width; canvas.height = vp.height;
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+        pageDiv.appendChild(canvas);
+        // Text layer for selection and editing
+        const textLayer = document.createElement('div'); textLayer.className = 'text-layer'; textLayer.dataset.page = i;
+        textLayer.style.width = vp.width + 'px'; textLayer.style.height = vp.height + 'px';
+        pageDiv.appendChild(textLayer);
+        await renderTextLayer(page, vp, textLayer, i);
+        // Annotation layer
+        const annLayer = document.createElement('div'); annLayer.className = 'annotation-layer' + (state.currentTool !== 'select' ? ' active' : ''); annLayer.dataset.page = i;
+        const annCanvas = document.createElement('canvas'); annCanvas.width = vp.width; annCanvas.height = vp.height;
+        annLayer.appendChild(annCanvas);
+        setupAnnotationCanvas(annCanvas, i);
+        pageDiv.appendChild(annLayer);
+        container.appendChild(pageDiv);
+        renderAnnotations(i);
+      }
+    }
+    async function renderTextLayer(page, viewport, container, pageNum) {
+      const textContent = await page.getTextContent();
+      while (container.firstChild) container.removeChild(container.firstChild);
+      const textItems = textContent.items;
+      // Track edited text regions to show updated text
+      const editedRegions = (state.textEdits && state.textEdits[pageNum]) || [];
+      for (const item of textItems) {
+        const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+        const baseX = tx[4];
+        const baseY = tx[5] - item.height * viewport.scale;
+        const fontSize = item.height * viewport.scale;
+        const fontName = item.fontName || 'sans-serif';
+        // Split text into words for word-level editing
+        const words = item.str.split(/(\s+)/);
+        let currentX = baseX;
+        const charWidth = (item.width * viewport.scale) / (item.str.length || 1);
+        for (const word of words) {
+          if (!word) continue;
+          const wordWidth = word.length * charWidth;
+          // Check if this word position has been edited
+          const editKey = `${pageNum}-${Math.round(currentX)}-${Math.round(baseY)}`;
+          const editedText = state.textEdits?.[editKey];
+          const span = document.createElement('span');
+          span.textContent = editedText || word;
+          span.style.left = currentX + 'px';
+          span.style.top = baseY + 'px';
+          span.style.fontSize = fontSize + 'px';
+          span.style.fontFamily = fontName;
+          span.dataset.text = word;
+          span.dataset.x = currentX;
+          span.dataset.y = tx[5];
+          span.dataset.width = wordWidth;
+          span.dataset.height = item.height * viewport.scale;
+          span.dataset.fontSize = item.height;
+          span.dataset.editKey = editKey;
+          span.dataset.isWhitespace = /^\s+$/.test(word) ? 'true' : 'false';
+          if (editedText) {
+            span.classList.add('edited');
+            span.style.color = '#000';
+            span.style.background = 'rgba(255,255,200,0.5)';
+          }
+          if (!/^\s+$/.test(word)) {
+            span.ondblclick = e => startTextEdit(e, span, pageNum, container, item.str, baseX, tx[5], item.width * viewport.scale, item.height);
+          }
+          container.appendChild(span);
+          currentX += wordWidth;
+        }
+      }
+    }
+    function startTextEdit(e, span, pageNum, container, fullSentence, sentenceX, sentenceY, sentenceW, sentenceH) {
+      e.preventDefault(); e.stopPropagation();
+      document.querySelectorAll('.text-edit-overlay').forEach(el => el.remove());
+      const rect = span.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      // Create inline editable element - seamless like Acrobat
+      const overlay = document.createElement('div');
+      overlay.className = 'text-edit-overlay';
+      overlay.style.cssText = `position:absolute;left:${rect.left - containerRect.left - 2}px;top:${rect.top - containerRect.top - 2}px;background:white;border:2px solid #2563eb;border-radius:2px;padding:0;z-index:200;box-shadow:0 2px 8px rgba(0,0,0,0.2);`;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = span.dataset.text;
+      input.style.cssText = `font-size:${span.style.fontSize};font-family:inherit;padding:2px 4px;border:none;outline:none;min-width:${rect.width + 20}px;background:transparent;color:#000;`;
+      overlay.appendChild(input);
+      const originalText = span.dataset.text;
+      const editX = parseFloat(span.dataset.x);
+      const editY = parseFloat(span.dataset.y);
+      const editW = parseFloat(span.dataset.width);
+      const editH = parseFloat(span.dataset.height);
+      const editFontSize = parseFloat(span.dataset.fontSize);
+      const editKey = span.dataset.editKey;
+      const pageContainer = document.getElementById('page-' + pageNum);
+      const pageCanvas = pageContainer.querySelector('.page-canvas');
+      const canvasW = pageCanvas.width / state.scale;
+      const canvasH = pageCanvas.height / state.scale;
+      const finishEdit = (cancelled = false) => {
+        if (cancelled) { overlay.remove(); selectTool('select'); return; }
+        const newText = input.value.trim();
+        if (newText && newText !== originalText) {
+          saveState();
+          if (!state.annotations[pageNum]) state.annotations[pageNum] = [];
+          if (!state.textEdits) state.textEdits = {};
+          const spanX = editX / state.scale;
+          const spanY = editY / state.scale;
+          const spanW = editW / state.scale;
+          const spanH = editH / state.scale;
+          // Add white rectangle to cover original text
+          state.annotations[pageNum].push({ type: 'cover', x: (spanX - 2) / canvasW, y: (spanY - spanH - 2) / canvasH, width: (spanW + 4) / canvasW, height: (spanH + 4) / canvasH, color: { r: 1, g: 1, b: 1 } });
+          // Add new text at the same position
+          state.annotations[pageNum].push({ type: 'text', text: newText, x: spanX / canvasW, y: spanY / canvasH, fontSize: Math.round(editFontSize), color: { r: 0, g: 0, b: 0 } });
+          // Track the edit for display in text layer
+          state.textEdits[editKey] = newText;
+          // Update the span text immediately
+          span.textContent = newText;
+          span.dataset.text = newText;
+          span.classList.add('edited');
+          renderAnnotations(pageNum);
+          updateAnnotationCount();
+          state.hasUnsavedChanges = true;
+          showNotification('Text updated');
+        }
+        overlay.remove();
+        selectTool('select');
+      };
+      input.onblur = () => setTimeout(() => finishEdit(), 50);
+      input.onkeydown = e => {
+        if (e.key === 'Enter') { e.preventDefault(); finishEdit(); }
+        if (e.key === 'Escape') { e.preventDefault(); finishEdit(true); }
+        if (e.key === 'Tab') { e.preventDefault(); finishEdit(); }
+        e.stopPropagation(); // Prevent keyboard shortcuts
+      };
+      input.onkeyup = e => e.stopPropagation();
+      input.onkeypress = e => e.stopPropagation();
+      // Auto-resize input as user types
+      input.oninput = () => { input.style.width = Math.max(rect.width + 20, input.value.length * 8 + 20) + 'px'; };
+      container.parentElement.appendChild(overlay);
+      input.focus();
+      input.select();
+    }
+    function setupAnnotationCanvas(canvas, pageNum) {
+      canvas.onmousedown = e => handleMouseDown(e, canvas, pageNum);
+      canvas.onmousemove = e => handleMouseMove(e, canvas, pageNum);
+      canvas.onmouseup = e => handleMouseUp(e, canvas, pageNum);
+    }
+    function handleMouseDown(e, canvas, pageNum) {
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / state.scale, y = (e.clientY - rect.top) / state.scale;
+      if (state.currentTool === 'select' || state.currentTool === 'hand') return;
+      if (state.currentTool === 'eraser') { eraseAtPoint(pageNum, x, y); return; }
+      if (state.currentTool === 'text') { createTextInput(canvas, x, y, pageNum); return; }
+      if (state.currentTool === 'stamp' && state.pendingStamp) { addStamp(pageNum, x, y, canvas); return; }
+      if (state.currentTool === 'image' && state.pendingImage) { addImage(pageNum, x, y, canvas); return; }
+      if (state.currentTool === 'signature' && state.pendingSignature) { addSignature(pageNum, x, y, canvas); return; }
+      state.isDrawing = true; state.currentPath = [{ x, y }];
+    }
+    function handleMouseMove(e, canvas, pageNum) {
+      if (!state.isDrawing) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / state.scale, y = (e.clientY - rect.top) / state.scale;
+      if (state.currentTool === 'eraser') { eraseAtPoint(pageNum, x, y); return; }
+      state.currentPath.push({ x, y });
+      renderAnnotations(pageNum); drawCurrentPath(canvas.getContext('2d'));
+    }
+    function handleMouseUp(e, canvas, pageNum) {
+      if (!state.isDrawing) return;
+      state.isDrawing = false;
+      if (state.currentPath.length < 2) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / state.scale, y = (e.clientY - rect.top) / state.scale;
+      if (!state.annotations[pageNum]) state.annotations[pageNum] = [];
+      const color = hexToRgb($('colorPicker').value), size = parseInt($('strokeSize').value);
+      const w = canvas.width / state.scale, h = canvas.height / state.scale;
+      saveState();
+      if (state.currentTool === 'draw') {
+        state.annotations[pageNum].push({ type: 'path', points: state.currentPath.map(p => ({ x: p.x / w, y: p.y / h })), color, strokeWidth: size, opacity: 1 });
+      } else if (['highlight', 'underline', 'strikethrough'].includes(state.currentTool)) {
+        const minX = Math.min(...state.currentPath.map(p => p.x)), maxX = Math.max(...state.currentPath.map(p => p.x));
+        const minY = Math.min(...state.currentPath.map(p => p.y)), maxY = Math.max(...state.currentPath.map(p => p.y));
+        state.annotations[pageNum].push({ type: state.currentTool, x: minX / w, y: minY / h, width: (maxX - minX) / w, height: (maxY - minY) / h, color: state.currentTool === 'highlight' ? { r: 1, g: 0.94, b: 0.2 } : color, strokeWidth: size });
+      } else if (['rectangle', 'circle'].includes(state.currentTool)) {
+        const p0 = state.currentPath[0];
+        state.annotations[pageNum].push({ type: state.currentTool, x: Math.min(p0.x, x) / w, y: Math.min(p0.y, y) / h, width: Math.abs(x - p0.x) / w, height: Math.abs(y - p0.y) / h, color, strokeWidth: size });
+      } else if (['line', 'arrow'].includes(state.currentTool)) {
+        state.annotations[pageNum].push({ type: state.currentTool, x1: state.currentPath[0].x / w, y1: state.currentPath[0].y / h, x2: x / w, y2: y / h, color, strokeWidth: size });
+      } else if (state.currentTool === 'redact') {
+        if (!state.redactionMarks[pageNum]) state.redactionMarks[pageNum] = [];
+        const minX = Math.min(...state.currentPath.map(p => p.x)), maxX = Math.max(...state.currentPath.map(p => p.x));
+        const minY = Math.min(...state.currentPath.map(p => p.y)), maxY = Math.max(...state.currentPath.map(p => p.y));
+        state.redactionMarks[pageNum].push({ x: minX / w, y: minY / h, width: (maxX - minX) / w, height: (maxY - minY) / h });
+      }
+      state.currentPath = [];
+      renderAnnotations(pageNum); updateAnnotationCount();
+    }
+    function drawCurrentPath(ctx) {
+      if (state.currentPath.length < 2) return;
+      ctx.save(); ctx.scale(state.scale, state.scale);
+      ctx.strokeStyle = $('colorPicker').value; ctx.lineWidth = parseInt($('strokeSize').value); ctx.lineCap = 'round';
+      const tool = state.currentTool, p0 = state.currentPath[0], pn = state.currentPath[state.currentPath.length - 1];
+      if (tool === 'highlight') { ctx.fillStyle = 'rgba(254,240,138,0.4)'; const minX = Math.min(...state.currentPath.map(p => p.x)), maxX = Math.max(...state.currentPath.map(p => p.x)), minY = Math.min(...state.currentPath.map(p => p.y)), maxY = Math.max(...state.currentPath.map(p => p.y)); ctx.fillRect(minX, minY, maxX - minX, maxY - minY); }
+      else if (tool === 'rectangle') ctx.strokeRect(p0.x, p0.y, pn.x - p0.x, pn.y - p0.y);
+      else if (tool === 'circle') { ctx.beginPath(); ctx.ellipse((p0.x + pn.x) / 2, (p0.y + pn.y) / 2, Math.abs(pn.x - p0.x) / 2, Math.abs(pn.y - p0.y) / 2, 0, 0, 2 * Math.PI); ctx.stroke(); }
+      else if (tool === 'line' || tool === 'arrow') { ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(pn.x, pn.y); ctx.stroke(); if (tool === 'arrow') { const a = Math.atan2(pn.y - p0.y, pn.x - p0.x), s = 10; ctx.beginPath(); ctx.moveTo(pn.x, pn.y); ctx.lineTo(pn.x - s * Math.cos(a - Math.PI / 6), pn.y - s * Math.sin(a - Math.PI / 6)); ctx.moveTo(pn.x, pn.y); ctx.lineTo(pn.x - s * Math.cos(a + Math.PI / 6), pn.y - s * Math.sin(a + Math.PI / 6)); ctx.stroke(); } }
+      else if (tool === 'redact') { ctx.fillStyle = 'rgba(255,0,0,0.3)'; ctx.strokeStyle = '#f00'; const minX = Math.min(...state.currentPath.map(p => p.x)), maxX = Math.max(...state.currentPath.map(p => p.x)), minY = Math.min(...state.currentPath.map(p => p.y)), maxY = Math.max(...state.currentPath.map(p => p.y)); ctx.fillRect(minX, minY, maxX - minX, maxY - minY); ctx.strokeRect(minX, minY, maxX - minX, maxY - minY); }
+      else { ctx.beginPath(); ctx.moveTo(state.currentPath[0].x, state.currentPath[0].y); for (let i = 1; i < state.currentPath.length; i++) ctx.lineTo(state.currentPath[i].x, state.currentPath[i].y); ctx.stroke(); }
+      ctx.restore();
+    }
+    function renderAnnotations(pageNum) {
+      const canvas = document.querySelector('#page-' + pageNum + ' .annotation-layer canvas'); if (!canvas) return;
+      const ctx = canvas.getContext('2d'); ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const anns = state.annotations[pageNum] || [];
+      ctx.save(); ctx.scale(state.scale, state.scale);
+      const w = canvas.width / state.scale, h = canvas.height / state.scale;
+      for (const a of anns) {
+        if (a.type === 'path') { ctx.globalAlpha = a.opacity || 1; ctx.strokeStyle = `rgb(${a.color.r * 255},${a.color.g * 255},${a.color.b * 255})`; ctx.lineWidth = a.strokeWidth; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(a.points[0].x * w, a.points[0].y * h); for (let i = 1; i < a.points.length; i++) ctx.lineTo(a.points[i].x * w, a.points[i].y * h); ctx.stroke(); ctx.globalAlpha = 1; }
+        else if (a.type === 'highlight') { ctx.fillStyle = `rgba(${a.color.r * 255},${a.color.g * 255},${a.color.b * 255},0.4)`; ctx.fillRect(a.x * w, a.y * h, a.width * w, a.height * h); }
+        else if (a.type === 'underline') { ctx.strokeStyle = `rgb(${a.color.r * 255},${a.color.g * 255},${a.color.b * 255})`; ctx.lineWidth = a.strokeWidth || 1; ctx.beginPath(); ctx.moveTo(a.x * w, (a.y + a.height) * h); ctx.lineTo((a.x + a.width) * w, (a.y + a.height) * h); ctx.stroke(); }
+        else if (a.type === 'strikethrough') { ctx.strokeStyle = `rgb(${a.color.r * 255},${a.color.g * 255},${a.color.b * 255})`; ctx.lineWidth = a.strokeWidth || 1; ctx.beginPath(); ctx.moveTo(a.x * w, (a.y + a.height / 2) * h); ctx.lineTo((a.x + a.width) * w, (a.y + a.height / 2) * h); ctx.stroke(); }
+        else if (a.type === 'rectangle') { ctx.strokeStyle = `rgb(${a.color.r * 255},${a.color.g * 255},${a.color.b * 255})`; ctx.lineWidth = a.strokeWidth; ctx.strokeRect(a.x * w, a.y * h, a.width * w, a.height * h); }
+        else if (a.type === 'circle') { ctx.strokeStyle = `rgb(${a.color.r * 255},${a.color.g * 255},${a.color.b * 255})`; ctx.lineWidth = a.strokeWidth; ctx.beginPath(); ctx.ellipse((a.x + a.width / 2) * w, (a.y + a.height / 2) * h, a.width / 2 * w, a.height / 2 * h, 0, 0, 2 * Math.PI); ctx.stroke(); }
+        else if (a.type === 'line') { ctx.strokeStyle = `rgb(${a.color.r * 255},${a.color.g * 255},${a.color.b * 255})`; ctx.lineWidth = a.strokeWidth; ctx.beginPath(); ctx.moveTo(a.x1 * w, a.y1 * h); ctx.lineTo(a.x2 * w, a.y2 * h); ctx.stroke(); }
+        else if (a.type === 'arrow') { ctx.strokeStyle = `rgb(${a.color.r * 255},${a.color.g * 255},${a.color.b * 255})`; ctx.lineWidth = a.strokeWidth; ctx.beginPath(); ctx.moveTo(a.x1 * w, a.y1 * h); ctx.lineTo(a.x2 * w, a.y2 * h); ctx.stroke(); const ang = Math.atan2((a.y2 - a.y1) * h, (a.x2 - a.x1) * w), s = 10; ctx.beginPath(); ctx.moveTo(a.x2 * w, a.y2 * h); ctx.lineTo(a.x2 * w - s * Math.cos(ang - Math.PI / 6), a.y2 * h - s * Math.sin(ang - Math.PI / 6)); ctx.moveTo(a.x2 * w, a.y2 * h); ctx.lineTo(a.x2 * w - s * Math.cos(ang + Math.PI / 6), a.y2 * h - s * Math.sin(ang + Math.PI / 6)); ctx.stroke(); }
+        else if (a.type === 'text') { ctx.fillStyle = `rgb(${a.color.r * 255},${a.color.g * 255},${a.color.b * 255})`; ctx.font = a.fontSize + 'px sans-serif'; ctx.fillText(a.text, a.x * w, a.y * h); }
+        else if (a.type === 'cover') { ctx.fillStyle = `rgb(${a.color.r * 255},${a.color.g * 255},${a.color.b * 255})`; ctx.fillRect(a.x * w, a.y * h, a.width * w, a.height * h); }
+        else if (a.type === 'stamp') { ctx.fillStyle = `rgba(${a.color.r * 255},${a.color.g * 255},${a.color.b * 255},0.7)`; ctx.font = 'bold ' + a.fontSize + 'px sans-serif'; ctx.save(); ctx.translate(a.x * w, a.y * h); ctx.rotate((a.rotation || -15) * Math.PI / 180); ctx.fillText(a.text, 0, 0); ctx.restore(); }
+        else if (a.type === 'signature' && a.imageData) {
+          const img = new Image();
+          img.onload = () => { ctx.drawImage(img, a.x * w, a.y * h, a.width * w, a.height * h); };
+          img.src = a.imageData;
+        }
+      }
+      const redacts = state.redactionMarks[pageNum] || [];
+      for (const m of redacts) { ctx.fillStyle = 'rgba(255,0,0,0.3)'; ctx.strokeStyle = '#f00'; ctx.lineWidth = 2; ctx.fillRect(m.x * w, m.y * h, m.width * w, m.height * h); ctx.strokeRect(m.x * w, m.y * h, m.width * w, m.height * h); }
+      ctx.restore();
+    }
+
+    function createTextInput(canvas, x, y, pageNum) {
+      document.querySelectorAll('.text-input-overlay').forEach(el => el.remove());
+      const ov = document.createElement('div'); ov.className = 'text-input-overlay'; ov.style.left = (x * state.scale) + 'px'; ov.style.top = (y * state.scale) + 'px';
+      const ta = document.createElement('textarea'); ta.style.fontSize = $('fontSize').value + 'px'; ta.style.color = $('colorPicker').value;
+      ta.onblur = () => { const txt = ta.value.trim(); if (txt) { if (!state.annotations[pageNum]) state.annotations[pageNum] = []; saveState(); const w = canvas.width / state.scale, h = canvas.height / state.scale; state.annotations[pageNum].push({ type: 'text', text: txt, x: x / w, y: y / h, fontSize: parseInt($('fontSize').value), color: hexToRgb($('colorPicker').value) }); renderAnnotations(pageNum); updateAnnotationCount(); } ov.remove(); };
+      ta.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ta.blur(); } if (e.key === 'Escape') ov.remove(); };
+      ov.appendChild(ta); canvas.parentElement.appendChild(ov); ta.focus();
+    }
+    function addStamp(pageNum, x, y, canvas) {
+      if (!state.annotations[pageNum]) state.annotations[pageNum] = [];
+      saveState();
+      const stamps = { approved: { text: 'APPROVED', color: { r: 0.086, g: 0.639, b: 0.290 } }, rejected: { text: 'REJECTED', color: { r: 0.863, g: 0.149, b: 0.149 } }, draft: { text: 'DRAFT', color: { r: 0.149, g: 0.388, b: 0.922 } }, confidential: { text: 'CONFIDENTIAL', color: { r: 0.863, g: 0.149, b: 0.149 } }, final: { text: 'FINAL', color: { r: 0.086, g: 0.639, b: 0.290 } } };
+      const stamp = stamps[state.pendingStamp] || { text: state.pendingStamp.toUpperCase(), color: { r: 0, g: 0, b: 0 } };
+      const w = canvas.width / state.scale, h = canvas.height / state.scale;
+      state.annotations[pageNum].push({ type: 'stamp', text: stamp.text, x: x / w, y: y / h, fontSize: 24, color: stamp.color, rotation: -15, opacity: 0.7 });
+      renderAnnotations(pageNum); updateAnnotationCount(); state.pendingStamp = null; selectTool('select');
+    }
+    function addImage(pageNum, x, y, canvas) {
+      if (!state.pendingImage || !state.annotations[pageNum]) state.annotations[pageNum] = [];
+      saveState();
+      const w = canvas.width / state.scale, h = canvas.height / state.scale;
+      state.annotations[pageNum].push({ type: 'image', x: x / w, y: y / h, width: 0.2, height: 0.2, imageData: state.pendingImage.data, imageType: state.pendingImage.type });
+      renderAnnotations(pageNum); updateAnnotationCount(); state.pendingImage = null; selectTool('select');
+    }
+    function eraseAtPoint(pageNum, x, y) {
+      if (!state.annotations[pageNum]) return;
+      const before = state.annotations[pageNum].length;
+      state.annotations[pageNum] = state.annotations[pageNum].filter(a => { if (a.type === 'path') return !a.points.some(p => Math.abs(p.x * 500 - x) < 20 && Math.abs(p.y * 500 - y) < 20); return true; });
+      if (state.annotations[pageNum].length < before) { saveState(); renderAnnotations(pageNum); updateAnnotationCount(); }
+    }
+    function updateAnnotationCount() { let c = 0; for (const p in state.annotations) c += state.annotations[p].length; $('annotationCount').textContent = c; }
+    function clearAllAnnotations() { if (!confirm('Clear all annotations?')) return; saveState(); state.annotations = {}; state.redactionMarks = {}; for (let i = 1; i <= state.pdfDoc.numPages; i++) renderAnnotations(i); updateAnnotationCount(); showNotification('All annotations cleared'); }
+
+    function goToPage(p) { state.currentPage = p; $('currentPage').textContent = p; document.querySelectorAll('.thumbnail').forEach(t => t.classList.remove('active')); document.querySelector('.thumbnail[data-page="' + p + '"]')?.classList.add('active'); document.getElementById('page-' + p)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+    async function rotatePage(angle) {
+      if (!state.pdfDoc) return; setLoading(true, 'Rotating...');
+      try { const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: [{ type: 'rotate', pageIndex: state.currentPage - 1, angle }] }); if (r.success) { state.originalData = r.data; const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); state.hasUnsavedChanges = true; showNotification('Page rotated'); } } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      setLoading(false);
+    }
+    async function deletePage() {
+      if (!state.pdfDoc || state.pdfDoc.numPages <= 1) { showNotification('Cannot delete only page', 'error'); return; }
+      if (!confirm('Delete page ' + state.currentPage + '?')) return; setLoading(true, 'Deleting...');
+      try { const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: [{ type: 'deletePage', pageIndex: state.currentPage - 1 }] }); if (r.success) { delete state.annotations[state.currentPage]; state.originalData = r.data; const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; $('pageCount').textContent = state.pdfDoc.numPages; await renderThumbnails(); await renderAllPages(); if (state.currentPage > state.pdfDoc.numPages) state.currentPage = state.pdfDoc.numPages; goToPage(state.currentPage); state.hasUnsavedChanges = true; showNotification('Page deleted'); } } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      setLoading(false);
+    }
+    async function insertBlankPage() {
+      if (!state.pdfDoc) return; setLoading(true, 'Inserting...');
+      try { const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: [{ type: 'insertPage', pageIndex: state.currentPage }] }); if (r.success) { state.originalData = r.data; const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; $('pageCount').textContent = state.pdfDoc.numPages; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage + 1); state.hasUnsavedChanges = true; showNotification('Page inserted'); } } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      setLoading(false);
+    }
+    async function mergePdfs() {
+      const files = await window.pdfAPI.openMultipleFiles(); if (!files || files.length < 2) { showNotification('Select at least 2 files', 'warning'); return; }
+      setLoading(true, 'Merging...');
+      try { const r = await window.pdfAPI.mergePdfs({ files }); if (r.success) { await loadPdf({ data: r.data, path: null, name: 'merged.pdf' }); showNotification('Merged ' + files.length + ' files'); } } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      setLoading(false);
+    }
+    async function showDocumentProperties() {
+      if (!state.originalData) return;
+      const r = await window.pdfAPI.getDocumentInfo({ data: state.originalData }); if (!r.success) { showNotification('Error getting properties', 'error'); return; }
+      const i = r.info;
+      const content = '<div class="form-group"><label class="form-label">Title</label><input type="text" class="form-input" id="propTitle" value="' + (i.title || '') + '"></div><div class="form-group"><label class="form-label">Author</label><input type="text" class="form-input" id="propAuthor" value="' + (i.author || '') + '"></div><div class="form-group"><label class="form-label">Subject</label><input type="text" class="form-input" id="propSubject" value="' + (i.subject || '') + '"></div><div class="form-section-title" style="margin-top:16px;">Statistics</div><div class="panel-row"><span class="panel-label">Pages:</span><span class="panel-value">' + i.pageCount + '</span></div><div class="panel-row"><span class="panel-label">Creator:</span><span class="panel-value">' + (i.creator || 'Unknown') + '</span></div>';
+      showModal('Document Properties', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Save', action: 'save', primary: true, handler: async m => { const info = { title: m.querySelector('#propTitle').value, author: m.querySelector('#propAuthor').value, subject: m.querySelector('#propSubject').value }; const res = await window.pdfAPI.setDocumentInfo({ data: state.originalData, info }); if (res.success) { state.originalData = res.data; state.hasUnsavedChanges = true; showNotification('Properties updated'); } } }]);
+    }
+    async function showWatermarkDialog() {
+      const content = '<div class="form-group"><label class="form-label">Watermark Text</label><input type="text" class="form-input" id="wmText" value="CONFIDENTIAL"></div><div class="form-row"><div class="form-group"><label class="form-label">Font Size</label><input type="number" class="form-input" id="wmSize" value="48"></div><div class="form-group"><label class="form-label">Opacity %</label><input type="number" class="form-input" id="wmOpacity" value="30"></div></div><div class="form-group"><label class="form-label">Apply to</label><select class="form-select" id="wmPages"><option value="all">All Pages</option><option value="current">Current Page</option></select></div>';
+      showModal('Add Watermark', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Add', action: 'add', primary: true, handler: async m => {
+        const text = m.querySelector('#wmText').value, fontSize = parseInt(m.querySelector('#wmSize').value), opacity = parseInt(m.querySelector('#wmOpacity').value) / 100, pages = m.querySelector('#wmPages').value;
+        setLoading(true, 'Adding watermark...');
+        const mods = []; const list = pages === 'all' ? Array.from({ length: state.pdfDoc.numPages }, (_, i) => i) : [state.currentPage - 1];
+        for (const idx of list) mods.push({ type: 'watermark', pageIndex: idx, text, fontSize, opacity, color: { r: 0.7, g: 0.7, b: 0.7 }, rotation: -45 });
+        const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
+        if (r.success) { state.originalData = r.data; const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); state.hasUnsavedChanges = true; showNotification('Watermark added'); }
+        setLoading(false);
+      } }]);
+    }
+    function showModal(title, content, buttons) {
+      const m = document.createElement('div'); m.className = 'modal-overlay';
+      m.innerHTML = '<div class="modal"><div class="modal-header"><span class="modal-title">' + title + '</span><button class="modal-close">&times;</button></div><div class="modal-body">' + content + '</div><div class="modal-footer">' + buttons.map(b => '<button class="modal-btn' + (b.primary ? ' primary' : '') + '" data-action="' + b.action + '">' + b.label + '</button>').join('') + '</div></div>';
+      m.querySelector('.modal-close').onclick = () => m.remove();
+      m.querySelectorAll('.modal-btn').forEach(btn => { btn.onclick = () => { const h = buttons.find(b => b.action === btn.dataset.action)?.handler; if (h) h(m); m.remove(); }; });
+      $('modalContainer').appendChild(m); return m;
+    }
+
+    function showSignatureDialog() {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      const modal = document.createElement('div');
+      modal.className = 'modal-overlay';
+      modal.innerHTML = `<div class="modal signature-modal"><div class="modal-header"><span class="modal-title">Add Signature</span><button class="modal-close">&times;</button></div><div class="modal-body">
+        <div class="signature-tabs"><button class="signature-tab active" data-tab="draw">Draw</button><button class="signature-tab" data-tab="type">Type</button><button class="signature-tab" data-tab="upload">Upload</button></div>
+        <div id="sigDrawPanel"><canvas class="signature-pad" id="signaturePad"></canvas><div class="signature-actions"><button class="modal-btn" id="sigClear">Clear</button></div></div>
+        <div id="sigTypePanel" class="hidden"><input type="text" class="signature-type-input" id="sigTypeInput" placeholder="Type your name"><select class="form-select" id="sigFont" style="margin-top:8px;"><option value="'Brush Script MT', cursive">Script</option><option value="'Georgia', serif">Formal</option><option value="'Comic Sans MS', cursive">Casual</option></select></div>
+        <div id="sigUploadPanel" class="hidden"><input type="file" id="sigFileInput" accept="image/*" style="margin-bottom:12px;"><div class="signature-preview" id="sigPreview">No image selected</div></div>
+        </div><div class="modal-footer"><button class="modal-btn" id="sigCancel">Cancel</button><button class="modal-btn primary" id="sigApply">Add Signature</button></div></div>`;
+      $('modalContainer').appendChild(modal);
+      const pad = modal.querySelector('#signaturePad');
+      const ctx = pad.getContext('2d');
+      pad.width = 466; pad.height = 150;
+      ctx.fillStyle = 'white'; ctx.fillRect(0, 0, pad.width, pad.height);
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+      let drawing = false, lastX = 0, lastY = 0;
+      pad.onmousedown = e => { drawing = true; lastX = e.offsetX; lastY = e.offsetY; };
+      pad.onmousemove = e => { if (!drawing) return; ctx.beginPath(); ctx.moveTo(lastX, lastY); ctx.lineTo(e.offsetX, e.offsetY); ctx.stroke(); lastX = e.offsetX; lastY = e.offsetY; };
+      pad.onmouseup = () => drawing = false;
+      pad.onmouseleave = () => drawing = false;
+      modal.querySelector('#sigClear').onclick = () => { ctx.fillStyle = 'white'; ctx.fillRect(0, 0, pad.width, pad.height); };
+      let currentTab = 'draw', uploadedImage = null;
+      modal.querySelectorAll('.signature-tab').forEach(tab => {
+        tab.onclick = () => {
+          modal.querySelectorAll('.signature-tab').forEach(t => t.classList.remove('active'));
+          tab.classList.add('active');
+          currentTab = tab.dataset.tab;
+          modal.querySelector('#sigDrawPanel').classList.toggle('hidden', currentTab !== 'draw');
+          modal.querySelector('#sigTypePanel').classList.toggle('hidden', currentTab !== 'type');
+          modal.querySelector('#sigUploadPanel').classList.toggle('hidden', currentTab !== 'upload');
+        };
+      });
+      modal.querySelector('#sigTypeInput').oninput = function() { this.style.fontFamily = modal.querySelector('#sigFont').value; };
+      modal.querySelector('#sigFont').onchange = function() { modal.querySelector('#sigTypeInput').style.fontFamily = this.value; };
+      modal.querySelector('#sigFileInput').onchange = function() {
+        const file = this.files[0]; if (!file) return;
+        const reader = new FileReader();
+        reader.onload = e => { uploadedImage = e.target.result; modal.querySelector('#sigPreview').innerHTML = '<img src="' + uploadedImage + '">'; };
+        reader.readAsDataURL(file);
+      };
+      modal.querySelector('.modal-close').onclick = () => modal.remove();
+      modal.querySelector('#sigCancel').onclick = () => modal.remove();
+      modal.querySelector('#sigApply').onclick = () => {
+        let sigData = null;
+        if (currentTab === 'draw') {
+          sigData = pad.toDataURL('image/png');
+        } else if (currentTab === 'type') {
+          const text = modal.querySelector('#sigTypeInput').value.trim();
+          if (!text) { showNotification('Enter your name', 'warning'); return; }
+          const tempCanvas = document.createElement('canvas');
+          tempCanvas.width = 300; tempCanvas.height = 80;
+          const tctx = tempCanvas.getContext('2d');
+          tctx.fillStyle = 'white'; tctx.fillRect(0, 0, 300, 80);
+          tctx.fillStyle = '#000';
+          tctx.font = '32px ' + modal.querySelector('#sigFont').value;
+          tctx.fillText(text, 10, 50);
+          sigData = tempCanvas.toDataURL('image/png');
+        } else if (currentTab === 'upload') {
+          if (!uploadedImage) { showNotification('Select an image', 'warning'); return; }
+          sigData = uploadedImage;
+        }
+        if (sigData) {
+          state.pendingSignature = sigData;
+          selectTool('signature');
+          showNotification('Click to place signature', 'info');
+        }
+        modal.remove();
+      };
+    }
+    function addSignature(pageNum, x, y, canvas) {
+      if (!state.pendingSignature) return;
+      saveState();
+      if (!state.annotations[pageNum]) state.annotations[pageNum] = [];
+      const w = canvas.width / state.scale, h = canvas.height / state.scale;
+      state.annotations[pageNum].push({ type: 'signature', x: x / w, y: y / h, width: 0.2, height: 0.08, imageData: state.pendingSignature });
+      renderAnnotations(pageNum);
+      updateAnnotationCount();
+      state.hasUnsavedChanges = true;
+      state.pendingSignature = null;
+      selectTool('select');
+      showNotification('Signature added');
+    }
+    // Direct click handler for signature placement on the viewer
+    function setupSignatureClickHandler() {
+      $('viewerScroll').addEventListener('click', e => {
+        if (state.currentTool !== 'signature' || !state.pendingSignature) return;
+        const pageContainer = e.target.closest('.page-container');
+        if (!pageContainer) return;
+        const pageNum = parseInt(pageContainer.dataset.page);
+        const canvas = pageContainer.querySelector('.page-canvas');
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.clientX - rect.left) / state.scale;
+        const y = (e.clientY - rect.top) / state.scale;
+        addSignature(pageNum, x, y, canvas);
+      });
+    }
+    // Text selection editing - like Acrobat Pro
+    function setupTextSelectionEditing() {
+      let editToolbar = null;
+      document.addEventListener('mouseup', e => {
+        if (state.currentTool !== 'select') return;
+        setTimeout(() => {
+          const selection = window.getSelection();
+          const selectedText = selection.toString().trim();
+          // Remove existing toolbar
+          if (editToolbar) { editToolbar.remove(); editToolbar = null; }
+          if (!selectedText || selectedText.length < 1) return;
+          // Check if selection is within a text-layer
+          const range = selection.getRangeAt(0);
+          const container = range.commonAncestorContainer;
+          const textLayer = container.nodeType === 3 ? container.parentElement?.closest('.text-layer') : container.closest?.('.text-layer');
+          if (!textLayer) return;
+          const pageNum = parseInt(textLayer.dataset.page);
+          // Get selection bounds
+          const rects = range.getClientRects();
+          if (rects.length === 0) return;
+          const firstRect = rects[0];
+          const lastRect = rects[rects.length - 1];
+          // Create floating edit toolbar
+          editToolbar = document.createElement('div');
+          editToolbar.className = 'selection-toolbar';
+          editToolbar.style.cssText = `position:fixed;left:${firstRect.left}px;top:${firstRect.top - 36}px;background:#fffefb;border:1px solid #ddd8cc;border-radius:4px;padding:4px 8px;display:flex;gap:6px;z-index:1000;box-shadow:0 2px 8px rgba(0,0,0,0.15);`;
+          const editBtn = document.createElement('button');
+          editBtn.textContent = 'Edit';
+          editBtn.style.cssText = 'padding:4px 12px;background:#2563eb;color:white;border:none;border-radius:3px;cursor:pointer;font-size:12px;';
+          editBtn.onclick = () => {
+            editToolbar.remove(); editToolbar = null;
+            startSelectionEdit(selection, selectedText, pageNum, textLayer);
+          };
+          const highlightBtn = document.createElement('button');
+          highlightBtn.textContent = 'Highlight';
+          highlightBtn.style.cssText = 'padding:4px 12px;background:#fbbf24;color:#000;border:none;border-radius:3px;cursor:pointer;font-size:12px;';
+          highlightBtn.onclick = () => {
+            editToolbar.remove(); editToolbar = null;
+            highlightSelection(selection, pageNum, textLayer);
+          };
+          const strikeBtn = document.createElement('button');
+          strikeBtn.textContent = 'Strike';
+          strikeBtn.style.cssText = 'padding:4px 12px;background:#ef4444;color:white;border:none;border-radius:3px;cursor:pointer;font-size:12px;';
+          strikeBtn.onclick = () => {
+            editToolbar.remove(); editToolbar = null;
+            strikeSelection(selection, pageNum, textLayer);
+          };
+          editToolbar.appendChild(editBtn);
+          editToolbar.appendChild(highlightBtn);
+          editToolbar.appendChild(strikeBtn);
+          document.body.appendChild(editToolbar);
+          // Adjust position if off-screen
+          const tbRect = editToolbar.getBoundingClientRect();
+          if (tbRect.top < 0) editToolbar.style.top = (lastRect.bottom + 4) + 'px';
+          if (tbRect.right > window.innerWidth) editToolbar.style.left = (window.innerWidth - tbRect.width - 10) + 'px';
+        }, 10);
+      });
+      document.addEventListener('mousedown', e => {
+        if (editToolbar && !editToolbar.contains(e.target)) {
+          editToolbar.remove(); editToolbar = null;
+        }
+      });
+    }
+    function startSelectionEdit(selection, selectedText, pageNum, textLayer) {
+      const range = selection.getRangeAt(0);
+      const rects = range.getClientRects();
+      if (rects.length === 0) return;
+      // Get bounding box of selection
+      let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
+      for (const r of rects) {
+        minX = Math.min(minX, r.left); minY = Math.min(minY, r.top);
+        maxX = Math.max(maxX, r.right); maxY = Math.max(maxY, r.bottom);
+      }
+      const containerRect = textLayer.getBoundingClientRect();
+      // Create edit overlay
+      const overlay = document.createElement('div');
+      overlay.className = 'text-edit-overlay';
+      overlay.style.cssText = `position:fixed;left:${minX - 2}px;top:${minY - 2}px;background:white;border:2px solid #2563eb;border-radius:2px;padding:0;z-index:200;box-shadow:0 2px 8px rgba(0,0,0,0.2);`;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = selectedText;
+      input.style.cssText = `font-size:14px;padding:4px 8px;border:none;outline:none;min-width:${maxX - minX + 20}px;background:transparent;color:#000;`;
+      overlay.appendChild(input);
+      const pageContainer = document.getElementById('page-' + pageNum);
+      const pageCanvas = pageContainer.querySelector('.page-canvas');
+      const canvasW = pageCanvas.width / state.scale;
+      const canvasH = pageCanvas.height / state.scale;
+      const selX = (minX - containerRect.left) / state.scale;
+      const selY = (minY - containerRect.top) / state.scale;
+      const selW = (maxX - minX) / state.scale;
+      const selH = (maxY - minY) / state.scale;
+      const finishEdit = () => {
+        const newText = input.value.trim();
+        if (newText && newText !== selectedText) {
+          saveState();
+          if (!state.annotations[pageNum]) state.annotations[pageNum] = [];
+          // Cover original text
+          state.annotations[pageNum].push({ type: 'cover', x: (selX - 2) / canvasW, y: (selY - 2) / canvasH, width: (selW + 4) / canvasW, height: (selH + 4) / canvasH, color: { r: 1, g: 1, b: 1 } });
+          // Add new text
+          state.annotations[pageNum].push({ type: 'text', text: newText, x: selX / canvasW, y: (selY + selH) / canvasH, fontSize: Math.round(selH * 0.8), color: { r: 0, g: 0, b: 0 } });
+          renderAnnotations(pageNum);
+          updateAnnotationCount();
+          state.hasUnsavedChanges = true;
+          showNotification('Text replaced');
+        }
+        overlay.remove();
+        window.getSelection().removeAllRanges();
+      };
+      input.onblur = () => setTimeout(finishEdit, 50);
+      input.onkeydown = e => {
+        if (e.key === 'Enter') { e.preventDefault(); finishEdit(); }
+        if (e.key === 'Escape') { overlay.remove(); window.getSelection().removeAllRanges(); }
+        e.stopPropagation();
+      };
+      document.body.appendChild(overlay);
+      input.focus();
+      input.select();
+    }
+    function highlightSelection(selection, pageNum, textLayer) {
+      const range = selection.getRangeAt(0);
+      const rects = range.getClientRects();
+      if (rects.length === 0) return;
+      saveState();
+      if (!state.annotations[pageNum]) state.annotations[pageNum] = [];
+      const containerRect = textLayer.getBoundingClientRect();
+      const pageContainer = document.getElementById('page-' + pageNum);
+      const pageCanvas = pageContainer.querySelector('.page-canvas');
+      const canvasW = pageCanvas.width / state.scale;
+      const canvasH = pageCanvas.height / state.scale;
+      for (const r of rects) {
+        const x = (r.left - containerRect.left) / state.scale;
+        const y = (r.top - containerRect.top) / state.scale;
+        const w = r.width / state.scale;
+        const h = r.height / state.scale;
+        state.annotations[pageNum].push({ type: 'highlight', x: x / canvasW, y: y / canvasH, width: w / canvasW, height: h / canvasH, color: { r: 1, g: 0.94, b: 0.2 } });
+      }
+      renderAnnotations(pageNum);
+      updateAnnotationCount();
+      state.hasUnsavedChanges = true;
+      showNotification('Text highlighted');
+      window.getSelection().removeAllRanges();
+    }
+    function strikeSelection(selection, pageNum, textLayer) {
+      const range = selection.getRangeAt(0);
+      const rects = range.getClientRects();
+      if (rects.length === 0) return;
+      saveState();
+      if (!state.annotations[pageNum]) state.annotations[pageNum] = [];
+      const containerRect = textLayer.getBoundingClientRect();
+      const pageContainer = document.getElementById('page-' + pageNum);
+      const pageCanvas = pageContainer.querySelector('.page-canvas');
+      const canvasW = pageCanvas.width / state.scale;
+      const canvasH = pageCanvas.height / state.scale;
+      for (const r of rects) {
+        const x = (r.left - containerRect.left) / state.scale;
+        const y = (r.top - containerRect.top) / state.scale;
+        const w = r.width / state.scale;
+        const h = r.height / state.scale;
+        state.annotations[pageNum].push({ type: 'strikethrough', x: x / canvasW, y: y / canvasH, width: w / canvasW, height: h / canvasH, color: { r: 1, g: 0, b: 0 }, strokeWidth: 2 });
+      }
+      renderAnnotations(pageNum);
+      updateAnnotationCount();
+      state.hasUnsavedChanges = true;
+      showNotification('Strikethrough added');
+      window.getSelection().removeAllRanges();
+    }
+
+    function setZoom(z) { state.scale = Math.max(0.25, Math.min(4, z)); $('zoomDisplay').textContent = Math.round(state.scale * 100) + '%'; renderAllPages(); }
+    function selectTool(tool) {
+      state.currentTool = tool;
+      document.querySelectorAll('.tool-btn[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === tool));
+      const isDrawingTool = tool !== 'select' && tool !== 'hand';
+      document.querySelectorAll('.annotation-layer').forEach(l => { l.classList.toggle('active', isDrawingTool); });
+      // Disable text layer when using drawing tools so clicks go through to annotation layer
+      document.querySelectorAll('.text-layer').forEach(l => { l.style.pointerEvents = isDrawingTool ? 'none' : 'auto'; });
+      $('currentToolDisplay').textContent = tool.charAt(0).toUpperCase() + tool.slice(1);
+    }
+    function showContextMenu(e, pageNum) {
+      e.preventDefault();
+      hideContextMenu();
+      const menu = document.createElement('div');
+      menu.className = 'context-menu';
+      menu.id = 'contextMenu';
+      const hasDoc = !!state.pdfDoc;
+      const selectedText = window.getSelection().toString();
+      const items = [
+        { label: 'Copy Text', icon: 'copy', action: () => { if (selectedText) navigator.clipboard.writeText(selectedText); }, disabled: !selectedText },
+        { label: 'Select All', icon: 'selectall', action: () => document.execCommand('selectAll') },
+        { type: 'separator' },
+        { label: 'Add Text', icon: 'text', action: () => selectTool('text'), disabled: !hasDoc },
+        { label: 'Add Signature', icon: 'signature', action: showSignatureDialog, disabled: !hasDoc },
+        { label: 'Add Highlight', icon: 'highlight', action: () => selectTool('highlight'), disabled: !hasDoc },
+        { type: 'separator' },
+        { label: 'Rotate Page', icon: 'rotate', action: () => rotatePage(90), disabled: !hasDoc },
+        { label: 'Delete Page', icon: 'delete', action: deletePage, disabled: !hasDoc || state.pdfDoc?.numPages <= 1 },
+        { type: 'separator' },
+        { label: 'Zoom In', icon: 'zoomin', action: () => setZoom(state.scale + 0.25), disabled: !hasDoc },
+        { label: 'Zoom Out', icon: 'zoomout', action: () => setZoom(state.scale - 0.25), disabled: !hasDoc },
+      ];
+      for (const item of items) {
+        if (item.type === 'separator') {
+          const sep = document.createElement('div');
+          sep.className = 'context-menu-separator';
+          menu.appendChild(sep);
+        } else {
+          const div = document.createElement('div');
+          div.className = 'context-menu-item' + (item.disabled ? ' disabled' : '');
+          div.textContent = item.label;
+          if (!item.disabled) {
+            div.onclick = () => { hideContextMenu(); item.action(); };
+          }
+          menu.appendChild(div);
+        }
+      }
+      menu.style.left = e.clientX + 'px';
+      menu.style.top = e.clientY + 'px';
+      document.body.appendChild(menu);
+      // Adjust if menu goes off screen
+      const rect = menu.getBoundingClientRect();
+      if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 10) + 'px';
+      if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 10) + 'px';
+    }
+    function hideContextMenu() {
+      const menu = document.getElementById('contextMenu');
+      if (menu) menu.remove();
+    }
+    document.addEventListener('click', hideContextMenu);
+    document.addEventListener('contextmenu', e => {
+      const pageContainer = e.target.closest('.page-container');
+      if (pageContainer || e.target.closest('.viewer-scroll')) {
+        showContextMenu(e, pageContainer ? parseInt(pageContainer.dataset.page) : state.currentPage);
+      }
+    });
+
+    function showSearch() { $('searchBar').classList.remove('hidden'); $('searchInput').focus(); }
+    function hideSearch() { $('searchBar').classList.add('hidden'); }
+    async function performSearch() { const q = $('searchInput').value.trim().toLowerCase(); if (!q || !state.pdfDoc) return; const matches = []; for (let i = 1; i <= state.pdfDoc.numPages; i++) { const p = await state.pdfDoc.getPage(i); const tc = await p.getTextContent(); const t = tc.items.map(it => it.str).join(' ').toLowerCase(); if (t.includes(q)) matches.push(i); } $('searchResults').textContent = matches.length ? '1 of ' + matches.length : 'No matches'; if (matches.length) goToPage(matches[0]); }
+
+    $('newBtn').onclick = createNewPdf; $('openBtn').onclick = openFile; $('welcomeOpenBtn').onclick = openFile; $('welcomeNewBtn').onclick = createNewPdf; $('welcomeMergeBtn').onclick = mergePdfs;
+    $('saveBtn').onclick = () => saveDocument(); $('printBtn').onclick = () => window.pdfAPI.printDocument();
+    $('undoBtn').onclick = undo; $('redoBtn').onclick = redo;
+    $('zoomInBtn').onclick = () => setZoom(state.scale + 0.25); $('zoomOutBtn').onclick = () => setZoom(state.scale - 0.25);
+    document.querySelectorAll('.tool-btn[data-tool]').forEach(b => { b.onclick = () => selectTool(b.dataset.tool); });
+    $('rotateLeftBtn').onclick = () => rotatePage(-90); $('rotateRightBtn').onclick = () => rotatePage(90);
+    $('deletePageBtn').onclick = deletePage; $('insertPageBtn').onclick = insertBlankPage;
+    $('clearAnnotationsBtn').onclick = clearAllAnnotations;
+    $('addWatermarkBtn').onclick = showWatermarkDialog; $('propertiesBtn').onclick = showDocumentProperties;
+    $('searchBtn').onclick = showSearch; $('searchClose').onclick = hideSearch; $('searchInput').onkeydown = e => { if (e.key === 'Enter') performSearch(); if (e.key === 'Escape') hideSearch(); };
+    $('imageBtn').onclick = async () => { const img = await window.pdfAPI.selectImage(); if (img) { state.pendingImage = img; selectTool('image'); showNotification('Click to place image', 'info'); } };
+    $('signatureBtn').onclick = showSignatureDialog;
+    document.querySelectorAll('.sidebar-tab').forEach(tab => { tab.onclick = () => { document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active')); tab.classList.add('active'); $('thumbnailContainer').classList.toggle('hidden', tab.dataset.tab !== 'thumbnails'); $('bookmarksContainer').classList.toggle('hidden', tab.dataset.tab !== 'bookmarks'); }; });
+    document.addEventListener('keydown', e => {
+      if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+      if (e.ctrlKey || e.metaKey) { switch (e.key.toLowerCase()) { case 'n': e.preventDefault(); createNewPdf(); break; case 'o': e.preventDefault(); openFile(); break; case 's': e.preventDefault(); saveDocument(e.shiftKey); break; case 'z': e.preventDefault(); undo(); break; case 'y': e.preventDefault(); redo(); break; case 'f': e.preventDefault(); showSearch(); break; case '=': case '+': e.preventDefault(); setZoom(state.scale + 0.25); break; case '-': e.preventDefault(); setZoom(state.scale - 0.25); break; case '0': e.preventDefault(); setZoom(1); break; } }
+      else { switch (e.key.toLowerCase()) { case 'v': selectTool('select'); break; case 'h': selectTool('hand'); break; case 't': selectTool('text'); break; case 'p': selectTool('draw'); break; case 'e': selectTool('eraser'); break; case 'l': selectTool('line'); break; case 'a': selectTool('arrow'); break; case 'r': selectTool('rectangle'); break; case 'c': selectTool('circle'); break; } }
+    });
+
+    window.pdfAPI.onMenuNew(createNewPdf); window.pdfAPI.onMenuOpen(openFile); window.pdfAPI.onMenuSave(() => saveDocument()); window.pdfAPI.onMenuSaveAs(() => saveDocument(true));
+    window.pdfAPI.onMenuMerge(mergePdfs); window.pdfAPI.onMenuPrint(() => window.pdfAPI.printDocument()); window.pdfAPI.onMenuProperties(showDocumentProperties);
+    window.pdfAPI.onMenuSplit(showSplitDialog); window.pdfAPI.onMenuExtractPages(showExtractPagesDialog);
+    window.pdfAPI.onMenuSetPassword(showSetPasswordDialog); window.pdfAPI.onMenuRemovePassword(showRemovePasswordDialog);
+    window.pdfAPI.onMenuOpenRecent(async p => { try { const r = await window.pdfAPI.openSpecificFile(p); if (r && r.data) await loadPdf(r); else showNotification('File not accessible: ' + p, 'error'); } catch (e) { showNotification('Error: ' + e.message, 'error'); } });
+    window.pdfAPI.onMenuExportImages(exportImages);
+    window.pdfAPI.onMenuToggleBookmarks(() => activateSidebarTab('bookmarks')); window.pdfAPI.onMenuToggleThumbnails(() => activateSidebarTab('thumbnails'));
+    window.pdfAPI.onMenuInsertFromFile(showInsertFromFile);
+    window.pdfAPI.onMenuAddPageNumbers(showPageNumbersDialog); window.pdfAPI.onMenuAddHeaderFooter(showHeaderFooterDialog);
+    window.pdfAPI.onMenuGotoPage(showGotoPageDialog);
+    window.pdfAPI.onMenuShortcuts(showShortcutsDialog);
+
+    // Drag & drop PDF open
+    document.addEventListener('dragover', e => e.preventDefault());
+    document.addEventListener('drop', async e => {
+      e.preventDefault();
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!f || !/\.pdf$/i.test(f.name)) { if (f) showNotification('Only PDF files can be opened', 'warning'); return; }
+      const dataUrl = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(f); });
+      await loadPdf({ data: dataUrl.split(',')[1], path: null, name: f.name });
+    });
+    window.pdfAPI.onMenuUndo(undo); window.pdfAPI.onMenuRedo(redo); window.pdfAPI.onMenuFind(showSearch);
+    window.pdfAPI.onMenuZoomIn(() => setZoom(state.scale + 0.25)); window.pdfAPI.onMenuZoomOut(() => setZoom(state.scale - 0.25)); window.pdfAPI.onMenuZoomReset(() => setZoom(1));
+    window.pdfAPI.onMenuTool(selectTool); window.pdfAPI.onMenuRotate(rotatePage); window.pdfAPI.onMenuDeletePage(deletePage); window.pdfAPI.onMenuInsertPage(insertBlankPage);
+    window.pdfAPI.onMenuAddWatermark(showWatermarkDialog);
+    window.pdfAPI.onMenuStamp(s => { state.pendingStamp = s; selectTool('stamp'); showNotification('Click to place stamp', 'info'); });
+    window.pdfAPI.onMenuAddImage(async () => { const img = await window.pdfAPI.selectImage(); if (img) { state.pendingImage = img; selectTool('image'); showNotification('Click to place image', 'info'); } });
+    window.pdfAPI.onMenuGoto(d => { if (d === 'first') goToPage(1); else if (d === 'last') goToPage(state.pdfDoc.numPages); else if (d === 'prev' && state.currentPage > 1) goToPage(state.currentPage - 1); else if (d === 'next' && state.currentPage < state.pdfDoc.numPages) goToPage(state.currentPage + 1); });
+
+    initPdfJs();
+    setupSignatureClickHandler();
+    setupTextSelectionEditing();
+
+    // Auto-open file passed on the command line
+    (async () => { const f = await window.pdfAPI.getInitialFile(); if (f) { const r = await window.pdfAPI.openSpecificFile(f); if (r && r.data) await loadPdf(r); } })();
+  </script>
+</body>
+</html>
