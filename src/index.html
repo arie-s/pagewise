@@ -615,8 +615,8 @@
     async function runSmartExtract() {
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
       const st = await window.pdfAPI.engineStatus();
-      if (!st.installed || !st.running) {
-        showNotification('Smart Extract needs the AI engine (one-time ~4.5GB download)', 'warning');
+      if (!st.installed) {
+        showNotification(st.hasFiles ? 'Smart Extract needs an AI engine update (small download)' : 'Smart Extract needs the AI engine (one-time ~4.5GB download)', 'warning');
         showEngineSetup();
         return;
       }
