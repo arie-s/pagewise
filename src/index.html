@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:;">
   <title>Pagewise</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1060,7 +1060,7 @@
       const x = (e.clientX - rect.left) / state.scale, y = (e.clientY - rect.top) / state.scale;
       if (state.currentTool === 'select' || state.currentTool === 'hand') return;
       if (state.currentTool === 'eraser') { eraseAtPoint(pageNum, x, y); return; }
-      if (state.currentTool === 'text') { createTextInput(canvas, x, y, pageNum); return; }
+      if (state.currentTool === 'text') { e.preventDefault(); createTextInput(canvas, x, y, pageNum); return; }
       if (state.currentTool === 'stamp' && state.pendingStamp) { addStamp(pageNum, x, y, canvas); return; }
       if (state.currentTool === 'image' && state.pendingImage) { addImage(pageNum, x, y, canvas); return; }
       if (state.currentTool === 'signature' && state.pendingSignature) { addSignature(pageNum, x, y, canvas); return; }
@@ -1137,8 +1137,13 @@
         else if (a.type === 'stamp') { ctx.fillStyle = `rgba(${a.color.r * 255},${a.color.g * 255},${a.color.b * 255},0.7)`; ctx.font = 'bold ' + a.fontSize + 'px sans-serif'; ctx.save(); ctx.translate(a.x * w, a.y * h); ctx.rotate((a.rotation || -15) * Math.PI / 180); ctx.fillText(a.text, 0, 0); ctx.restore(); }
         else if (a.type === 'signature' && a.imageData) {
           const img = new Image();
-          img.onload = () => { ctx.drawImage(img, a.x * w, a.y * h, a.width * w, a.height * h); };
+          img.onload = () => { ctx.save(); ctx.scale(state.scale, state.scale); ctx.drawImage(img, a.x * w, a.y * h, a.width * w, a.height * h); ctx.restore(); };
           img.src = a.imageData;
+        }
+        else if (a.type === 'image' && a.imageData) {
+          const img = new Image();
+          img.onload = () => { ctx.save(); ctx.scale(state.scale, state.scale); ctx.drawImage(img, a.x * w, a.y * h, a.width * w, a.height * h); ctx.restore(); };
+          img.src = 'data:image/' + (a.imageType === 'png' ? 'png' : 'jpeg') + ';base64,' + a.imageData;
         }
       }
       const redacts = state.redactionMarks[pageNum] || [];
@@ -1274,14 +1279,14 @@
       const pad = modal.querySelector('#signaturePad');
       const ctx = pad.getContext('2d');
       pad.width = 466; pad.height = 150;
-      ctx.fillStyle = 'white'; ctx.fillRect(0, 0, pad.width, pad.height);
+      pad.style.background = 'white';
       ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.lineCap = 'round';
       let drawing = false, lastX = 0, lastY = 0;
       pad.onmousedown = e => { drawing = true; lastX = e.offsetX; lastY = e.offsetY; };
       pad.onmousemove = e => { if (!drawing) return; ctx.beginPath(); ctx.moveTo(lastX, lastY); ctx.lineTo(e.offsetX, e.offsetY); ctx.stroke(); lastX = e.offsetX; lastY = e.offsetY; };
       pad.onmouseup = () => drawing = false;
       pad.onmouseleave = () => drawing = false;
-      modal.querySelector('#sigClear').onclick = () => { ctx.fillStyle = 'white'; ctx.fillRect(0, 0, pad.width, pad.height); };
+      modal.querySelector('#sigClear').onclick = () => { ctx.clearRect(0, 0, pad.width, pad.height); };
       let currentTab = 'draw', uploadedImage = null;
       modal.querySelectorAll('.signature-tab').forEach(tab => {
         tab.onclick = () => {
@@ -1313,7 +1318,6 @@
           const tempCanvas = document.createElement('canvas');
           tempCanvas.width = 300; tempCanvas.height = 80;
           const tctx = tempCanvas.getContext('2d');
-          tctx.fillStyle = 'white'; tctx.fillRect(0, 0, 300, 80);
           tctx.fillStyle = '#000';
           tctx.font = '32px ' + modal.querySelector('#sigFont').value;
           tctx.fillText(text, 10, 50);

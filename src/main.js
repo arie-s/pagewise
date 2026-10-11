@@ -49,6 +49,11 @@ function persistBoundsSoon() {
   }, 500);
 }
 
+// Single-letter tool shortcuts are handled by the renderer, which ignores keys typed into
+// text fields. Menu accelerators would capture them first, so only display them (Windows/Linux);
+// macOS can't display without registering, so it omits them.
+const toolKey = key => process.platform === 'darwin' ? {} : { accelerator: key, registerAccelerator: false };
+
 function createWindow() {
   forceClose = false; unsavedFlag = false;
   const b = settings.bounds || {};
@@ -217,12 +222,12 @@ function createWindow() {
           submenu: [
             {
               label: 'Select',
-              accelerator: 'V',
+              ...toolKey('V'),
               click: () => mainWindow.webContents.send('menu-tool', 'select')
             },
             {
               label: 'Hand Tool',
-              accelerator: 'H',
+              ...toolKey('H'),
               click: () => mainWindow.webContents.send('menu-tool', 'hand')
             }
           ]
@@ -232,7 +237,7 @@ function createWindow() {
           submenu: [
             {
               label: 'Add Text',
-              accelerator: 'T',
+              ...toolKey('T'),
               click: () => mainWindow.webContents.send('menu-tool', 'text')
             },
             {
@@ -254,12 +259,12 @@ function createWindow() {
           submenu: [
             {
               label: 'Pen',
-              accelerator: 'P',
+              ...toolKey('P'),
               click: () => mainWindow.webContents.send('menu-tool', 'draw')
             },
             {
               label: 'Eraser',
-              accelerator: 'E',
+              ...toolKey('E'),
               click: () => mainWindow.webContents.send('menu-tool', 'eraser')
             }
           ]
@@ -269,22 +274,22 @@ function createWindow() {
           submenu: [
             {
               label: 'Rectangle',
-              accelerator: 'R',
+              ...toolKey('R'),
               click: () => mainWindow.webContents.send('menu-tool', 'rectangle')
             },
             {
               label: 'Circle',
-              accelerator: 'C',
+              ...toolKey('C'),
               click: () => mainWindow.webContents.send('menu-tool', 'circle')
             },
             {
               label: 'Line',
-              accelerator: 'L',
+              ...toolKey('L'),
               click: () => mainWindow.webContents.send('menu-tool', 'line')
             },
             {
               label: 'Arrow',
-              accelerator: 'A',
+              ...toolKey('A'),
               click: () => mainWindow.webContents.send('menu-tool', 'arrow')
             }
           ]
