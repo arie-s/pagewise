@@ -15,7 +15,7 @@
     "name": "arie-s",
     "email": "44439774+arie-s@users.noreply.github.com"
   },
-  "homepage": "https://github.com/arie-s/pdf-studio-pro",
+  "homepage": "https://github.com/arie-s/local-pdf-desk",
   "license": "MIT",
   "devDependencies": {
     "electron": "^28.0.0",

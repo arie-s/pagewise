@@ -25,7 +25,7 @@ Install [Node.js 24 or newer](https://nodejs.org/en/download) with npm, and Git.
 The same commands work in Windows PowerShell, a Linux terminal and macOS Terminal:
 
 ```sh
-git clone https://github.com/arie-s/pdf-studio-pro.git local-pdf-desk
+git clone https://github.com/arie-s/local-pdf-desk.git local-pdf-desk
 cd local-pdf-desk
 npm ci
 npm start
