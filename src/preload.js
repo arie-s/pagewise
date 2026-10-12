@@ -30,6 +30,9 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   detectFormFields: (options) => ipcRenderer.invoke('detect-form-fields', options),
   addFormFields: (options) => ipcRenderer.invoke('add-form-fields', options),
   removeFormField: (options) => ipcRenderer.invoke('remove-form-field', options),
+  detailsGet: () => ipcRenderer.invoke('details-get'),
+  detailsSet: (details) => ipcRenderer.invoke('details-set', details),
+  autofillPlan: (options) => ipcRenderer.invoke('autofill-plan', options),
   setDocumentInfo: (options) => ipcRenderer.invoke('set-document-info', options),
 
   // OCR
@@ -127,6 +130,8 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   onMenuResizePage: (callback) => ipcRenderer.on('menu-resize-page', callback),
   onMenuFlattenForm: (callback) => ipcRenderer.on('menu-flatten-form', callback),
   onMenuMakeFillable: (callback) => ipcRenderer.on('menu-make-fillable', callback),
+  onMenuMyDetails: (callback) => ipcRenderer.on('menu-my-details', callback),
+  onMenuAutofill: (callback) => ipcRenderer.on('menu-autofill', callback),
   onMenuAddWatermark: (callback) => ipcRenderer.on('menu-add-watermark', callback),
   onMenuAddHeaderFooter: (callback) => ipcRenderer.on('menu-add-header-footer', callback),
   onMenuAddPageNumbers: (callback) => ipcRenderer.on('menu-add-page-numbers', callback),

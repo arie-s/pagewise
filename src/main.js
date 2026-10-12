@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, clipboard, net, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, clipboard, net, nativeImage, safeStorage } = require('electron');
 const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -415,6 +415,14 @@ function createWindow() {
         {
           label: 'Make Fillable (detect form fields)',
           click: () => mainWindow.webContents.send('menu-make-fillable')
+        },
+        {
+          label: 'My Details...',
+          click: () => mainWindow.webContents.send('menu-my-details')
+        },
+        {
+          label: 'Fill from My Details',
+          click: () => mainWindow.webContents.send('menu-autofill')
         },
         {
           label: 'Flatten Form',
@@ -1591,13 +1599,24 @@ function labelFor(field, words, u = 1, n = 1) {
     }
     return join(run.sort((a, b) => a.box[0] - b.box[0]));
   };
-  const above = () => {
-    const cand = words.filter(w => w.text && w.text.trim() && w.box[3] <= fy0 + 2 && fy0 - w.box[3] <= 30 * u && w.box[2] > fx0 && w.box[0] < fx1);
+  const above = () => { // the nearest line above the box, plus up to 2 lines directly over it (a wrapped label)
+    const inX = w => w.text && w.text.trim() && w.box[2] > fx0 && w.box[0] < fx1;
+    const cand = words.filter(w => inX(w) && w.box[3] <= fy0 + 2 && fy0 - w.box[3] <= 30 * u);
     if (!cand.length) return '';
-    const near = cand.reduce((a, b) => b.box[3] > a.box[3] ? b : a);
-    return join(cand.filter(w => sameLine(w, near)).sort((a, b) => a.box[0] - b.box[0]));
+    const lineOf = near => words.filter(w => inX(w) && sameLine(w, near));
+    let near = cand.reduce((a, b) => b.box[3] > a.box[3] ? b : a), lines = [lineOf(near)];
+    const numbered = l => /^\d{1,2}[a-z]?[.)]?$/.test(l.reduce((a, b) => b.box[0] < a.box[0] ? b : a).text); // an item number starts the label
+    while (lines.length < 3 && !numbered(lines[0])) {
+      const top = Math.min(...lines[0].map(w => w.box[1]));
+      const up = words.filter(w => inX(w) && w.box[3] <= top + 2 && !lines[0].includes(w));
+      if (!up.length) break;
+      near = up.reduce((a, b) => b.box[3] > a.box[3] ? b : a);
+      if (top - near.box[3] >= 0.8 * hOf(near)) break;
+      lines.unshift(lineOf(near));
+    }
+    return join(lines.flatMap(l => l.sort((a, b) => a.box[0] - b.box[0])));
   };
-  const order = field.kind === 'check' ? [() => side(1), () => side(-1), above] : [() => side(-1), above];
+  const order = field.kind === 'check' ? [() => side(1), () => side(-1), above] : field.aboveFirst ? [above, () => side(-1)] : [() => side(-1), above];
   for (const f of order) { const l = f(); if (l) return l; }
   return `Field ${n}`;
 }
@@ -1661,6 +1680,171 @@ ipcMain.handle('remove-form-field', async (event, { data, name }) => {
     const form = pdfDoc.getForm();
     form.removeField(form.getField(name));
     return { success: true, data: Buffer.from(await pdfDoc.save()).toString('base64') };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// ---------- My Details autofill: stored locally, matched to form labels by rules (no AI) ----------
+const DETAIL_KEYS = ['firstName', 'middleName', 'lastName', 'email', 'phone', 'street', 'city', 'state', 'zip', 'country', 'dateOfBirth', 'ssn', 'company', 'jobTitle'];
+const DATE_FORMATS = ['MM/DD/YYYY', 'DD/MM/YYYY', 'YYYY-MM-DD'];
+const emptyDetails = () => ({ ...Object.fromEntries(DETAIL_KEYS.map(k => [k, ''])), dateFormat: DATE_FORMATS[0], custom: [] });
+const detailsPath = () => path.join(app.getPath('userData'), 'my-details.json');
+const canEncrypt = () => { try { return !!(safeStorage && safeStorage.isEncryptionAvailable()); } catch (e) { return false; } };
+function cleanDetails(raw) {
+  const out = emptyDetails(), src = raw && typeof raw === 'object' ? raw : {};
+  for (const k of DETAIL_KEYS) if (typeof src[k] === 'string' && src[k].trim().length <= 500) out[k] = src[k].trim();
+  if (DATE_FORMATS.includes(src.dateFormat)) out.dateFormat = src.dateFormat;
+  if (Array.isArray(src.custom)) {
+    for (const c of src.custom) {
+      if (out.custom.length >= 200) break;
+      if (c && typeof c.label === 'string' && typeof c.value === 'string' && c.label.trim() && c.value.trim() && c.label.trim().length <= 100 && c.value.trim().length <= 500) out.custom.push({ label: c.label.trim(), value: c.value.trim() });
+    }
+  }
+  return out;
+}
+function loadDetails() {
+  let text;
+  try { text = fs.readFileSync(detailsPath(), 'utf8'); } catch (e) { return { details: emptyDetails(), encrypted: canEncrypt() }; }
+  try {
+    const file = JSON.parse(text);
+    if (typeof file.enc === 'string') return { details: cleanDetails(JSON.parse(safeStorage.decryptString(Buffer.from(file.enc, 'base64')))), encrypted: true };
+    if (file.plain && typeof file.plain === 'object') return { details: cleanDetails(file.plain), encrypted: false };
+    throw new Error('unrecognized file');
+  } catch (e) {
+    // Keep the unreadable file (e.g. the keyring changed) so the next save can't destroy it
+    const kept = detailsPath().replace(/\.json$/, `.unreadable-${Date.now()}.json`);
+    try { fs.renameSync(detailsPath(), kept); } catch (err) { /* keep going with empty details */ }
+    return { details: emptyDetails(), encrypted: canEncrypt(), warning: `Your saved details could not be read (${e.message}). The file was kept as ${path.basename(kept)}.` };
+  }
+}
+function saveDetails(raw) {
+  const details = cleanDetails(raw), encrypted = canEncrypt();
+  const file = encrypted ? { v: 1, enc: safeStorage.encryptString(JSON.stringify(details)).toString('base64') } : { v: 1, plain: details };
+  fs.mkdirSync(path.dirname(detailsPath()), { recursive: true });
+  fs.writeFileSync(detailsPath(), JSON.stringify(file), { mode: 0o600 });
+  return { details, encrypted };
+}
+ipcMain.handle('details-get', async () => {
+  try { return { success: true, ...loadDetails() }; } catch (error) { return { success: false, error: error.message }; }
+});
+ipcMain.handle('details-set', async (event, details) => {
+  try { const { encrypted } = saveDetails(details); return { success: true, encrypted }; } catch (error) { return { success: false, error: error.message }; }
+});
+
+// Label -> detail key, or null. Missing stays missing: only labels that clearly ask for the user's own detail match.
+const OTHER_PERSON = /\b(spouse|decedent|deceased|representative|requester|preparer|beneficiary|child|children|dependents?|parent|guardian|emergency|witness|notary|landlord)\b/;
+const OTHER_PARTY = /\b(spouse|decedent|deceased|prior|former|previous|old|representative|requester|preparer|agent|employer|payer|beneficiary|child|dependent|parent|guardian|emergency|witness|notary|landlord|foreign|signature|initials)\b|\bsign here\b|\bbusiness name\b|\bdisregarded entity\b/;
+function classifyLabel(label) {
+  const full = String(label || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const head = full.split(/\(|\. /)[0].trim(); // instructions follow the first '(' or sentence, and may mention anyone
+  if (OTHER_PERSON.test(full)) return null; // "Name (first and last name of spouse)": another person anywhere in the label
+  const key = classifyHead(head);
+  if (key === 'street' && /\b(city|town)\b/.test(full)) return 'fullAddress';
+  if (key === null && /^(your |the )?name( of (entity\/)?individual)?\W*$/.test(head) && /\bfirst\b/.test(full) && /\blast\b/.test(full)) return 'fullName';
+  return key;
+}
+function classifyHead(t) {
+  if (!t || OTHER_PARTY.test(t)) return null;
+  if (/\bname\b/.test(t) && /\bfirst\b/.test(t) && /\blast\b/.test(t)) return 'fullName';
+  if (/\b(first name|given name|forename)\b/.test(t)) return 'firstName';
+  if (/\b(last name|surname|family name)\b/.test(t)) return 'lastName';
+  if (/\bmiddle (name|initial)\b/.test(t)) return 'middleName';
+  if (/\bname\b/.test(t)) {
+    const other = /\b(file|user|company|organi[sz]ation|entity|business|account|domain|host|project|product|school|bank|trade|street|city|state|country|maiden|birth|alias|nick)\s*name\b|\bname of (the )?(file|company|organi[sz]ation|business|school|bank|project|product|entity)\b/.test(t);
+    if (!other || /\bindividual\b/.test(t)) return 'fullName';
+  }
+  const mail = /\be-?mail\b/.test(t), phone = /\b(phone|telephone|mobile|cell)\b/.test(t);
+  if (mail) return phone ? null : 'email';
+  if (phone) return 'phone';
+  if (/\b(birth|dob)\b/.test(t)) return /\b(place|city|state|country|town)\b.*\bbirth|birthplace/.test(t) ? null : 'dateOfBirth';
+  if (/\bsocial security\b|\bssn\b|\btaxpayer identification number\b|\btin\b/.test(t)) return 'ssn';
+  const web = /\b(web|website|url|ip)\b/.test(t);
+  if (!web) {
+    const city = /\b(city|town)\b/.test(t);
+    if (/\b(address|street)\b/.test(t)) return city ? 'fullAddress' : 'street';
+    if (city && /\b(state|zip|postal)\b/.test(t)) return 'cityStateZip';
+  }
+  if (/\b(city|town)\b/.test(t)) return 'city';
+  if (/\b(zip|postal code|postcode)\b/.test(t)) return 'zip';
+  if (/\bstate (of|id|tax|license)\b/.test(t)) return null;
+  if (/\bstate\b|\bprovince\b/.test(t)) return 'state';
+  if (/\bcountry\b/.test(t)) return 'country';
+  if (/\b(company|organi[sz]ation)\b/.test(t)) return 'company';
+  if (/\b(job title|occupation|position)\b|^title\W*$/.test(t)) return 'jobTitle';
+  if (/\btoday\b/.test(t) || (/^date\b/.test(t) && !/\b(of|death|expir\w*|issue\w*|start|end|effective|due|marriage|moved?|change\w*|received|entry)\b/.test(t))) return 'today';
+  return null;
+}
+const normLabel = s => String(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+function customMatch(custom, label) {
+  const n = normLabel(label), words = new Set(n.split(' '));
+  for (const c of custom || []) {
+    const cn = normLabel(c.label);
+    if (cn && (cn === n || cn.split(' ').every(w => words.has(w)))) return c;
+  }
+  return null;
+}
+function derivedValues(d, now) {
+  const initial = d.middleName ? d.middleName[0].toUpperCase() + '.' : '';
+  const csz = [d.city, [d.state, d.zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  const p = n => String(n).padStart(2, '0'), [Y, M, D] = [now.getFullYear(), p(now.getMonth() + 1), p(now.getDate())];
+  return {
+    ...d,
+    fullName: d.firstName && d.lastName ? [d.firstName, initial, d.lastName].filter(Boolean).join(' ') : '',
+    cityStateZip: d.city ? csz : '',
+    fullAddress: d.street ? [d.street, csz].filter(Boolean).join(', ') : '',
+    today: d.dateFormat === 'YYYY-MM-DD' ? `${Y}-${M}-${D}` : d.dateFormat === 'DD/MM/YYYY' ? `${D}/${M}/${Y}` : `${M}/${D}/${Y}`
+  };
+}
+// The run of comb fields starting at f on its row (tops within 4 px, each next within 3 heights of the last end) whose maxLen sum is n
+function combRun(f, fields, n) {
+  if (!f.comb || !(f.maxLen > 0) || !f.box) return null;
+  const row = fields.filter(g => g.comb && g.maxLen > 0 && g.box && g.page === f.page && Math.abs(g.box[1] - f.box[1]) <= 4).sort((a, b) => a.box[0] - b.box[0]);
+  const near = (a, b) => b.box[0] - a.box[2] <= 3 * (b.box[3] - b.box[1]);
+  let i = row.indexOf(f);
+  if (i < 0 || (i > 0 && near(row[i - 1], row[i]))) return null; // f must start the run
+  const run = [f];
+  let sum = f.maxLen;
+  for (i++; sum < n && i < row.length && near(row[i - 1], row[i]); i++) { run.push(row[i]); sum += row[i].maxLen; }
+  return run.length > 1 && sum === n ? run : null;
+}
+const SENSITIVE_KEYS = new Set(['ssn', 'dateOfBirth']), DIGIT_KEYS = new Set(['ssn', 'phone', 'zip']);
+// fields: [{ id, page, label, maxLen, comb, box }] -> [{ id, label, key, value, sensitive }] for fields with a value to propose
+function planAutofill({ fields, details, now = new Date() }) {
+  const d = cleanDetails(details), vals = derivedValues(d, now), plan = [], done = new Set();
+  for (const f of fields) {
+    if (done.has(f.id)) continue;
+    const custom = customMatch(d.custom, f.label), key = custom ? 'custom' : classifyLabel(f.label);
+    let value = custom ? custom.value : key && vals[key];
+    if (!value) continue;
+    const sensitive = SENSITIVE_KEYS.has(key);
+    if (key === 'ssn' || key === 'phone') {
+      const digits = value.replace(/\D/g, ''), run = combRun(f, fields, digits.length);
+      if (run) {
+        let at = 0;
+        for (const [i, g] of run.entries()) { plan.push({ id: g.id, label: `${f.label} (part ${i + 1} of ${run.length})`, key, value: digits.slice(at, at + g.maxLen), sensitive }); done.add(g.id); at += g.maxLen; }
+        continue;
+      }
+    }
+    if (f.maxLen > 0 && value.length > f.maxLen && DIGIT_KEYS.has(key)) value = value.replace(/\D/g, '');
+    if (f.maxLen > 0 && value.length > f.maxLen) continue;
+    plan.push({ id: f.id, label: f.label, key, value, sensitive });
+  }
+  return plan;
+}
+// pages: [{ page, width, fields: [{ id, name, alt, maxLen, comb, box }], words }]; box and words are in the page's pixel space
+ipcMain.handle('autofill-plan', async (event, { pages }) => {
+  try {
+    const { details, encrypted } = loadDetails(), fields = [];
+    for (const p of pages) {
+      for (const f of p.fields) {
+        let label = String(f.alt || '').trim().slice(0, 300) || labelFor({ kind: 'text', box: f.box, aboveFirst: f.comb && f.maxLen > 1 }, p.words || [], p.width / 1275); // comb cells sit under their heading, and text to their left is usually unrelated
+        const name = String(f.name || '');
+        if (/^Field \d+$/.test(label) && /\s/.test(name) && !name.includes('[') && !/^[a-z]+\d+$/i.test(name)) label = cleanFieldLabel(name) || label;
+        fields.push({ id: f.id, page: p.page, label, maxLen: f.maxLen || 0, comb: !!f.comb, box: f.box });
+      }
+    }
+    return { success: true, plan: planAutofill({ fields, details, now: new Date() }), encrypted };
   } catch (error) {
     return { success: false, error: error.message };
   }
