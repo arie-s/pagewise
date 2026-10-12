@@ -40,6 +40,7 @@
       "!node_modules/pdfjs-dist/types/**",
       "!node_modules/pdfjs-dist/web/**",
       "!node_modules/pdfjs-dist/image_decoders/**",
+      "node_modules/pdfjs-dist/image_decoders/pdf.image_decoders.min.mjs",
       "!node_modules/@napi-rs/**",
       "!node_modules/@cantoo/pdf-lib/es/**",
       "!node_modules/@cantoo/pdf-lib/src/**",

@@ -63,6 +63,9 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   onMenuSmartExtract: (callback) => ipcRenderer.on('menu-smart-extract', callback),
   onMenuEngineSetup: (callback) => ipcRenderer.on('menu-engine-setup', callback),
 
+  compressPdf: (options) => ipcRenderer.invoke('compress-pdf', options),
+  onMenuCompress: (callback) => ipcRenderer.on('menu-compress', callback),
+
   // Security
   encryptPdf: (options) => ipcRenderer.invoke('encrypt-pdf', options),
   decryptPdf: (options) => ipcRenderer.invoke('decrypt-pdf', options),
