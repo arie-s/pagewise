@@ -147,7 +147,7 @@ test('profiles round trip encrypted when safeStorage is available, with no plain
   const raw = fs.readFileSync(t.file, 'utf8');
   assert.equal(JSON.parse(raw).v, 2);
   for (const secret of ['Jane', '123-45-6789', 'Springfield', 'Passport', 'Partner', 'Roe', '987-65-4321']) assert.ok(!raw.includes(secret), secret);
-  assert.equal(fs.statSync(t.file).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(t.file).mode & 0o777, 0o600); // Windows has no POSIX file modes
   const back = await getP(t);
   assert.equal(back.encrypted, true);
   assert.deepEqual(back.profiles.map(p => p.name), ['Me', 'Partner']);
