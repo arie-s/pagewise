@@ -1348,6 +1348,72 @@
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
       finally { setLoading(false); }
     }
+    async function reloadFromOriginal() {
+      state.pdfDoc = await pdfjsLib.getDocument({ data: Uint8Array.from(atob(state.originalData), c => c.charCodeAt(0)) }).promise;
+      await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage);
+    }
+    // Words with pixel boxes from pdf.js text items: split on spaces, x-ranges by character share
+    function pageWords(items, vp) {
+      const words = [];
+      for (const item of items) {
+        if (!item.str || !item.str.trim()) continue;
+        const tx = pdfjsLib.Util.transform(vp.transform, item.transform), h = item.height * vp.scale;
+        const charW = (item.width * vp.scale) / item.str.length;
+        let x = tx[4];
+        for (const part of item.str.split(/(\s+)/)) {
+          if (part && part.trim()) words.push({ text: part, box: [x, tx[5] - h, x + part.length * charW, tx[5]] });
+          x += part.length * charW;
+        }
+      }
+      return words;
+    }
+    async function makeFillable() {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      setLoading(true, 'Detecting fields...');
+      try {
+        await commitFormValues();
+        const doc = state.pdfDoc, fields = [];
+        let skipped = 0;
+        for (let i = 1; i <= doc.numPages; i++) {
+          $('loadingText').textContent = 'Detecting fields on page ' + i + ' of ' + doc.numPages + '...';
+          const page = await doc.getPage(i);
+          if ((await page.getAnnotations()).some(a => a.subtype === 'Widget')) { skipped++; continue; }
+          const vp1 = page.getViewport({ scale: 1 });
+          const vp = page.getViewport({ scale: Math.min(150 / 72, Math.sqrt(4e6 / (vp1.width * vp1.height))) });
+          const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
+          await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+          const items = (await page.getTextContent()).items;
+          const hasText = items.reduce((n, it) => n + it.str.replace(/\s/g, '').length, 0) >= 20;
+          const r = await window.pdfAPI.detectFormFields({ pngBase64: canvas.toDataURL('image/png').split(',')[1], words: hasText ? pageWords(items, vp) : undefined });
+          if (!r.success) throw new Error(r.error || 'Detection failed on page ' + i);
+          for (const f of r.fields) {
+            const [ax, ay] = vp.convertToPdfPoint(f.box[0], f.box[1]), [bx, by] = vp.convertToPdfPoint(f.box[2], f.box[3]);
+            fields.push({ pageIndex: i - 1, kind: f.kind, name: f.label, cells: f.cells, rect: { x: Math.min(ax, bx), y: Math.min(ay, by), width: Math.abs(bx - ax), height: Math.abs(by - ay) } });
+          }
+        }
+        if (skipped === doc.numPages) { showNotification('This PDF already has form fields', 'warning'); return; }
+        if (!fields.length) { showNotification('No blank fields found on these pages', 'warning'); return; }
+        const r = await window.pdfAPI.addFormFields({ data: state.originalData, fields });
+        if (!r.success) throw new Error(r.error);
+        state.originalData = r.data; setUnsavedChanges(true);
+        await reloadFromOriginal();
+        showNotification('Added ' + fields.length + ' fields (' + fields.filter(f => f.kind === 'check').length + ' checkboxes). Click a field to type. Right-click a field to remove it.');
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      finally { setLoading(false); }
+    }
+    async function removeFormField(pageNum, elementId) {
+      try {
+        const page = await state.pdfDoc.getPage(pageNum);
+        const name = (await page.getAnnotations()).find(a => a.id === elementId)?.fieldName;
+        if (!name) throw new Error('Could not find this field');
+        await commitFormValues();
+        const r = await window.pdfAPI.removeFormField({ data: state.originalData, name });
+        if (!r.success) throw new Error(r.error);
+        state.originalData = r.data; setUnsavedChanges(true);
+        await reloadFromOriginal();
+        showNotification('Field removed');
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+    }
     async function mergePdfs() {
       const files = await window.pdfAPI.openMultipleFiles(); if (files && files.error) { showNotification(files.error, 'error'); return; } if (!files || files.length < 2) { showNotification('Select at least 2 files', 'warning'); return; }
       setLoading(true, 'Merging...');
@@ -1708,7 +1774,10 @@
       menu.id = 'contextMenu';
       const hasDoc = !!state.pdfDoc;
       const selectedText = window.getSelection().toString();
+      const widget = state.currentTool === 'select' && e.target.closest('.annotationLayer section.textWidgetAnnotation, .annotationLayer section.buttonWidgetAnnotation');
+      const widgetId = widget?.querySelector('[data-element-id]')?.getAttribute('data-element-id');
       const items = [
+        ...(widgetId ? [{ label: 'Remove field', icon: 'delete', action: () => removeFormField(pageNum, widgetId) }, { type: 'separator' }] : []),
         { label: 'Copy Text', icon: 'copy', action: () => { if (selectedText) navigator.clipboard.writeText(selectedText); }, disabled: !selectedText },
         { label: 'Select All', icon: 'selectall', action: () => document.execCommand('selectAll') },
         { type: 'separator' },
@@ -1815,7 +1884,7 @@
     window.pdfAPI.onMenuUndo(undo); window.pdfAPI.onMenuRedo(redo); window.pdfAPI.onMenuFind(showSearch);
     window.pdfAPI.onMenuZoomIn(() => setZoom(state.scale + 0.25)); window.pdfAPI.onMenuZoomOut(() => setZoom(state.scale - 0.25)); window.pdfAPI.onMenuZoomReset(() => setZoom(1));
     window.pdfAPI.onMenuTool(selectTool); window.pdfAPI.onMenuRotate(rotatePage); window.pdfAPI.onMenuRotateAll(rotateAllPages); window.pdfAPI.onMenuDeletePage(deletePage); window.pdfAPI.onMenuInsertPage(insertBlankPage);
-    window.pdfAPI.onMenuAddWatermark(showWatermarkDialog); window.pdfAPI.onMenuFlattenForm(flattenForm);
+    window.pdfAPI.onMenuAddWatermark(showWatermarkDialog); window.pdfAPI.onMenuFlattenForm(flattenForm); window.pdfAPI.onMenuMakeFillable(makeFillable);
     window.pdfAPI.onMenuStamp(s => { state.pendingStamp = s; selectTool('stamp'); showNotification('Click to place stamp', 'info'); });
     window.pdfAPI.onMenuAddImage(async () => { const img = await window.pdfAPI.selectImage(); if (img) { state.pendingImage = img; selectTool('image'); showNotification('Click to place image', 'info'); } });
     window.pdfAPI.onMenuGoto(d => { if (d === 'first') goToPage(1); else if (d === 'last') goToPage(state.pdfDoc.numPages); else if (d === 'prev' && state.currentPage > 1) goToPage(state.currentPage - 1); else if (d === 'next' && state.currentPage < state.pdfDoc.numPages) goToPage(state.currentPage + 1); });

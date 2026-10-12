@@ -413,6 +413,10 @@ function createWindow() {
           click: () => mainWindow.webContents.send('menu-add-page-numbers')
         },
         {
+          label: 'Make Fillable (detect form fields)',
+          click: () => mainWindow.webContents.send('menu-make-fillable')
+        },
+        {
           label: 'Flatten Form',
           click: () => mainWindow.webContents.send('menu-flatten-form')
         },
@@ -1404,14 +1408,16 @@ function bgraToGray({ width, height }, bmp) {
 }
 function filter1d(src, w, h, r, horizontal, max) {
   const out = new Float32Array(src.length), n = horizontal ? w : h, lines = horizontal ? h : w;
-  const at = (l, i) => horizontal ? l * w + i : i * w + l;
+  const stride = horizontal ? 1 : w, line = new Float32Array(n), res = new Float32Array(n), ps = new Float64Array(n + 1);
   for (let l = 0; l < lines; l++) {
-    if (max) for (let i = 0; i < n; i++) { let m = 0; for (let k = Math.max(0, i - r); k <= Math.min(n - 1, i + r); k++) m = Math.max(m, src[at(l, k)]); out[at(l, i)] = m; }
+    const base = horizontal ? l * w : l;
+    for (let i = 0; i < n; i++) line[i] = src[base + i * stride];
+    if (max) for (let i = 0; i < n; i++) { let m = 0; for (let k = i > r ? i - r : 0, e = i + r < n ? i + r : n - 1; k <= e; k++) if (line[k] > m) m = line[k]; res[i] = m; }
     else {
-      const ps = new Float64Array(n + 1);
-      for (let i = 0; i < n; i++) ps[i + 1] = ps[i] + src[at(l, i)];
-      for (let i = 0; i < n; i++) { const a = Math.max(0, i - r), b = Math.min(n - 1, i + r); out[at(l, i)] = (ps[b + 1] - ps[a]) / (b - a + 1); }
+      for (let i = 0; i < n; i++) ps[i + 1] = ps[i] + line[i];
+      for (let i = 0; i < n; i++) { const a = i > r ? i - r : 0, b = i + r < n ? i + r : n - 1; res[i] = (ps[b + 1] - ps[a]) / (b - a + 1); }
     }
+    for (let i = 0; i < n; i++) out[base + i * stride] = res[i];
   }
   return out;
 }
@@ -1422,6 +1428,14 @@ function runs(flags, minLen = 1, maxGap = 0) {
     if (s >= 0 && (i === flags.length || i - last > maxGap)) { if (last - s + 1 >= minLen) out.push([s, last + 1]); s = -1; }
   }
   return out;
+}
+// Ink = darker than 72% of the local background (max filter, then two box blurs), so shadows and uneven scans don't count.
+function inkMask({ width: w, height: h, data: g }) {
+  let bg = filter1d(filter1d(g, w, h, 4, true, true), w, h, 4, false, true);
+  for (let p = 0; p < 2; p++) bg = filter1d(filter1d(bg, w, h, 12, true, false), w, h, 12, false, false);
+  const ink = new Uint8Array(w * h);
+  for (let i = 0; i < ink.length; i++) ink[i] = g[i] < bg[i] * 0.72 ? 1 : 0;
+  return ink;
 }
 function inkWords(gray, block, tokens) {
   const [bx0, by0, bx1, by1] = block.bbox;
@@ -1436,10 +1450,7 @@ function inkWords(gray, block, tokens) {
   if (w < 1 || h < 1 || !tokens.length) return spread(tokens, bx0, bx1, by0, by1);
   const g = new Float32Array(w * h);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) g[y * w + x] = gray.data[(cy0 + y) * gray.width + cx0 + x];
-  let bg = filter1d(filter1d(g, w, h, 4, true, true), w, h, 4, false, true);
-  for (let p = 0; p < 2; p++) bg = filter1d(filter1d(bg, w, h, 12, true, false), w, h, 12, false, false);
-  const ink = new Uint8Array(w * h);
-  for (let i = 0; i < ink.length; i++) ink[i] = g[i] < bg[i] * 0.72 ? 1 : 0;
+  const ink = inkMask({ width: w, height: h, data: g });
   const rowCount = Array.from({ length: h }, (_, y) => { let c = 0; for (let x = 0; x < w; x++) c += ink[y * w + x]; return c; });
   const rowThr = Math.max(2, 0.01 * w);
   const lines = runs(rowCount.map(c => c > rowThr), 3).map(([ys, ye]) => {
@@ -1463,6 +1474,198 @@ function inkWords(gray, block, tokens) {
   });
   return out;
 }
+// ---------- Make Fillable: find blank fields on a flat page (classical image analysis, no AI) ----------
+function detectFormFields(gray) {
+  const { width: W, height: H } = gray, u = W / 1275; // 1.0 for a letter page at 150 dpi
+  const ink = inkMask(gray);
+  // Horizontal rules: ink runs per row, merged down into segments [y0, y1, x0, x1] (y1 exclusive).
+  const hs = [];
+  let active = [];
+  for (let y = 0; y < H; y++) {
+    active = active.filter(s => s[1] >= y - 1);
+    for (const [a, b] of runs(ink.subarray(y * W, (y + 1) * W), Math.ceil(30 * u), 1)) {
+      const seg = active.find(s => (y <= s[1] && Math.min(b, s[3]) - Math.max(a, s[2]) > 0.8 * Math.min(b - a, s[3] - s[2]))
+        // staircase pieces of a slightly tilted scan
+        || (y <= s[1] + 1 && a <= s[3] + 3 * u && b >= s[2] - 3 * u));
+      if (seg) { seg[1] = y + 1; seg[2] = Math.min(seg[2], a); seg[3] = Math.max(seg[3], b); }
+      else { const s = [y, y + 1, a, b]; hs.push(s); active.push(s); }
+    }
+  }
+  // Vertical rules: ink runs per column
+  const vs = [], col = new Uint8Array(H);
+  for (let x = 0; x < W; x++) {
+    for (let y = 0; y < H; y++) col[y] = ink[y * W + x];
+    for (const [a, b] of runs(col, Math.ceil(15 * u), 0)) vs.push([x, a, b]);
+  }
+  const fields = [];
+  let spans = 0;
+  hs.forEach((seg, segIndex) => {
+    const [y0, , x0, x1] = seg;
+    let cuts = [...new Set(vs.filter(([x, a, b]) => a <= y0 - 4 * u && b >= y0 - 1 && x > x0 + 3 && x < x1 - 3).map(v => v[0]))].sort((p, q) => p - q);
+    cuts = cuts.filter((c, i) => i === 0 || c - cuts[i - 1] > 1);
+    const xs = [x0, ...cuts, x1];
+    // A vertical rule at either end of the segment closes the end cells too
+    const hasRule = (lo, hi) => vs.some(([x, a, b]) => x >= lo && x <= hi && a <= y0 - 4 * u && b >= y0 - 1);
+    const leftRule = hasRule(x0 - 2, x0 + 4), rightRule = hasRule(x1 - 4, x1 + 2);
+    for (let k = 0; k + 1 < xs.length; k++) {
+      const a = xs[k], b = xs[k + 1];
+      if (b - a < 25 * u) continue;
+      const boxed = (k > 0 || leftRule) && (k + 2 < xs.length || rightRule);
+      const lim = Math.max(0, Math.floor(y0 - 70 * u)), rows = y0 - 1 - lim, cx0 = a + 3, cx1 = b - 3;
+      if (rows <= 0 || cx1 <= cx0) continue;
+      spans++;
+      const clr = new Int32Array(cx1 - cx0);
+      for (let c = cx0; c < cx1; c++) {
+        let d = 0;
+        while (d < rows && !ink[(y0 - 2 - d) * W + c]) d++;
+        clr[c - cx0] = d + 1;
+      }
+      for (const [p, q] of runs(clr.map(v => v >= 12 * u ? 1 : 0), Math.ceil((boxed ? 18 : 45) * u), Math.floor(3 * u) - 1)) {
+        const sorted = Array.from(clr.subarray(p, q)).sort((m, n) => m - n), pos = 0.1 * (sorted.length - 1), lo = Math.floor(pos);
+        const p10 = sorted[lo] + (sorted[Math.min(lo + 1, sorted.length - 1)] - sorted[lo]) * (pos - lo);
+        const h = Math.min(Math.floor(p10), Math.floor(50 * u));
+        if (h >= 12 * u) fields.push({ kind: 'text', box: [cx0 + p, y0 - h, cx0 + q, y0], seg: segIndex, span: [a, b], spanId: spans, boxed });
+      }
+    }
+  });
+  // Comb cells: neighbouring boxed fields on one rule with matching size and only a cut between them
+  const perSpan = new Map();
+  for (const f of fields) perSpan.set(f.spanId, (perSpan.get(f.spanId) || 0) + 1);
+  const merged = [];
+  for (const f of fields) {
+    const prev = merged[merged.length - 1];
+    const w = f.box[2] - f.box[0];
+    if (prev && f.boxed && prev.boxed && prev.seg === f.seg && prev.spanId !== f.spanId && perSpan.get(prev.lastSpan) === 1 && perSpan.get(f.spanId) === 1 && f.span[0] - prev.span[1] <= 4 * u
+        && Math.abs(f.box[1] - prev.box[1]) <= 2 * u && Math.abs(f.box[3] - prev.box[3]) <= 2 * u
+        && Math.abs(w - prev.cellWidth) <= 0.25 * Math.max(w, prev.cellWidth)) {
+      prev.box[2] = f.box[2]; prev.span[1] = f.span[1]; prev.lastSpan = f.spanId; prev.cells++;
+    } else merged.push({ ...f, box: [...f.box], span: [...f.span], cells: 1, cellWidth: w, lastSpan: f.spanId });
+  }
+  const out = merged.map(f => ({ kind: 'text', box: f.box, ...(f.cells > 1 ? { cells: f.cells } : {}) }));
+  // Checkboxes: small hollow square outlines
+  const lab = new Int32Array(W * H), stack = new Int32Array(W * H);
+  let nComps = 0;
+  for (let i = 0; i < ink.length; i++) {
+    if (!ink[i] || lab[i]) continue;
+    const id = ++nComps;
+    let sp = 0, x0 = W, y0 = H, x1 = 0, y1 = 0, n = 0;
+    stack[sp++] = i; lab[i] = id;
+    while (sp) {
+      const q = stack[--sp], y = (q / W) | 0, x = q - y * W;
+      n++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      if (x > 0 && ink[q - 1] && !lab[q - 1]) { lab[q - 1] = id; stack[sp++] = q - 1; }
+      if (x < W - 1 && ink[q + 1] && !lab[q + 1]) { lab[q + 1] = id; stack[sp++] = q + 1; }
+      if (y > 0 && ink[q - W] && !lab[q - W]) { lab[q - W] = id; stack[sp++] = q - W; }
+      if (y < H - 1 && ink[q + W] && !lab[q + W]) { lab[q + W] = id; stack[sp++] = q + W; }
+    }
+    const w = x1 - x0 + 1, h = y1 - y0 + 1;
+    if (w < 12 * u || w > 40 * u || h < 12 * u || h > 40 * u || Math.abs(w - h) > 3 * u || n >= 0.6 * w * h) continue;
+    const e = Math.max(3, Math.floor(Math.min(w, h) * 0.25));
+    let hollow = true;
+    for (let y = y0 + e; y < y1 + 1 - e && hollow; y++) for (let x = x0 + e; x < x1 + 1 - e; x++) if (lab[y * W + x] === id) { hollow = false; break; }
+    if (hollow) out.push({ kind: 'check', box: [x0, y0, x1 + 1, y1 + 1] });
+  }
+  return out;
+}
+// Name a detected field after its printed label. words: [{ text, box: [x0, y0, x1, y1] }] in the same pixels as the field; u = image width / 1275.
+function cleanFieldLabel(text) {
+  const label = String(text).replace(/[▶►•▸→»>|[\]{}]/g, ' ').replace(/(?:\s*\.){3,}|…+|_{2,}/g, ' ')
+    .replace(/\s+/g, ' ').trim().replace(/^\d{1,2}[a-z]?[.)]?\s+/i, '').trim().slice(0, 60).trim();
+  return (label.match(/\p{L}/gu) || []).length >= 2 ? label : ''; // "6a", "|" or OCR crumbs are not labels
+}
+function labelFor(field, words, u = 1, n = 1) {
+  const [fx0, fy0, fx1, fy1] = field.box, hOf = w => w.box[3] - w.box[1];
+  const vOverlap = (w, y0, y1) => Math.min(w.box[3], y1) - Math.max(w.box[1], y0);
+  const sameLine = (w, ref) => vOverlap(w, ref.box[1], ref.box[3]) >= 0.5 * Math.min(hOf(w), hOf(ref));
+  const join = ws => cleanFieldLabel(ws.map(w => w.text).join(' '));
+  const side = dir => { // contiguous words on the box's line, nearest first
+    const cand = words.filter(w => w.text && w.text.trim() && vOverlap(w, fy0, fy1) >= 0.5 * hOf(w)
+      && (dir < 0 ? w.box[2] >= fx0 - 250 * u && w.box[2] <= fx0 + 2 * u : w.box[0] >= fx1 - 2 * u && w.box[0] <= fx1 + 250 * u));
+    cand.sort((a, b) => dir < 0 ? b.box[2] - a.box[2] : a.box[0] - b.box[0]);
+    if (!cand.length) return '';
+    const run = [cand[0]];
+    for (const w of cand.slice(1)) {
+      const last = run[run.length - 1];
+      if (!sameLine(w, cand[0]) || (dir < 0 ? last.box[0] - w.box[2] : w.box[0] - last.box[2]) > 3 * hOf(cand[0])) break;
+      run.push(w);
+    }
+    return join(run.sort((a, b) => a.box[0] - b.box[0]));
+  };
+  const above = () => {
+    const cand = words.filter(w => w.text && w.text.trim() && w.box[3] <= fy0 + 2 && fy0 - w.box[3] <= 30 * u && w.box[2] > fx0 && w.box[0] < fx1);
+    if (!cand.length) return '';
+    const near = cand.reduce((a, b) => b.box[3] > a.box[3] ? b : a);
+    return join(cand.filter(w => sameLine(w, near)).sort((a, b) => a.box[0] - b.box[0]));
+  };
+  const order = field.kind === 'check' ? [() => side(1), () => side(-1), above] : [() => side(-1), above];
+  for (const f of order) { const l = f(); if (l) return l; }
+  return `Field ${n}`;
+}
+// pdf-lib treats '.' in a name as a hierarchy separator; repeated names get " (2)", " (3)"
+function uniqueFieldNames(labels, taken = []) {
+  const used = new Set(taken);
+  return labels.map(label => {
+    const base = String(label).replace(/\./g, ' ').replace(/\s+/g, ' ').trim() || 'Field';
+    let name = base;
+    for (let i = 2; used.has(name); i++) name = `${base} (${i})`;
+    used.add(name);
+    return name;
+  });
+}
+
+ipcMain.handle('detect-form-fields', async (event, { pngBase64, words }) => {
+  try {
+    const buf = Buffer.from(pngBase64, 'base64');
+    const img = nativeImage.createFromBuffer(buf), size = img.getSize();
+    const gray = bgraToGray(size, img.toBitmap());
+    if (!words) { // scans: Tesseract labels, dropping unsure words so a field gets 'Field n' rather than a garbled name
+      const worker = await getOcrWorker('eng');
+      const { data } = await worker.recognize(buf, {}, { blocks: true });
+      words = [];
+      (data.blocks || []).forEach(b => b.paragraphs.forEach(pa => pa.lines.forEach(l => l.words.forEach(w => { if (w.confidence >= 70) words.push({ text: w.text, box: [w.bbox.x0, w.bbox.y0, w.bbox.x1, w.bbox.y1] }); }))));
+    }
+    const u = size.width / 1275;
+    const fields = detectFormFields(gray).map((f, i) => ({ kind: f.kind, box: f.box, cells: f.cells || 1, label: labelFor(f, words, u, i + 1) }));
+    return { success: true, fields };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('add-form-fields', async (event, { data, fields }) => {
+  try {
+    const pdfDoc = await PDFDocument.load(Buffer.from(data, 'base64'), { ignoreEncryption: true });
+    const form = pdfDoc.getForm(), pages = pdfDoc.getPages();
+    const names = uniqueFieldNames(fields.map(f => f.name), form.getFields().map(f => f.getName()));
+    fields.forEach((f, i) => {
+      const { x, y, width, height } = f.rect, page = pages[f.pageIndex];
+      if (!page) throw new Error('No page ' + (f.pageIndex + 1));
+      // Invisible until clicked: no background or border, so the page underneath stays readable
+      const look = { x, y, width, height, borderWidth: 0, backgroundColor: undefined, borderColor: undefined };
+      if (f.kind === 'check') { form.createCheckBox(names[i]).addToPage(page, look); return; }
+      const field = form.createTextField(names[i]);
+      if (height > 30) field.enableMultiline();
+      if (f.cells >= 2) { field.setMaxLength(f.cells); field.enableCombing(); }
+      field.addToPage(page, look);
+      field.setFontSize(Math.min(11, height * 0.6));
+    });
+    return { success: true, data: Buffer.from(await pdfDoc.save()).toString('base64') };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('remove-form-field', async (event, { data, name }) => {
+  try {
+    const pdfDoc = await PDFDocument.load(Buffer.from(data, 'base64'), { ignoreEncryption: true });
+    const form = pdfDoc.getForm();
+    form.removeField(form.getField(name));
+    return { success: true, data: Buffer.from(await pdfDoc.save()).toString('base64') };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 function mergeLayout({ blocks, tessWords, gray }) {
   const used = new Set(), out = [];
   const cen = w => [(w.x0 + w.x1) / 2, (w.y0 + w.y1) / 2];
