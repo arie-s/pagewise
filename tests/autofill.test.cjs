@@ -389,3 +389,20 @@ test('prose questions are not filled with a stored value by the rules', () => {
     assert.equal(context.classifyLabel(l), null, l);
   assert.deepEqual({ ...context.classifyLabel('Company name') }, { who: 'self', key: 'company' });
 });
+
+test('a field on the same printed line as another person\'s label is not offered the user\'s value', async () => {
+  const t = boot({ encrypt: false });
+  const { selfId, spouseId } = await seed(t, DETAILS, SPOUSE);
+  const line = (items, fields) => ({ page: 1, width: 1275, fields: fields.map(([id, x0, x1]) => ({ id, name: 'Field', alt: '', maxLen: 0, comb: false, box: [x0, 100, x1, 124] })), words: items.flatMap(([text, x0]) => text.split(' ').map((w, j) => ({ text: w, box: [x0 + j * 60, 102, x0 + j * 60 + 50, 122] }))) });
+  const run = (page, spouse) => t.handlers.get('autofill-plan')(null, { pages: [page], selfId, spouseId: spouse ? spouseId : null }).then(plain);
+  // "▶ Decedent's name [a] ▶ Social security number [b]"
+  const dec = await run(line([['▶', 20], ['Decedent\'s name', 40], ['▶', 480], ['Social security number', 500]], [['a', 240, 470], ['b', 800, 1000]]));
+  assert.deepEqual(dec.plan.map(p => p.id), []);
+  assert.equal(dec.aiCount, 0);
+  // "Your name [a] Spouse's name [b]"
+  const pair = line([['Your name', 20], ['Spouse\'s name', 480]], [['a', 240, 470], ['b', 700, 1000]]);
+  assert.deepEqual((await run(pair, true)).plan.map(p => [p.id, p.who, p.key, p.value]), [['a', 'self', 'fullName', 'Jane Q. Doe'], ['b', 'spouse', 'fullName', 'John Roe']]);
+  assert.deepEqual((await run(pair, false)).plan.map(p => [p.id, p.who]), [['a', 'self']]);
+  // the same SSN label on a line of its own is still filled
+  assert.deepEqual((await run(line([['Social security number', 20]], [['b', 300, 600]]))).plan.map(p => [p.id, p.value]), [['b', '123-45-6789']]);
+});

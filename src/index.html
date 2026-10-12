@@ -400,10 +400,25 @@
       }
     };
     function hexToRgb(hex) { const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex); return r ? { r: parseInt(r[1], 16) / 255, g: parseInt(r[2], 16) / 255, b: parseInt(r[3], 16) / 255 } : { r: 0, g: 0, b: 0 }; }
-    function editSnapshot() { return JSON.stringify({ annotations: state.annotations, redactionMarks: state.redactionMarks, textEdits: state.textEdits }); }
-    function saveState() { state.undoStack.push(editSnapshot()); if (state.undoStack.length > 50) state.undoStack.shift(); state.redoStack = []; setUnsavedChanges(true); updateUndoRedo(); }
-    async function undo() { if (state.undoStack.length === 0) return; state.redoStack.push(editSnapshot()); Object.assign(state, JSON.parse(state.undoStack.pop())); setUnsavedChanges(true); await renderAllPages(); updateAnnotationCount(); updateUndoRedo(); }
-    async function redo() { if (state.redoStack.length === 0) return; state.undoStack.push(editSnapshot()); Object.assign(state, JSON.parse(state.redoStack.pop())); setUnsavedChanges(true); await renderAllPages(); updateAnnotationCount(); updateUndoRedo(); }
+    function editSnapshot() {
+      const forms = {}; // typed form values: id -> { value }
+      if (state.pdfDoc && state.pdfDoc.annotationStorage) for (const [id, v] of Object.entries(state.pdfDoc.annotationStorage.getAll() || {})) if (v && 'value' in v) forms[id] = { value: v.value };
+      return JSON.stringify({ annotations: state.annotations, redactionMarks: state.redactionMarks, textEdits: state.textEdits, forms });
+    }
+    // Values in the snapshot are set again; fields typed into since are reset to what the document itself holds
+    async function restoreForms(forms) {
+      const storage = state.pdfDoc && state.pdfDoc.annotationStorage;
+      if (!storage) return;
+      for (const [id, v] of Object.entries(forms)) storage.setValue(id, { value: v.value });
+      const stale = Object.keys(storage.getAll() || {}).filter(id => !(id in forms));
+      if (!stale.length) return;
+      const original = {};
+      for (let i = 1; i <= state.pdfDoc.numPages; i++) for (const a of await (await state.pdfDoc.getPage(i)).getAnnotations()) original[a.id] = a.checkBox ? a.exportValue === a.fieldValue : a.radioButton ? a.buttonValue === a.fieldValue : a.fieldValue || '';
+      for (const id of stale) storage.setValue(id, { value: id in original ? original[id] : '' });
+    }
+    function saveState(snap = editSnapshot()) { state.undoStack.push(snap); if (state.undoStack.length > 50) state.undoStack.shift(); state.redoStack = []; setUnsavedChanges(true); updateUndoRedo(); }
+    async function undo() { if (state.undoStack.length === 0) return; state.redoStack.push(editSnapshot()); const { forms, ...rest } = JSON.parse(state.undoStack.pop()); Object.assign(state, rest); if (state.pdfDoc) await restoreForms(forms || {}); setUnsavedChanges(true); await renderAllPages(); updateAnnotationCount(); updateUndoRedo(); }
+    async function redo() { if (state.redoStack.length === 0) return; state.undoStack.push(editSnapshot()); const { forms, ...rest } = JSON.parse(state.redoStack.pop()); Object.assign(state, rest); if (state.pdfDoc) await restoreForms(forms || {}); setUnsavedChanges(true); await renderAllPages(); updateAnnotationCount(); updateUndoRedo(); }
 
     async function showSplitDialog() {
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
@@ -1020,6 +1035,8 @@
           pageDiv.style.setProperty('--scale-factor', vp.scale); pageDiv.style.setProperty('--total-scale-factor', vp.scale);
           const formLayer = document.createElement('div'); formLayer.className = 'annotationLayer' + (state.currentTool !== 'select' ? ' disabled' : '');
           formLayer.addEventListener('click', e => { if (e.target.closest('a')) e.preventDefault(); });
+          formLayer.addEventListener('focusin', () => { state.formFocus = editSnapshot(); }); // the state before the field changes
+          formLayer.addEventListener('change', () => { const before = state.formFocus; state.formFocus = editSnapshot(); if (before && before !== state.formFocus) saveState(before); });
           pageDiv.appendChild(formLayer);
           await new pdfjsLib.AnnotationLayer({ div: formLayer, page, viewport: vp.clone({ dontFlip: true }), accessibilityManager: null, annotationCanvasMap: null, annotationEditorUIManager: null, structTreeLayer: null })
             .render({ annotations: annots, viewport: vp.clone({ dontFlip: true }), linkService: formLinkService, renderForms: true, annotationStorage: state.pdfDoc.annotationStorage, enableScripting: false, imageResourcesPath: '' });
@@ -1470,7 +1487,7 @@
             form.append(el('div', { className: 'form-group', style: 'margin-bottom:8px;' }, el('label', { className: 'form-label', textContent: label + (sensitive ? ' (only filled when you tick it in the review)' : '') }), input));
           }
         }
-        const notes = el('textarea', { className: 'form-input', value: d.notes || '', maxLength: 4000, rows: 4, style: 'resize:vertical;' }); notes.dataset.detail = 'notes';
+        const notes = el('textarea', { className: 'form-input', value: d.notes || '', maxLength: 4000, rows: 4, style: 'resize:vertical;font-family:inherit;' }); notes.dataset.detail = 'notes';
         form.append(el('div', { textContent: 'Notes', style: 'font-weight:600;margin:12px 0 6px;' }), el('div', { className: 'form-group', style: 'margin-bottom:8px;' }, el('label', { className: 'form-label', textContent: 'About you / your business (used only for AI suggestions)' }), notes));
         const fmt = el('select', { className: 'form-select' }, ...['MM/DD/YYYY', 'DD/MM/YYYY', 'YYYY-MM-DD'].map(f => el('option', { value: f, textContent: f })));
         fmt.value = d.dateFormat; fmt.dataset.detail = 'dateFormat';
@@ -1535,13 +1552,16 @@
     function showAutofillReview(pages, existing, names, selfId, spouseId) {
       const storage = state.pdfDoc.annotationStorage;
       const m = showModal('Fill from Profile', '<div class="autofill-review" style="max-height:60vh;overflow:auto;"></div>', [{ label: 'Cancel', action: 'cancel' }, { label: 'Fill', action: 'fill', primary: true, handler: mm => {
-        let n = 0;
+        const picked = [];
         mm.querySelectorAll('tr[data-id]').forEach(tr => {
-          const value = tr.querySelector('input[type=text]').value;
-          if (tr.querySelector('input[type=checkbox]').checked && value) { storage.setValue(tr.dataset.id, { value }); n++; }
+          const value = tr.querySelector('input[type=text], textarea').value;
+          if (tr.querySelector('input[type=checkbox]').checked && value) picked.push([tr.dataset.id, value]);
         });
         window.pdfAPI.profilesRemember({ lastSelf: selfSel.value, lastSpouse: spouseSel.value || null }).catch(() => {});
+        const n = picked.length;
         if (!n) return;
+        saveState(); // one Ctrl+Z undoes the whole fill
+        for (const [id, value] of picked) storage.setValue(id, { value });
         markFormsDirty();
         renderAllPages().then(() => showNotification('Filled ' + n + (n === 1 ? ' field' : ' fields')));
       } }]);
@@ -1560,7 +1580,7 @@
       const fillRow = (p, tick, hintText, warn) => {
         const hint = el('div', { style: 'font-size:11px;color:var(--text-dim);' }, hintText);
         if (warn) hint.append(el('span', { textContent: warn, style: 'color:var(--warning,#d97706);' }));
-        const tr = el('tr', {}, el('td', { style: 'padding:4px;' }, tick), el('td', { style: 'padding:4px;' }, el('div', { textContent: p.label }), hint), el('td', { style: 'padding:4px;' }, el('input', { type: 'text', className: 'form-input', value: p.value })));
+        const tr = el('tr', {}, el('td', { style: 'padding:4px;' }, tick), el('td', { style: 'padding:4px;' }, el('div', { textContent: p.label }), hint), el('td', { style: 'padding:4px;' }, p.kind === 'draft' ? el('textarea', { rows: p.value.length > 40 ? 3 : 1, className: 'form-input', value: p.value, style: 'resize:vertical;font-family:inherit;' }) : el('input', { type: 'text', className: 'form-input', value: p.value })));
         tr.dataset.id = p.id; return tr;
       };
       const suggestRest = async (btn) => {
