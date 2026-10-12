@@ -8,6 +8,7 @@
     "start": "electron .",
     "cli": "electron . cli",
     "test": "node --test --test-isolation=none tests/*.test.cjs",
+    "eval:writer": "node scripts/eval-writer.cjs",
     "build": "electron-builder --win",
     "build:portable": "electron-builder --win portable"
   },

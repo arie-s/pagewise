@@ -1585,7 +1585,7 @@
           for (const p of r.suggestions) {
             const tick = el('input', { type: 'checkbox', checked: false, onchange: sync });
             const base = p.kind === 'draft' ? 'AI draft' : 'AI guess: ' + p.key;
-            table.append(fillRow(p, tick, p.notInProfile ? 'Not in your profile' : base, !p.notInProfile && p.unsupported.length ? ' • not in your profile: ' + p.unsupported.join(', ') : ''));
+            table.append(fillRow(p, tick, p.blocked ? 'Not sent to the AI: this label contains instructions aimed at an AI' : p.notInProfile ? 'Not in your profile' : base, !p.notInProfile && p.unsupported.length ? ' • not in your profile: ' + p.unsupported.join(', ') : ''));
           }
           aiBox.replaceChildren(el('div', { textContent: 'AI suggestions — check before filling', style: 'font-weight:600;border-top:1px solid var(--border,#888);padding-top:8px;margin-bottom:6px;' }), table);
           sync();

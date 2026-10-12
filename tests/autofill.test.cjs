@@ -382,3 +382,10 @@ test('self and spouse SSN comb runs on one page are both split correctly', () =>
   assert.deepEqual(p.map(x => [x.id, x.who, x.value, x.sensitive]), [['a1', 'self', '123', true], ['a2', 'self', '45', true], ['a3', 'self', '6789', true], ['b1', 'spouse', '987', true], ['b2', 'spouse', '65', true], ['b3', 'spouse', '4321', true]]);
   assert.deepEqual(plan([comb('b1', 'Spouse\'s social security number', 100, 200, 3), comb('b2', 'x', 150, 200, 2), comb('b3', 'x', 190, 200, 4)]), []);
 });
+
+test('prose questions are not filled with a stored value by the rules', () => {
+  const { context } = require('./helpers.cjs').loadMainHandlers();
+  for (const l of ['Describe your company', 'Explain your address history', 'Why is your name changing?', 'List your previous employers'])
+    assert.equal(context.classifyLabel(l), null, l);
+  assert.deepEqual({ ...context.classifyLabel('Company name') }, { who: 'self', key: 'company' });
+});

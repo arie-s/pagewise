@@ -1927,6 +1927,7 @@ function classifyLabel(label) {
     who = 'spouse';
     head = head.replace(SPOUSE_WORDS, ' ').replace(/\s+/g, ' ').trim();
   } else if (mentionsOtherPerson(full)) return null; // "Name (first and last name of spouse)": another person anywhere in the label
+  if (/^(describe|explain|why|briefly|please describe|list|reason|purpose)\b/.test(head)) return null; // asks for prose, not a stored value
   let key = classifyHead(head);
   if (key === 'street' && /\b(city|town)\b/.test(full)) key = 'fullAddress';
   else if (key === null && /^(your |the )?name( of (entity\/)?individual)?\W*$/.test(head) && /\bfirst\b/.test(full) && /\blast\b/.test(full)) key = 'fullName';
@@ -2055,9 +2056,9 @@ ipcMain.handle('autofill-plan', async (event, { pages, selfId, spouseId, skipIds
 // Sensitive keys (ssn, dateOfBirth) are not here, so the model can neither be asked for them nor be sent them.
 const AI_KEYS = ['firstName', 'middleName', 'lastName', 'fullName', 'email', 'phone', 'street', 'city', 'state', 'zip', 'country', 'fullAddress', 'cityStateZip', 'company', 'jobTitle', 'today', 'answer', 'none'];
 const AI_ANCHORS = (() => {
-  const name = [/name|surname|forename/, /place|business|company|employer|file|user/];
+  const name = [/name|surname|forename/, /place|business|company|trading|employer|file|user/];
   const addr = [/address|street|road|line \d|city|town|state|province|county|zip|post|country|resid/, /birth|nationality|citizenship/];
-  const a = { email: [/mail/], phone: [/phone|tel\b|mobile|cell/], company: [/company|business|organi[sz]ation|firm|employer name/], jobTitle: [/title|occupation|position|profession|role/], today: [/date/, /birth|expir|issue/] };
+  const a = { email: [/mail/], phone: [/phone|tel\b|mobile|cell/], company: [/company|business|trading|organi[sz]ation|firm|employer name/], jobTitle: [/title|occupation|position|profession|role/], today: [/date/, /birth|expir|issue/] };
   for (const k of ['firstName', 'middleName', 'lastName', 'fullName']) a[k] = name;
   for (const k of ['street', 'city', 'state', 'zip', 'country', 'fullAddress', 'cityStateZip']) a[k] = addr;
   return a;
@@ -2070,6 +2071,10 @@ function aiKeyAllowed(label, key) {
   return rule[0].test(l) && !(rule[1] && rule[1].test(l));
 }
 function isQuestionLabel(label) { return /\?\s*$/.test(label) || /^\s*(describe|explain|why|what|how|list|reason|purpose|briefly|please describe|number of|total number|years of|years in)\b/i.test(label); }
+// Labels that talk to the AI (prompt injection planted in a form) are never sent to the model
+function instructionShaped(label) {
+  return /\b(ignore|disregard|forget)\b[^.]{0,40}\b(instructions?|profile|above|previous|rules|prompt)\b|\b(answer|reply|respond|output|write|say)\s+(only|with|exactly)\b|\b(assistant|system|ai|model|chatgpt|llm)\s*[:,]|\binstead of\b|\byou (must|should|will) (answer|write|output|say|put|fill)\b|\bput the (applicant|user)/i.test(String(label || ''));
+}
 const SECRET_CUSTOM = /ssn|social security|tax ?id|taxpayer|\btin\b|birth|\bdob\b/i;
 // The profile as text for the model: everything non-sensitive, never the SSN or date of birth
 function profileText(details) {
@@ -2094,7 +2099,8 @@ function checkAnswer(answer, profile) {
     const raw = m[0], w = raw.replace(/['’]s$/, '').toLowerCase();
     if (!/^\p{Lu}/u.test(raw) || w.length < 2 || STOPWORDS.has(w)) continue;
     const before = text.slice(0, m.index).replace(/[\s"'(\[]+$/, '');
-    if (!before || /[.!?:\n]$/.test(before)) continue; // sentence-initial words are capitalised anyway
+    // sentence-initial words are capitalised anyway, but not in a one-to-three-word answer or when shouted (e.g. "APPROVED")
+    if ((!before || /[.!?:\n]$/.test(before)) && text.trim().split(/\s+/).length > 3 && !/^\p{Lu}{3,}$/u.test(raw)) continue;
     if (!haveWords.has(w) && !unsupported.some(u => u.toLowerCase() === w)) unsupported.push(raw.replace(/['’]s$/, ''));
   }
   return { ok: !unsupported.length, unsupported };
@@ -2125,8 +2131,9 @@ ipcMain.handle('ai-suggest', async (event, { pages, selfId, skipIds }) => {
   try {
     const started = Date.now(), { profiles } = loadStore(), self = profiles.find(p => p.id === selfId);
     if (!self) throw new Error('Choose a profile to fill as');
-    const cands = aiCandidates(autofillFields(pages), self.details, new Set(Array.isArray(skipIds) ? skipIds : [])).slice(0, 40);
-    const suggestions = [];
+    const all = aiCandidates(autofillFields(pages), self.details, new Set(Array.isArray(skipIds) ? skipIds : [])).slice(0, 40);
+    const suggestions = all.filter(f => instructionShaped(f.label)).map(f => ({ id: f.id, label: f.label, kind: 'draft', key: 'answer', value: '', unsupported: [], notInProfile: false, blocked: true }));
+    const cands = all.filter(f => !instructionShaped(f.label));
     let failed = 0;
     if (cands.length) {
       const vals = derivedValues(cleanDetails(self.details), new Date());
