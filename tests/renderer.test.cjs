@@ -439,3 +439,62 @@ test('a field first typed into after the snapshot goes back to the value the doc
   await functions.undo();
   assert.deepEqual(values(), { '5R': { value: 'printed' }, '6R': { value: '' } });
 });
+
+const plain = value => JSON.parse(JSON.stringify(value)); // values built inside the renderer sandbox live in another realm
+
+test('dragging a crop rectangle asks to crop this page, all pages or cancel, and applies a crop modification', async () => {
+  const applied = [], modals = [];
+  const state = { scale: 1, currentPath: [{ x: 20, y: 10 }, { x: 120, y: 60 }, { x: 20, y: 60 }] };
+  const { functions } = loadRendererFunctions(['confirmCrop'], { state, extra: {
+    renderAnnotations: () => {}, drawCurrentPath: () => {}, selectTool: () => {}, allPageIndexes: () => [0, 1, 2],
+    applyPageMods: async (mods, message) => { applied.push(mods); },
+    showModal: (title, content, buttons) => { modals.push({ title, content, buttons }); }
+  } });
+  functions.confirmCrop(2, { width: 200, height: 100, getContext: () => ({}) });
+  assert.deepEqual(plain(state.currentPath), []);
+  assert.equal(modals.length, 1);
+  assert.match(modals[0].content, /hidden, not deleted/);
+  assert.deepEqual(plain(modals[0].buttons.map(b => b.label)), ['Cancel', 'Crop all pages', 'Crop this page']);
+  await modals[0].buttons[2].handler();
+  assert.deepEqual(plain(applied[0]), [{ type: 'crop', pageIndex: 1, x: 0.1, y: 0.1, width: 0.5, height: 0.5 }]);
+  await modals[0].buttons[1].handler();
+  assert.deepEqual(plain(applied[1].map(m => m.pageIndex)), [0, 1, 2]);
+  assert.ok(applied[1].every(m => m.type === 'crop' && m.width === 0.5));
+  state.currentPath = [{ x: 5, y: 5 }, { x: 8, y: 9 }]; // too small to be a crop
+  functions.confirmCrop(1, { width: 200, height: 100, getContext: () => ({}) });
+  assert.equal(modals.length, 1);
+});
+
+test('the note tool stores an undoable stickyNote and Cancel adds nothing', () => {
+  const state = { scale: 1, annotations: {} }, calls = [], modals = [];
+  const { functions } = loadRendererFunctions(['addNote'], { state, helperNames: ['noteForm'], extra: {
+    saveState: () => calls.push('save'), renderAnnotations: () => calls.push('render'), updateAnnotationCount: () => {}, selectTool: () => {},
+    showModal: (title, content, buttons) => { modals.push(buttons); return { querySelector: () => ({ focus() {} }) }; }
+  } });
+  functions.addNote(1, 50, 20, { width: 200, height: 100 });
+  const add = modals[0].find(b => b.action === 'add');
+  assert.equal(add.handler({ querySelector: () => ({ value: '   ' }) }), 'keep-open');
+  assert.deepEqual(plain(state.annotations), {});
+  add.handler({ querySelector: () => ({ value: ' Müller 東京 ' }) });
+  assert.deepEqual(plain(state.annotations[1]), [{ type: 'stickyNote', x: 0.25, y: 0.2, text: 'Müller 東京' }]);
+  assert.deepEqual(plain(calls), ['save', 'render']);
+  assert.equal(modals[0].find(b => b.action === 'cancel').handler, undefined);
+  functions.addNote(1, 199, 99, { width: 200, height: 100 });
+  modals[1].find(b => b.action === 'add').handler({ querySelector: () => ({ value: 'edge' }) });
+  assert.deepEqual([state.annotations[1][1].x, state.annotations[1][1].y], [176 / 200, 76 / 100]); // the 24pt icon stays on the page
+});
+
+test('a note can be deleted from its modal and the deletion is undoable', () => {
+  const state = { scale: 1, annotations: { 1: [{ type: 'stickyNote', x: 0, y: 0, text: 'a' }, { type: 'stickyNote', x: 0.5, y: 0.5, text: 'b' }] } }, calls = [];
+  let buttons, body = { textContent: '' };
+  const { functions } = loadRendererFunctions(['showNote'], { state, extra: {
+    saveState: () => calls.push('save'), renderAnnotations: () => {}, updateAnnotationCount: () => {}, editNote: () => {},
+    showModal: (title, content, b) => { buttons = b; return { querySelector: () => body }; }
+  } });
+  functions.showNote(1, 1);
+  assert.equal(body.textContent, 'b');
+  assert.deepEqual(plain(buttons.map(b => b.label)), ['Close', 'Delete', 'Edit']);
+  buttons[1].handler();
+  assert.deepEqual(plain(state.annotations[1].map(n => n.text)), ['a']);
+  assert.deepEqual(plain(calls), ['save']);
+});

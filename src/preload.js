@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   splitPdf: (options) => ipcRenderer.invoke('split-pdf', options),
   extractPages: (options) => ipcRenderer.invoke('extract-pages', options),
   reorderPages: (options) => ipcRenderer.invoke('reorder-pages', options),
+  replacePage: (options) => ipcRenderer.invoke('replace-page', options),
   insertPagesFromFile: (options) => ipcRenderer.invoke('insert-pages-from-file', options),
 
   // Document operations
@@ -134,6 +135,7 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   onMenuInsertFromFile: (callback) => ipcRenderer.on('menu-insert-from-file', callback),
   onMenuExtractPages: (callback) => ipcRenderer.on('menu-extract-pages', callback),
   onMenuReplacePage: (callback) => ipcRenderer.on('menu-replace-page', callback),
+  onMenuRemoveCrop: (callback) => ipcRenderer.on('menu-remove-crop', callback),
   onMenuCropPage: (callback) => ipcRenderer.on('menu-crop-page', callback),
   onMenuResizePage: (callback) => ipcRenderer.on('menu-resize-page', callback),
   onMenuFlattenForm: (callback) => ipcRenderer.on('menu-flatten-form', callback),
