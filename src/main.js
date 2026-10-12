@@ -732,7 +732,7 @@ const cliArgs = getCliArgs();
 app.whenReady().then(() => { loadSettings(); cliArgs ? runCli(cliArgs) : createWindow(); });
 
 // Don't leave llama-server running (and holding engine files) after the app exits.
-app.on('will-quit', () => { if (engineProc) stopEngine(); });
+app.on('will-quit', () => { if (engineAlive()) stopEngine(); });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -989,6 +989,9 @@ ipcMain.handle('ocr-page', async (event, { pngBase64, lang }) => {
 
 const ENGINE_PORT = 8731;
 let engineProc = null;
+// Set after the GPU ran out of memory (e.g. other apps using it); later engine starts use the CPU until the engine is stopped from the UI.
+let engineCpuOnly = false;
+const engineAlive = () => !!engineProc && engineProc.exitCode === null && engineProc.signalCode === null;
 
 function enginePaths() {
   const d = path.join(app.getPath('userData'), 'ocr-engine');
@@ -1186,14 +1189,15 @@ function engineHealthy() {
 }
 
 async function startEngine() {
-  if (engineProc) return { success: true, running: true, endpoint: `http://127.0.0.1:${ENGINE_PORT}` };
+  if (engineAlive()) return { success: true, running: true, endpoint: `http://127.0.0.1:${ENGINE_PORT}` };
+  engineProc = null; // a crashed engine counts as stopped
   const ep = enginePaths();
   if (!engineInstalled()) return { success: false, error: 'Engine not installed' };
   if (await engineHealthy()) return { success: true, running: true, endpoint: `http://127.0.0.1:${ENGINE_PORT}` };
   engineProc = require('child_process').spawn(ep.bin, [
     '-m', ep.model, '--mmproj', ep.mmproj,
     '--host', '127.0.0.1', '--port', String(ENGINE_PORT),
-    '--no-webui', '-ngl', '999',
+    '--no-webui', ...(engineCpuOnly ? ['-ngl', '0', '--device', 'none', '--no-mmproj-offload'] : ['-ngl', '999']),
     // One request at a time; 16k fits a page image (≤ ~5k tokens at the renderer's 4 MP cap) plus 4096 output tokens.
     // Without this llama-server reserves a 131k-token context (~12 GB RAM on CPU).
     '-c', '16384', '-np', '1'
@@ -1309,7 +1313,7 @@ function mergeTables(tables) {
 }
 
 async function smartExtract(pngBase64, prompt) {
-  const r = engineProc ? {} : await startEngine();
+  const r = engineAlive() ? {} : await startEngine();
   if (r.success === false) throw new Error(r.error);
   const body = JSON.stringify({
     messages: [{ role: 'user', content: [
@@ -1318,6 +1322,17 @@ async function smartExtract(pngBase64, prompt) {
     ]}],
     max_tokens: 4096, temperature: 0
   });
+  try { return await engineRequest(body); }
+  catch (e) {
+    // GPU out of memory fails the image encode or kills the engine. Retry once on the CPU, but only for an engine this app started.
+    if (engineCpuOnly || !engineProc || !(engineProc.exitCode !== null || /mtmd|out of memory|ERR_CONNECTION|ERR_EMPTY_RESPONSE/i.test(e.message))) throw e;
+    stopEngine(); engineCpuOnly = true;
+    const s = await startEngine();
+    if (s.success === false) throw new Error(s.error);
+    return { ...(await engineRequest(body)), cpuFallback: true };
+  }
+}
+function engineRequest(body) {
   return new Promise((resolve, reject) => {
     const req = net.request({ method: 'POST', url: `http://127.0.0.1:${ENGINE_PORT}/v1/chat/completions` });
     req.setHeader('Content-Type', 'application/json');
@@ -1335,10 +1350,10 @@ async function smartExtract(pngBase64, prompt) {
   });
 }
 
-ipcMain.handle('engine-status', () => ({ installed: engineInstalled(), hasFiles: fs.existsSync(enginePaths().dir), running: !!engineProc, device: fs.existsSync(enginePaths().device) ? fs.readFileSync(enginePaths().device, 'utf8') : null, endpoint: `http://127.0.0.1:${ENGINE_PORT}` }));
+ipcMain.handle('engine-status', () => ({ installed: engineInstalled(), hasFiles: fs.existsSync(enginePaths().dir), running: engineAlive(), device: engineCpuOnly ? 'CPU (GPU memory was full; stop the engine to retry the GPU)' : fs.existsSync(enginePaths().device) ? fs.readFileSync(enginePaths().device, 'utf8') : null, endpoint: `http://127.0.0.1:${ENGINE_PORT}` }));
 ipcMain.handle('engine-install', async (event, opts) => { try { return await installEngine(opts || {}); } catch (e) { return { success: false, error: e.message }; } });
 ipcMain.handle('engine-start', async () => { try { return await startEngine(); } catch (e) { return { success: false, error: e.message }; } });
-ipcMain.handle('engine-stop', () => stopEngine());
+ipcMain.handle('engine-stop', () => { engineCpuOnly = false; return stopEngine(); });
 ipcMain.handle('engine-remove', () => removeEngine());
 ipcMain.handle('smart-extract', async (event, { pngBase64, prompt }) => { try { return await smartExtract(pngBase64, prompt); } catch (e) { return { success: false, error: e.message }; } });
 

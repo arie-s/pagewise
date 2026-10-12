@@ -663,6 +663,7 @@
           await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
           const r = await window.pdfAPI.smartExtract({ pngBase64: canvas.toDataURL('image/png').split(',')[1] });
           if (!r.success) throw new Error(r.error + ' (page ' + i + ')');
+          if (r.cpuFallback) showNotification('GPU memory is full (other apps are using it); continuing on the CPU, which is slower', 'warning');
           pages.push({ page: i, text: r.content || '(empty)' });
         }
         setLoading(false);
