@@ -64,9 +64,10 @@ npm run cli -- encrypt doc.pdf --password secret --out protected.pdf
 npm run cli -- info doc.pdf
 npm run cli -- engine-extract page.png --prompt "Convert the document to markdown."
 npm run cli -- engine-extract invoice.png --csv invoice.csv
+npm run cli -- extract receipts/ --out results --csv all-tables.csv --skip-existing
 ```
 
-Commands: `merge`, `split`, `encrypt`, `decrypt`, `info`, `engine-install`, `engine-start`, `engine-stop`, `engine-remove`, `engine-extract`. A packaged app takes the literal `cli` argument (for example `pagewise cli info doc.pdf` on Linux). GUI editing and base OCR are not exposed as CLI commands. The CLI runs through Electron; operation on a Linux server without a display has not been verified.
+Commands: `merge`, `split`, `encrypt`, `decrypt`, `info`, `engine-install`, `engine-start`, `engine-stop`, `engine-remove`, `engine-extract`, `extract` (batch: PDFs, PNG/JPEG images or folders in, one Markdown file and CSVs per document out). A packaged app takes the literal `cli` argument (for example `pagewise cli info doc.pdf` on Linux). GUI editing and base OCR are not exposed as CLI commands. The CLI runs through Electron; operation on a Linux server without a display has not been verified.
 
 Menu shortcuts use **Ctrl** (Windows/Linux) or **Cmd** (macOS): **O** open, **S** save, **F** find, **/** full shortcut list.
 

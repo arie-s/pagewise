@@ -644,6 +644,63 @@ async function runCli(args) {
           }
         }
       } finally { if (!wasRunning) stopEngine(); }
+    } else if (cmd === 'extract') {
+      const valueFlags = ['--out', '--csv', '--prompt'];
+      for (const f of valueFlags) if (args.includes(f) && (args[args.indexOf(f) + 1] ?? '--').startsWith('--')) throw new Error(f + ' needs a value');
+      const inputs = collectExtractInputs(args.slice(1).filter((a, i, all) => !a.startsWith('--') && !valueFlags.includes(all[i - 1])));
+      if (!inputs.length) throw new Error('usage: cli extract <file|folder>... [--out DIR] [--csv FILE] [--skip-existing] [--prompt TEXT]');
+      const outDir = path.resolve(flag('--out') || 'pagewise-out'), csv = flag('--csv'), prompt = flag('--prompt') || undefined, skipExisting = args.includes('--skip-existing');
+      await fs.promises.mkdir(outDir, { recursive: true });
+      const wasRunning = await engineHealthy();
+      let win, ok = 0, failed = 0, skipped = 0;
+      const docs = [], used = new Set();
+      try {
+        for (const [n, input] of inputs.entries()) {
+          const label = `[${n + 1}/${inputs.length}] ${input.name}:`, t0 = Date.now();
+          try {
+            const stem = uniqueStem(safeBaseName(path.basename(input.name, path.extname(input.name))), used);
+            const mdPath = path.join(outDir, stem + '.md');
+            if (skipExisting && fs.existsSync(mdPath)) {
+              // Keep earlier results in the combined CSV: the saved Markdown still holds the tables.
+              docs.push({ name: input.name, tables: mergeTables(tablesFromText(await fs.promises.readFile(mdPath, 'utf8')).filter(rows => rows.length).map(rows => ({ page: 1, rows }))).map(t => t.rows) });
+              skipped++; console.log(label + ' skipped'); continue;
+            }
+            let buf = await fs.promises.readFile(input.path);
+            if (isImagePath(input.path)) buf = await imagesToPdf([{ name: input.name, buffer: buf }]);
+            if (!win) {
+              win = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true } });
+              await win.loadFile(path.join(__dirname, 'render.html'));
+              for (let k = 0; !(await win.webContents.executeJavaScript('window.renderReady === true')); k++) {
+                if (k > 100) throw new Error('render page did not start');
+                await new Promise(r => setTimeout(r, 100));
+              }
+            }
+            const rendered = await win.webContents.executeJavaScript('renderPages(' + JSON.stringify(buf.toString('base64')) + ')', true);
+            const pages = [];
+            for (const { page, png } of rendered) {
+              const r = await smartExtract(png, prompt);
+              if (!r.success) throw new Error((r.error || 'extract failed') + ' (page ' + page + ')');
+              pages.push({ page, text: r.content || '(empty)' });
+            }
+            const tables = mergeTables(pages.flatMap(({ page, text }) => tablesFromText(text).filter(rows => rows.length).map(rows => ({ page, rows }))));
+            await fs.promises.writeFile(mdPath, pages.map(p => '## Page ' + p.page + '\n\n' + p.text).join('\n\n---\n\n'), 'utf8');
+            for (const [k, t] of tables.entries()) await fs.promises.writeFile(path.join(outDir, stem + (k ? '_t' + (k + 1) : '') + '.csv'), BOM + toCsv(t.rows), 'utf8');
+            docs.push({ name: input.name, tables: tables.map(t => t.rows) });
+            ok++;
+            console.log(`${label} ${pages.length} page${pages.length === 1 ? '' : 's'}, ${tables.length} table${tables.length === 1 ? '' : 's'}, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+          } catch (e) { failed++; console.log(label + ' ERROR ' + e.message); }
+        }
+        if (csv) {
+          const ext = path.extname(csv);
+          for (const [k, rows] of combineTables(docs).entries()) {
+            const file = k ? csv.slice(0, csv.length - ext.length) + '_t' + (k + 1) + ext : csv;
+            await fs.promises.writeFile(file, BOM + toCsv(rows), 'utf8');
+            console.log('wrote ' + file);
+          }
+        }
+      } finally { if (win && !win.isDestroyed()) win.destroy(); if (!wasRunning) stopEngine(); }
+      console.log(`done: ${ok} ok, ${failed} failed, ${skipped} skipped`);
+      if (failed) { app.exit(1); return; }
     } else if (cmd === 'info') {
       const input = args[1];
       if (!input) throw new Error('usage: cli info input.pdf');
@@ -651,7 +708,7 @@ async function runCli(args) {
       console.log(JSON.stringify({ pages: doc.getPageCount(), title: doc.getTitle(), author: doc.getAuthor() }, null, 2));
 
     } else {
-      throw new Error('unknown command. Available: merge, split, encrypt, decrypt, info, engine-install, engine-start, engine-stop, engine-remove, engine-extract');
+      throw new Error('unknown command. Available: merge, split, encrypt, decrypt, info, engine-install, engine-start, engine-stop, engine-remove, engine-extract, extract');
     }
     app.exit(0);
   } catch (e) {
@@ -1265,7 +1322,7 @@ async function smartExtract(pngBase64, prompt) {
       res.setEncoding('utf8');
       res.on('data', c => out += c);
       res.on('end', () => {
-        try { const j = JSON.parse(out); resolve({ success: true, content: (j.choices?.[0]?.message?.content || '').trim() }); }
+        try { const j = JSON.parse(out); if (j.error) reject(new Error('Engine error: ' + (j.error.message || JSON.stringify(j.error)))); else resolve({ success: true, content: (j.choices?.[0]?.message?.content || '').trim() }); }
         catch (e) { reject(new Error('Bad engine response: ' + out.slice(0, 200))); }
       });
     });
@@ -1288,6 +1345,36 @@ ipcMain.handle('extract-tables', (event, pages) => {
 });
 const safeBaseName = n => String(n ?? '').replace(/[^\p{L}\p{N}_ .-]/gu, '_').trim().replace(/^\.+$/, '') || 'document';
 const BOM = '\uFEFF';
+const EXTRACT_EXT = /\.(pdf|png|jpe?g)$/i;
+function collectExtractInputs(paths) {
+  const out = [];
+  for (const p of paths) {
+    if (!fs.existsSync(p)) throw new Error('not found: ' + p);
+    if (fs.statSync(p).isDirectory()) {
+      fs.readdirSync(p, { withFileTypes: true }).filter(e => e.isFile() && EXTRACT_EXT.test(e.name)).map(e => e.name)
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).forEach(n => out.push({ path: path.join(p, n), name: n }));
+    } else out.push({ path: p, name: path.basename(p) });
+  }
+  return out;
+}
+// Tables with the same header (as in mergeTables) across documents become one table with a leading Source column.
+function combineTables(docs) {
+  const norm = r => r.length + ':' + r.map(c => String(c).replace(/\s+/g, ' ').trim().toLowerCase()).join('\u0001');
+  const groups = new Map();
+  for (const { name, tables } of docs) for (const rows of tables) {
+    if (!rows.length) continue;
+    const k = norm(rows[0]);
+    if (!groups.has(k)) groups.set(k, [['Source', ...rows[0]]]);
+    groups.get(k).push(...rows.slice(1).map(r => [name, ...r]));
+  }
+  return [...groups.values()];
+}
+function uniqueStem(stem, used) {
+  let s = stem, n = 1;
+  while (used.has(s)) s = stem + '_' + (++n);
+  used.add(s);
+  return s;
+}
 async function saveTextFile(defaultName, filterName, ext, text) {
   const r = await dialog.showSaveDialog(mainWindow, { defaultPath: defaultName, filters: [{ name: filterName, extensions: [ext] }] });
   if (r.canceled || !r.filePath) return { success: false, canceled: true };
@@ -1317,8 +1404,9 @@ ipcMain.handle('save-markdown', async (event, { text, baseName } = {}) => {
   catch (e) { return { success: false, error: e.message }; }
 });
 
-// CLI: cli engine-install | cli engine-start | cli engine-stop | cli engine-remove | cli engine-extract <image.png> [--prompt ...] [--csv out.csv]
-// (--csv writes each table found: the first to out.csv, later ones to out_t2.csv, out_t3.csv, ...)
+// CLI: cli engine-install | cli engine-start | cli engine-stop | cli engine-remove | cli engine-extract <image.png> [--prompt ...] [--csv out.csv] | cli extract <file|folder>... [--out DIR] [--csv FILE] [--skip-existing] [--prompt TEXT]
+// (engine-extract --csv writes each table found: the first to out.csv, later ones to out_t2.csv, out_t3.csv, ...)
+// (extract: per document <stem>.md + <stem>.csv/_t2.csv in --out (default ./pagewise-out); --csv FILE merges same-header tables from all documents with a Source column)
 
 // Unsaved-changes flag synced from renderer
 ipcMain.on('set-unsaved', (event, flag) => { unsavedFlag = !!flag; });

@@ -258,7 +258,8 @@ function vmRunQuitCallback(callbackSource, context) {
 
 test('extractScale renders small images at their own size, never above 2x, never blurs text pages, and caps at 4 MP', async () => {
   const OPS = { showText: 44, showSpacedText: 45, paintImageXObject: 85 };
-  const { functions } = loadRendererFunctions(['extractScale'], { extra: { pdfjsLib: { OPS } } });
+  const mod = await import(require('node:url').pathToFileURL(path.join(root, 'src/extract-scale.mjs')).href);
+  const functions = { extractScale: page => mod.extractScale(page, OPS) };
   const page = (w, h, ops) => ({
     getViewport: ({ scale }) => ({ width: w * scale, height: h * scale }),
     getOperatorList: async () => ({ fnArray: ops.map(o => o[0]), argsArray: ops.map(o => o[1]) })
@@ -304,7 +305,7 @@ test('runSmartExtract goes straight to extraction when the engine is installed b
     state: { pdfDoc: { numPages: 1, getPage: async () => page } },
     api: { engineStatus: async () => ({ installed: true, running: false }), smartExtract: async () => { extracted++; return { success: false, error: 'x' }; } },
     extra: {
-      setLoading: () => {}, showNotification: () => {}, showEngineSetup: () => { setup++; }, extractScale: async () => 1,
+      setLoading: () => {}, showNotification: () => {}, showEngineSetup: () => { setup++; }, extractScale: async () => 1, pdfjsLib: { OPS: {} },
       document: { getElementById: () => ({}), createElement: () => ({ getContext: () => ({}), toDataURL: () => 'data:image/png;base64,AQ==' }) }
     }
   });
