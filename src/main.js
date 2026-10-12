@@ -13,7 +13,7 @@ if (!hasUserData(app.getPath('userData'))) {
 }
 // @cantoo/pdf-lib encryption needs Web Crypto; Electron <=28's bundled Node lacks the global
 if (!globalThis.crypto) globalThis.crypto = require('crypto').webcrypto;
-const { PDFDocument, rgb, degrees, StandardFonts, PDFName, PDFArray, PDFDict, PDFString, PDFNumber, grayscale, cmyk } = require('@cantoo/pdf-lib');
+const { PDFDocument, rgb, degrees, StandardFonts, PDFName, PDFArray, PDFDict, PDFString, PDFHexString, PDFNumber, grayscale, cmyk, pushGraphicsState, popGraphicsState, rectangle, clip, endPath } = require('@cantoo/pdf-lib');
 
 let mainWindow;
 let currentFilePath = null;
@@ -241,6 +241,10 @@ function createWindow() {
               click: () => mainWindow.webContents.send('menu-tool', 'text')
             },
             {
+              label: 'Note',
+              click: () => mainWindow.webContents.send('menu-tool', 'note')
+            },
+            {
               label: 'Highlight',
               click: () => mainWindow.webContents.send('menu-tool', 'highlight')
             },
@@ -396,8 +400,25 @@ function createWindow() {
           click: () => mainWindow.webContents.send('menu-insert-from-file')
         },
         {
+          label: 'Replace Page...',
+          click: () => mainWindow.webContents.send('menu-replace-page')
+        },
+        {
           label: 'Extract Pages...',
           click: () => mainWindow.webContents.send('menu-extract-pages')
+        },
+        { type: 'separator' },
+        {
+          label: 'Crop Page...',
+          click: () => mainWindow.webContents.send('menu-crop-page')
+        },
+        {
+          label: 'Remove Crop',
+          click: () => mainWindow.webContents.send('menu-remove-crop')
+        },
+        {
+          label: 'Resize Pages...',
+          click: () => mainWindow.webContents.send('menu-resize-page')
         },
         { type: 'separator' },
         {
@@ -2486,6 +2507,64 @@ let initialPdfPath = null;
 
 ipcMain.handle('get-initial-file', () => initialPdfPath || settings.lastFile || null);
 
+// pdf.js renders the CropBox, so view coordinates (normalized 0..1, top-left origin, rotated with the page) map onto it
+function cropPage(page, rect) {
+  const x0 = Math.min(1, Math.max(0, rect.x)), y0 = Math.min(1, Math.max(0, rect.y));
+  const x1 = Math.min(1, Math.max(0, rect.x + rect.width)), y1 = Math.min(1, Math.max(0, rect.y + rect.height));
+  if (![x0, y0, x1, y1].every(Number.isFinite) || x1 <= x0 || y1 <= y0) throw new Error('Invalid crop rectangle');
+  const { x: cx, y: cy, width: cw, height: ch } = page.getCropBox();
+  const rot = ((page.getRotation().angle % 360) + 360) % 360;
+  const toPdf = (u, v) => rot === 90 ? [cx + v * cw, cy + u * ch] : rot === 180 ? [cx + (1 - u) * cw, cy + v * ch] : rot === 270 ? [cx + (1 - v) * cw, cy + (1 - u) * ch] : [cx + u * cw, cy + (1 - v) * ch];
+  const [ax, ay] = toPdf(x0, y0), [bx, by] = toPdf(x1, y1);
+  page.setCropBox(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay));
+}
+
+// Fit the visible page (its CropBox) into W x H as shown on screen, centred. Annotations move with the content.
+function resizePage(page, W, H) {
+  if (!(W > 0 && H > 0)) throw new Error('Invalid page size');
+  const { x: cx, y: cy, width: cw, height: ch } = page.getCropBox();
+  const rot = ((page.getRotation().angle % 360) + 360) % 360, turned = rot === 90 || rot === 270;
+  const s = Math.min(W / (turned ? ch : cw), H / (turned ? cw : ch));
+  const mw = turned ? H : W, mh = turned ? W : H; // the page's own (unrotated) frame
+  const tx = (mw - s * cw) / 2 - s * cx, ty = (mh - s * ch) / 2 - s * cy;
+  // hidden content outside the old crop must not appear in the new margins
+  const open = page.createContentStream(pushGraphicsState(), rectangle(cx, cy, cw, ch), clip(), endPath());
+  page.node.wrapContentStreams(page.doc.context.register(open), page.doc.context.register(page.createContentStream(popGraphicsState())));
+  page.scaleContent(s, s);
+  page.translateContent(tx, ty);
+  const annots = page.node.Annots();
+  const mapPairs = (arr, f) => {
+    if (!(arr instanceof PDFArray)) return;
+    for (let i = 0; i + 1 < arr.size(); i += 2) {
+      const [x, y] = f(arr.lookup(i).asNumber(), arr.lookup(i + 1).asNumber());
+      arr.set(i, PDFNumber.of(x)); arr.set(i + 1, PDFNumber.of(y));
+    }
+  };
+  for (let i = 0; annots && i < annots.size(); i++) {
+    const annot = annots.lookup(i);
+    if (!(annot instanceof PDFDict)) continue;
+    for (const key of ['Rect', 'QuadPoints', 'L', 'Vertices', 'CL']) mapPairs(annot.lookup(PDFName.of(key)), (x, y) => [s * x + tx, s * y + ty]);
+    const ink = annot.lookup(PDFName.of('InkList'));
+    if (ink instanceof PDFArray) for (let j = 0; j < ink.size(); j++) mapPairs(ink.lookup(j), (x, y) => [s * x + tx, s * y + ty]);
+    mapPairs(annot.lookup(PDFName.of('RD')), (x, y) => [s * x, s * y]);
+  }
+  page.setMediaBox(0, 0, mw, mh);
+  page.setCropBox(0, 0, mw, mh);
+  for (const box of ['BleedBox', 'TrimBox', 'ArtBox']) page.node.delete(PDFName.of(box));
+}
+
+// A real /Annot /Text comment; Contents is a hex string (UTF-16BE) so non-ASCII text survives
+function addTextNote(pdfDoc, page, x, y, text) {
+  const size = 24;
+  const note = pdfDoc.context.obj({
+    Type: 'Annot', Subtype: 'Text', Rect: [x, y - size, x + size, y], Contents: PDFHexString.fromText(String(text)),
+    Name: 'Comment', T: PDFString.of('Pagewise'), C: [1, 0.85, 0.3], M: PDFString.fromDate(new Date()), F: 4, Open: false
+  });
+  let annots = page.node.Annots();
+  if (!annots) { annots = pdfDoc.context.obj([]); page.node.set(PDFName.of('Annots'), annots); }
+  annots.push(pdfDoc.context.register(note));
+}
+
 // Apply annotations and modifications to PDF
 ipcMain.handle('apply-modifications', async (event, { originalData, modifications }) => {
   try {
@@ -2680,20 +2759,21 @@ ipcMain.handle('apply-modifications', async (event, { originalData, modification
           break;
 
         case 'stickyNote':
-          // Draw sticky note icon
-          const noteSize = 20;
-          const noteX = mod.x * width;
-          const noteY = height - (mod.y * height) - noteSize;
+          if (typeof mod.text === 'string' && mod.text) addTextNote(pdfDoc, page, mod.x * width, height - mod.y * height, mod.text);
+          break;
 
-          page.drawRectangle({
-            x: noteX,
-            y: noteY,
-            width: noteSize,
-            height: noteSize,
-            color: rgb(1, 0.9, 0.5),
-            borderColor: rgb(0.8, 0.7, 0.2),
-            borderWidth: 1
-          });
+        case 'crop':
+          cropPage(page, mod);
+          break;
+
+        case 'uncrop': {
+          const { x: mx, y: my, width: mw, height: mh } = page.getMediaBox();
+          page.setCropBox(mx, my, mw, mh);
+          break;
+        }
+
+        case 'resize':
+          resizePage(page, mod.width, mod.height);
           break;
 
         case 'watermark':
@@ -2816,6 +2896,23 @@ ipcMain.handle('apply-modifications', async (event, { originalData, modification
     };
   } catch (error) {
     console.error('Modification error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Replace one page with a page from another PDF
+ipcMain.handle('replace-page', async (event, { data, pageIndex, sourceData, sourcePage }) => {
+  try {
+    const target = await PDFDocument.load(Buffer.from(data, 'base64'), { ignoreEncryption: true });
+    const source = await PDFDocument.load(Buffer.from(sourceData, 'base64'), { ignoreEncryption: true });
+    const sp = (sourcePage ?? 1) - 1; // sourcePage is a 1-based page number
+    if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= target.getPageCount()) throw new Error('Page to replace does not exist');
+    if (!Number.isInteger(sp) || sp < 0 || sp >= source.getPageCount()) throw new Error('Source page does not exist');
+    const [copied] = await target.copyPages(source, source.getPageIndices().slice(sp, sp + 1));
+    target.removePage(pageIndex);
+    target.insertPage(pageIndex, copied);
+    return { success: true, data: Buffer.from(await target.save()).toString('base64') };
+  } catch (error) {
     return { success: false, error: error.message };
   }
 });
