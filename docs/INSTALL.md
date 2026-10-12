@@ -127,7 +127,7 @@ This app was previously named **Local PDF Desk** and, before that, **PDF Studio 
 
 On Windows and Linux x64 the installer tries the Vulkan (GPU) build of llama.cpp and keeps it only if llama.cpp finds a real GPU; otherwise it installs the CPU build. On Linux the Vulkan build is tried only when a GPU device and the Vulkan loader (`libvulkan.so.1`) are present. macOS uses the arm64 or x64 build. The setup dialog shows whether the engine uses a GPU or the CPU. Engines installed by older versions keep their previous build until you choose **Remove Engine** and install again. Speed depends on the hardware: as a rough guide, a page takes a few seconds on a GPU and around a minute on a fast desktop CPU.
 
-The AI server binds to `127.0.0.1:8731`; page images are sent to that local server, not a cloud service. Use **Tools → Smart Extract** after setup. Smart Extract produces a Markdown transcript and does not add a searchable text layer to the PDF.
+The AI server binds to `127.0.0.1:8731`; page images are sent to that local server, not a cloud service. Use **Tools → Smart Extract** after setup. Smart Extract produces a Markdown transcript, which can be saved as a `.md` file, and exports any tables it finds as CSV. It does not add a searchable text layer to the PDF.
 
 **Removing the AI engine:** open **Tools → Setup AI Reading Engine…** and choose **Remove Engine**, or run `pagewise cli engine-remove`. This deletes llama.cpp and the model, which frees several GB. Settings and OCR language data are kept. Smart Extract can be set up again later.
 

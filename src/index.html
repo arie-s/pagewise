@@ -612,6 +612,41 @@
       const scale = imgPx && !hasText ? Math.min(2, Math.sqrt(imgPx / area)) : 2;
       return Math.min(scale, Math.sqrt(4e6 / area));
     }
+    async function showExtractResult(pages) {
+      const text = pages.map(p => '## Page ' + p.page + '\n\n' + p.text).join('\n\n---\n\n');
+      const tables = await window.pdfAPI.extractTables(pages);
+      const baseName = (state.fileName || 'document').replace(/\.pdf$/i, '') || 'document';
+      const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+      const m = el('div', 'modal-overlay'), modal = el('div', 'modal'), pre = el('pre', null, text);
+      modal.style.maxWidth = '800px';
+      pre.style.cssText = 'white-space:pre-wrap;font-size:12px;max-height:60vh;overflow:auto;background:var(--bg-lighter);padding:12px;border-radius:4px;';
+      const header = el('div', 'modal-header'), x = el('button', 'modal-close', '×');
+      header.append(el('span', 'modal-title', 'Smart Extract result'), x);
+      const body = el('div', 'modal-body'), footer = el('div', 'modal-footer');
+      body.appendChild(pre);
+      const btn = (label, onclick, cls) => { const b = el('button', 'modal-btn' + (cls ? ' ' + cls : ''), label); b.onclick = onclick; footer.appendChild(b); return b; };
+      btn('Copy', () => { window.pdfAPI.copyToClipboard(text); showNotification('Extracted text copied'); });
+      if (tables.length) {
+        btn('Copy table', async () => {
+          await window.pdfAPI.copyTables(tables);
+          showNotification(tables.length === 1 ? 'Table copied' : tables.length + ' tables copied');
+        });
+        btn(tables.length === 1 ? 'Export CSV' : 'Export CSV (' + tables.length + ' tables)', async () => {
+          const r = await window.pdfAPI.exportTables({ tables, baseName });
+          if (r.success) showNotification('Exported ' + tables.length + ' table(s)');
+          else if (!r.canceled) showNotification('Export error: ' + r.error, 'error');
+        });
+      }
+      btn('Save Markdown', async () => {
+        const r = await window.pdfAPI.saveMarkdown({ text, baseName });
+        if (r.success) showNotification('Markdown saved');
+        else if (!r.canceled) showNotification('Save error: ' + r.error, 'error');
+      });
+      btn('Close', () => m.remove(), 'primary');
+      x.onclick = () => m.remove();
+      modal.append(header, body, footer); m.appendChild(modal);
+      $('modalContainer').appendChild(m);
+    }
     async function runSmartExtract() {
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
       const st = await window.pdfAPI.engineStatus();
@@ -622,7 +657,7 @@
       }
       setLoading(true, 'Smart Extract: preparing engine...');
       try {
-        let results = [];
+        const pages = [];
         for (let i = 1; i <= state.pdfDoc.numPages; i++) {
           $('loadingText').textContent = 'Smart Extract: page ' + i + ' of ' + state.pdfDoc.numPages + '...';
           const page = await state.pdfDoc.getPage(i);
@@ -631,16 +666,10 @@
           await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
           const r = await window.pdfAPI.smartExtract({ pngBase64: canvas.toDataURL('image/png').split(',')[1] });
           if (!r.success) throw new Error(r.error + ' (page ' + i + ')');
-          results.push('## Page ' + i + '\n\n' + (r.content || '(empty)'));
+          pages.push({ page: i, text: r.content || '(empty)' });
         }
         setLoading(false);
-        const text = results.join('\n\n---\n\n');
-        const m = document.createElement('div'); m.className = 'modal-overlay';
-        m.innerHTML = '<div class="modal" style="max-width:800px;"><div class="modal-header"><span class="modal-title">Smart Extract result</span><button class="modal-close">&times;</button></div><div class="modal-body"><pre style="white-space:pre-wrap;font-size:12px;max-height:60vh;overflow:auto;background:var(--bg-lighter);padding:12px;border-radius:4px;">' + text.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</pre></div><div class="modal-footer"><button class="modal-btn" id="seCopy">Copy</button><button class="modal-btn primary" id="seClose">Close</button></div></div>';
-        $('modalContainer').appendChild(m);
-        m.querySelector('.modal-close').onclick = () => m.remove();
-        m.querySelector('#seClose').onclick = () => m.remove();
-        m.querySelector('#seCopy').onclick = () => { window.pdfAPI.copyToClipboard(text); showNotification('Extracted text copied'); };
+        await showExtractResult(pages);
       } catch (e) { setLoading(false); showNotification('Smart Extract error: ' + e.message, 'error'); }
     }
 

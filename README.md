@@ -22,6 +22,7 @@
 - **Make scans searchable:** local Tesseract OCR adds an invisible text layer at recognized word positions.
 - **Redact:** marked regions are masked and the entire output PDF is rebuilt from rendered images, removing the original content and hidden objects.
 - **Smart Extract (optional):** the local `dots.ocr` vision-language model transcribes a page into Markdown, including tables, formulas and handwriting. Output quality depends on the document and model.
+- **Tables to spreadsheets:** export the tables Smart Extract finds as CSV, or copy them straight into Excel or Google Sheets. A table that continues onto the next page with a repeated header is exported as one table, and cells that a spreadsheet would run as formulas are neutralized. The transcript can be saved as Markdown.
 - **Desktop conveniences:** light/dark themes, recent files, last-document restore and unsaved-change prompts.
 
 Text replacement covers the original text with a white rectangle and adds new text; it does not remove the underlying text or reflow paragraphs. Use **Redact** for sensitive content. Applying redactions flattens **every page**, removing existing selectable text, interactive forms, links, bookmarks, attachments and source metadata. Keep an original copy if you need those features.
@@ -62,6 +63,7 @@ npm run cli -- split doc.pdf --ranges 1-3,5,7-10
 npm run cli -- encrypt doc.pdf --password secret --out protected.pdf
 npm run cli -- info doc.pdf
 npm run cli -- engine-extract page.png --prompt "Convert the document to markdown."
+npm run cli -- engine-extract invoice.png --csv invoice.csv
 ```
 
 Commands: `merge`, `split`, `encrypt`, `decrypt`, `info`, `engine-install`, `engine-start`, `engine-stop`, `engine-remove`, `engine-extract`. A packaged app takes the literal `cli` argument (for example `pagewise cli info doc.pdf` on Linux). GUI editing and base OCR are not exposed as CLI commands. The CLI runs through Electron; operation on a Linux server without a display has not been verified.

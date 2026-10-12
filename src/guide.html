@@ -65,11 +65,12 @@
   <p>If a PDF is a scan or photo, it has no real text: you can't search or copy from it. Two tools fix that:</p>
   <table>
     <tr><th></th><th>Make Searchable</th><th>Smart Extract (AI)</th></tr>
-    <tr><td><b>What it gives</b></td><td>Invisible text layer inside the PDF — the file stays visually identical, but search, Ctrl+F and copy now work</td><td>a <b>markdown transcript</b> for copying/exporting — the PDF is not modified</td></tr>
+    <tr><td><b>What it gives</b></td><td>Invisible text layer inside the PDF — the file stays visually identical, but search, Ctrl+F and copy now work</td><td>a <b>markdown transcript</b> for copying or saving, plus <b>tables as CSV</b> (Export CSV) or ready to paste into a spreadsheet (Copy table) — the PDF is not modified</td></tr>
     <tr><td><b>Strength</b></td><td>typed/printed pages; fast, works everywhere</td><td>tables, columns, formulas, handwriting, messy scans</td></tr>
     <tr><td><b>Setup</b></td><td>none (15MB language pack once)</td><td>one-time ~4.5GB download via <i>Tools → Setup AI Reading Engine</i></td></tr>
   </table>
   <p>Tip: run <b>both</b> on a scanned document — searchable for finding things, Smart Extract for a clean copy-paste of tables.</p>
+  <p>Tables that continue across pages with the same header row are exported as one table. Cells that start like a spreadsheet formula (for example <code>=</code>) are saved with a leading <code>'</code> so opening the CSV can't run them.</p>
 
   <h2>Command line (for automation)</h2>
   <p>Merge, split, encrypt, decrypt, document info and AI engine commands are scriptable. Run <code>npm run cli -- ...</code> from the source folder, or the packaged binary followed by <code>cli</code>. Examples:</p>
@@ -79,7 +80,7 @@
     <code>... cli encrypt doc.pdf --password secret</code><br>
     <code>... cli decrypt doc.pdf --password secret</code><br>
     <code>... cli info doc.pdf</code><br>
-    <code>... cli engine-extract page.png</code> (after engine install)
+    <code>... cli engine-extract page.png</code> (after engine install; add <code>--csv out.csv</code> to save tables)
   </p>
 
   <h2>Keyboard shortcuts</h2>

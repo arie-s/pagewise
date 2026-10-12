@@ -324,3 +324,60 @@ test('runSmartExtract asks for an engine update when files exist but the install
   assert.equal(setup, 1);
   assert.match(notes[0], /AI engine update \(small download\)/);
 });
+
+function extractResultHarness(tables, over = {}) {
+  const fake = () => ({ children: [], style: {}, appendChild(c) { this.children.push(c); }, append(...c) { this.children.push(...c); }, remove() { this.removed = true; } });
+  const container = fake(), calls = { copied: [], exported: [], md: [], notes: [] };
+  const { functions } = loadRendererFunctions(['showExtractResult'], {
+    state: { fileName: 'scan.pdf' },
+    api: { extractTables: async () => tables, copyToClipboard: t => calls.copied.push(t), copyTables: async t => { calls.copied.push(t); },
+      exportTables: async o => { calls.exported.push(o); return over.exportResult || { success: true }; },
+      saveMarkdown: async o => { calls.md.push(o); return { success: true }; } },
+    elements: { modalContainer: container },
+    extra: { showNotification: (m, t) => calls.notes.push([m, t]), document: { createElement: () => fake(), getElementById: () => container } }
+  });
+  const buttons = () => {
+    const out = {}, walk = n => { if (n.className?.startsWith('modal-btn')) out[n.textContent] = n; (n.children || []).forEach(walk); };
+    walk(container); return out;
+  };
+  return { functions, container, calls, buttons };
+}
+
+test('showExtractResult offers table copy/export and saves markdown', async () => {
+  const tables = [{ page: 1, rows: [['a', 'b\tc'], ['d\ne', '']] }, { page: 2, rows: [['x']] }];
+  const h = extractResultHarness(tables);
+  const pages = [{ page: 1, text: 'one' }, { page: 2, text: 'two' }];
+  await h.functions.showExtractResult(pages);
+  const b = h.buttons();
+  assert.deepEqual(Object.keys(b), ['Copy', 'Copy table', 'Export CSV (2 tables)', 'Save Markdown', 'Close']);
+  await b['Copy table'].onclick();
+  assert.equal(h.calls.copied[0], tables);
+  await b['Export CSV (2 tables)'].onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls.exported)), [{ tables, baseName: 'scan' }]);
+  assert.deepEqual(h.calls.notes.at(-1), ['Exported 2 table(s)', undefined]);
+  await b['Save Markdown'].onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls.md)), [{ text: '## Page 1\n\none\n\n---\n\n## Page 2\n\ntwo', baseName: 'scan' }]);
+});
+
+test('showExtractResult stays silent on export cancel and reports errors', async () => {
+  const h = extractResultHarness([{ page: 1, rows: [['a']] }], { exportResult: { success: false, canceled: true } });
+  await h.functions.showExtractResult([{ page: 1, text: 't' }]);
+  const b = h.buttons();
+  assert.ok(b['Export CSV']);
+  await b['Export CSV'].onclick();
+  assert.equal(h.calls.notes.length, 0);
+  const e = extractResultHarness([{ page: 1, rows: [['a']] }], { exportResult: { success: false, error: 'disk full' } });
+  await e.functions.showExtractResult([{ page: 1, text: 't' }]);
+  await e.buttons()['Export CSV'].onclick();
+  assert.deepEqual(e.calls.notes[0], ['Export error: disk full', 'error']);
+});
+
+test('showExtractResult hides table buttons without tables and shows model text as text', async () => {
+  const h = extractResultHarness([]);
+  const evil = '<img src=x onerror=alert(1)>';
+  await h.functions.showExtractResult([{ page: 1, text: evil }]);
+  assert.deepEqual(Object.keys(h.buttons()), ['Copy', 'Save Markdown', 'Close']);
+  const find = n => n.tagName === undefined && n.textContent?.includes(evil) ? n : (n.children || []).map(find).find(Boolean);
+  assert.equal(find(h.container).textContent, '## Page 1\n\n' + evil);
+  assert.equal(find(h.container).innerHTML, undefined);
+});

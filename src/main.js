@@ -626,13 +626,23 @@ async function runCli(args) {
       console.log(`engine removed (${Math.round(r.freedBytes / 1048576)} MB freed)`);
     } else if (cmd === 'engine-extract') {
       const img = args[1];
-      if (!img) throw new Error('usage: cli engine-extract <image.png>');
+      if (!img) throw new Error('usage: cli engine-extract <image.png> [--prompt ...] [--csv out.csv]');
       const png = fs.readFileSync(img).toString('base64');
-      const promptIdx = args.indexOf('--prompt');
+      const promptIdx = args.indexOf('--prompt'), csvIdx = args.indexOf('--csv');
+      if (csvIdx !== -1 && !args[csvIdx + 1]) throw new Error('--csv needs a file path');
       const wasRunning = await engineHealthy();
       try {
         const out = await smartExtract(png, promptIdx !== -1 ? args[promptIdx + 1] : undefined);
         console.log(out.content);
+        if (csvIdx !== -1) {
+          const csv = args[csvIdx + 1], ext = path.extname(csv);
+          const merged = mergeTables(tablesFromText(out.content).filter(rows => rows.length).map(rows => ({ page: 1, rows })));
+          for (const [k, t] of merged.entries()) {
+            const file = k ? csv.slice(0, csv.length - ext.length) + '_t' + (k + 1) + ext : csv;
+            await fs.promises.writeFile(file, BOM + toCsv(t.rows), 'utf8');
+            console.log('wrote ' + file);
+          }
+        }
       } finally { if (!wasRunning) stopEngine(); }
     } else if (cmd === 'info') {
       const input = args[1];
@@ -1171,6 +1181,72 @@ function removeEngine() {
   } catch (e) { return { success: false, error: e.message }; }
 }
 
+// CSV from extracted table rows. Text from a scanned document must not run as a spreadsheet
+// formula: cells starting with = or @ (after leading whitespace), tab or CR get a ' prefix, and so do
+// cells starting with + or - unless they hold only digits, spaces and number punctuation, so amounts
+// like "-$2,850.00" and phone numbers stay usable while "-cmd|..." or "+HYPERLINK(...)" are inert.
+// The same guard applies to tab-separated text copied for pasting into a spreadsheet.
+function formulaSafe(value) {
+  const s = String(value ?? '');
+  return /^\s*[=@]|^[\t\r]/.test(s) || (/^[+-]/.test(s) && /[^0-9\s.,$€£¥%()+\-\/]/.test(s)) ? "'" + s : s;
+}
+function csvCell(value) {
+  const s = formulaSafe(value);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function toCsv(rows) { return rows.map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n'; }
+function toTsv(tables) { return tables.map(rows => rows.map(r => r.map(c => formulaSafe(String(c ?? '').replace(/[\t\r\n]+/g, ' '))).join('\t')).join('\n')).join('\n\n'); }
+
+// dots.ocr emits tables as HTML. Rows come back as string[][] padded to the widest row; colspan puts the
+// text in the first column and empty cells after it, rowspan reserves the column in the following rows.
+const HTML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+function decodeEntities(s) {
+  return s.replace(/&(?:#x([0-9a-f]+)|#(\d+)|(amp|lt|gt|quot|apos|nbsp));/gi, (m, hex, dec, name) => {
+    if (name) return HTML_ENTITIES[name.toLowerCase()];
+    const cp = hex ? parseInt(hex, 16) : parseInt(dec, 10);
+    return cp > 0 && cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF) ? String.fromCodePoint(cp) : m;
+  });
+}
+function tablesFromText(text) {
+  const span = (attrs, name) => {
+    const m = new RegExp('\\b' + name + '\\s*=\\s*(?:"\\s*(\\d+)[^"]*"|\'\\s*(\\d+)[^\']*\'|(\\d+))', 'i').exec(attrs);
+    return Math.min(Math.max(parseInt(m && (m[1] || m[2] || m[3]), 10) || 1, 1), 1000);
+  };
+  const tables = [];
+  for (const t of String(text ?? '').matchAll(/<table\b[^>]*>([\s\S]*?)<\/table\s*>/gi)) {
+    const rows = [], pending = [];
+    for (const r of t[1].matchAll(/<tr\b[^>]*>([\s\S]*?)(?=<\/tr\s*>|<tr\b|$)/gi)) {
+      const row = [];
+      let col = 0, any = false;
+      const reserve = () => { while (pending[col] > 0) { pending[col]--; row[col++] = ''; } };
+      for (const c of r[1].matchAll(/<t[dh]\b([^>]*)>([\s\S]*?)(?=<\/t[dh]\s*>|<t[dh]\b|$)/gi)) {
+        any = true; reserve();
+        const cs = span(c[1], 'colspan'), rs = span(c[1], 'rowspan');
+        row[col] = decodeEntities(c[2].replace(/<br\b[^>]*>/gi, ' ').replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim();
+        for (let k = 0; k < cs; k++) { if (k) row[col + k] = ''; if (rs > 1) pending[col + k] = rs - 1; }
+        col += cs;
+      }
+      if (!any) continue;
+      for (let k = col; k < pending.length; k++) if (pending[k] > 0) { pending[k]--; row[k] = ''; }
+      rows.push(Array.from(row, v => v ?? ''));
+    }
+    const width = Math.max(0, ...rows.map(r => r.length));
+    tables.push(rows.map(r => r.concat(Array(width - r.length).fill(''))));
+  }
+  return tables;
+}
+// A table continuing on the next page repeats its header; fold those into the previous table.
+function mergeTables(tables) {
+  const norm = r => r.map(c => String(c).replace(/\s+/g, ' ').trim().toLowerCase()).join('\u0001');
+  const out = [];
+  for (const { page, rows } of tables) {
+    const prev = out[out.length - 1];
+    if (prev && rows.length && prev.rows[0].length === rows[0].length && norm(prev.rows[0]) === norm(rows[0])) prev.rows.push(...rows.slice(1));
+    else out.push({ page, rows: rows.slice() });
+  }
+  return out;
+}
+
 async function smartExtract(pngBase64, prompt) {
   const r = engineProc ? {} : await startEngine();
   if (r.success === false) throw new Error(r.error);
@@ -1205,7 +1281,44 @@ ipcMain.handle('engine-stop', () => stopEngine());
 ipcMain.handle('engine-remove', () => removeEngine());
 ipcMain.handle('smart-extract', async (event, { pngBase64, prompt }) => { try { return await smartExtract(pngBase64, prompt); } catch (e) { return { success: false, error: e.message }; } });
 
-// CLI: cli engine-install | cli engine-start | cli engine-stop | cli engine-remove | cli engine-extract <image.png>
+ipcMain.handle('extract-tables', (event, pages) => {
+  try {
+    return mergeTables(pages.flatMap(({ page, text }) => tablesFromText(text).filter(rows => rows.length).map(rows => ({ page, rows }))));
+  } catch (e) { return []; }
+});
+const safeBaseName = n => String(n ?? '').replace(/[^\p{L}\p{N}_ .-]/gu, '_').trim().replace(/^\.+$/, '') || 'document';
+const BOM = '\uFEFF';
+async function saveTextFile(defaultName, filterName, ext, text) {
+  const r = await dialog.showSaveDialog(mainWindow, { defaultPath: defaultName, filters: [{ name: filterName, extensions: [ext] }] });
+  if (r.canceled || !r.filePath) return { success: false, canceled: true };
+  await fs.promises.writeFile(r.filePath, text, 'utf8');
+  return { success: true, paths: [r.filePath] };
+}
+ipcMain.handle('export-tables', async (event, { tables, baseName } = {}) => {
+  try {
+    if (!Array.isArray(tables) || !tables.length) throw new Error('No tables to export');
+    const base = safeBaseName(baseName);
+    if (tables.length === 1) return await saveTextFile(base + '.csv', 'CSV', 'csv', BOM + toCsv(tables[0].rows));
+    const r = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory', 'createDirectory'], title: 'Select Export Folder' });
+    if (r.canceled || !r.filePaths?.[0]) return { success: false, canceled: true };
+    const perPage = {}, paths = [];
+    for (const { page, rows } of tables) {
+      const k = perPage[page] = (perPage[page] || 0) + 1;
+      const file = path.join(r.filePaths[0], `${base}_p${parseInt(page, 10) || 0}_t${k}.csv`);
+      await fs.promises.writeFile(file, BOM + toCsv(rows), 'utf8');
+      paths.push(file);
+    }
+    return { success: true, paths };
+  } catch (e) { return { success: false, error: e.message }; }
+});
+ipcMain.handle('copy-tables', (event, tables) => { clipboard.writeText(toTsv((tables || []).map(t => t.rows))); return { success: true }; });
+ipcMain.handle('save-markdown', async (event, { text, baseName } = {}) => {
+  try { return await saveTextFile(safeBaseName(baseName) + '.md', 'Markdown', 'md', String(text ?? '')); }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
+// CLI: cli engine-install | cli engine-start | cli engine-stop | cli engine-remove | cli engine-extract <image.png> [--prompt ...] [--csv out.csv]
+// (--csv writes each table found: the first to out.csv, later ones to out_t2.csv, out_t3.csv, ...)
 
 // Unsaved-changes flag synced from renderer
 ipcMain.on('set-unsaved', (event, flag) => { unsavedFlag = !!flag; });
