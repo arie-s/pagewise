@@ -22,6 +22,7 @@
 - **Make scans searchable:** local Tesseract OCR adds an invisible text layer at recognized word positions.
 - **Redact:** marked regions are masked and the entire output PDF is rebuilt from rendered images, removing the original content and hidden objects.
 - **Smart Extract (optional):** the local `dots.ocr` vision-language model transcribes a page into Markdown, including tables, formulas and handwriting. Output quality depends on the document and model.
+- **Make Searchable (AI) (optional):** uses the same AI engine to read hard scans (faxes, shadowed photos) and adds an invisible text layer, placing each word with Tesseract's box where it matches and an estimate from the page image otherwise.
 - **Tables to spreadsheets:** export the tables Smart Extract finds as CSV, or copy them straight into Excel or Google Sheets. A table that continues onto the next page with a repeated header is exported as one table, and cells that a spreadsheet would run as formulas are neutralized. The transcript can be saved as Markdown.
 - **Desktop conveniences:** light/dark themes, recent files, last-document restore and unsaved-change prompts.
 

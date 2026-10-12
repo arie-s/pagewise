@@ -502,13 +502,21 @@
       reorderPages(order);
     }
 
-    async function runOcr() {
+    async function runOcr(mode) {
+      const ai = mode === 'ai';
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
-      if (!confirm('Adds an invisible, searchable text layer to this PDF.\n\nRuns offline on any computer — no GPU or download needed beyond a one-time 15MB language pack.\n\nBest for typed/printed pages. For scans with tables, columns, or handwriting, use "Smart Extract" instead.\n\nProceed?')) return;
+      if (ai) {
+        const st = await window.pdfAPI.engineStatus();
+        if (!st.installed) {
+          showNotification(st.hasFiles ? 'Smart Extract needs an AI engine update (small download)' : 'Smart Extract needs the AI engine (one-time ~4.5GB download)', 'warning');
+          showEngineSetup();
+          return;
+        }
+      }
+      if (!confirm(ai ? 'Adds an invisible, searchable text layer using the AI reading engine.\n\nBetter than standard OCR on hard scans (faxes, shadows, photos), but slower.\n\nProceed?' : 'Adds an invisible, searchable text layer to this PDF.\n\nRuns offline on any computer — no GPU or download needed beyond a one-time 15MB language pack.\n\nBest for typed/printed pages. For scans with tables, columns, or handwriting, use "Smart Extract" instead.\n\nProceed?')) return;
       setLoading(true, 'OCR: preparing...');
       let stagingDoc = null;
       try {
-        const S = 2;
         let data = await buildDocumentData();
         const stagingBytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));
         stagingDoc = await pdfjsLib.getDocument({ data: stagingBytes }).promise;
@@ -516,10 +524,13 @@
         for (let i = 1; i <= stagingDoc.numPages; i++) {
           $('loadingText').textContent = 'OCR: recognizing page ' + i + ' of ' + stagingDoc.numPages + '...';
           const page = await stagingDoc.getPage(i);
+          const vp1 = page.getViewport({ scale: 1 });
+          const S = Math.min(2, Math.sqrt(4e6 / (vp1.width * vp1.height)));
           const vp = page.getViewport({ scale: S });
           const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
           await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
-          const ocr = await window.pdfAPI.ocrPage({ pngBase64: canvas.toDataURL('image/png').split(',')[1], lang: 'eng' });
+          const pngBase64 = canvas.toDataURL('image/png').split(',')[1];
+          const ocr = ai ? await window.pdfAPI.aiTextLayer({ pngBase64 }) : await window.pdfAPI.ocrPage({ pngBase64, lang: 'eng' });
           if (!ocr.success) throw new Error(ocr.error || 'Recognition failed on page ' + i);
           if (!ocr.words.length) continue;
           const mods = ocr.words
@@ -1699,7 +1710,7 @@
     window.pdfAPI.onMenuSetPassword(showSetPasswordDialog); window.pdfAPI.onMenuRemovePassword(showRemovePasswordDialog);
     window.pdfAPI.onMenuOpenRecent(async p => { try { const r = await window.pdfAPI.openSpecificFile(p); if (r && r.data) await loadPdf(r); else showNotification('File not accessible: ' + p, 'error'); } catch (e) { showNotification('Error: ' + e.message, 'error'); } });
     window.pdfAPI.onMenuExportImages(exportImages);
-    window.pdfAPI.onMenuOcr(runOcr); window.pdfAPI.onMenuSmartExtract(runSmartExtract); window.pdfAPI.onMenuEngineSetup(showEngineSetup);
+    window.pdfAPI.onMenuOcr(() => runOcr()); window.pdfAPI.onMenuOcrAi(() => runOcr('ai')); window.pdfAPI.onMenuSmartExtract(runSmartExtract); window.pdfAPI.onMenuEngineSetup(showEngineSetup);
     window.pdfAPI.onMenuToggleBookmarks(() => activateSidebarTab('bookmarks')); window.pdfAPI.onMenuToggleThumbnails(() => activateSidebarTab('thumbnails'));
     window.pdfAPI.onMenuInsertFromFile(showInsertFromFile);
     window.pdfAPI.onMenuAddPageNumbers(showPageNumbersDialog); window.pdfAPI.onMenuAddHeaderFooter(showHeaderFooterDialog);

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, clipboard, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, clipboard, net, nativeImage } = require('electron');
 const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -332,6 +332,10 @@ function createWindow() {
         {
           label: 'Make Searchable — offline OCR (any computer)',
           click: () => mainWindow.webContents.send('menu-ocr')
+        },
+        {
+          label: 'Make Searchable (AI) — better on hard scans, needs the AI engine',
+          click: () => mainWindow.webContents.send('menu-ocr-ai')
         },
         {
           label: 'Smart Extract — AI reading (tables, handwriting)',
@@ -1337,6 +1341,163 @@ ipcMain.handle('engine-start', async () => { try { return await startEngine(); }
 ipcMain.handle('engine-stop', () => stopEngine());
 ipcMain.handle('engine-remove', () => removeEngine());
 ipcMain.handle('smart-extract', async (event, { pngBase64, prompt }) => { try { return await smartExtract(pngBase64, prompt); } catch (e) { return { success: false, error: e.message }; } });
+
+// ---------- Make Searchable (AI): dots.ocr text + Tesseract boxes (else ink-estimated) ----------
+const LAYOUT_PROMPT = `Please output the layout information from the PDF image, including each layout element's bbox, its category, and the corresponding text within the bbox.
+
+1. Bbox format: [x1, y1, x2, y2]
+
+2. Layout Categories: The possible categories are ['Caption', 'Footnote', 'Formula', 'List-item', 'Page-footer', 'Page-header', 'Picture', 'Section-header', 'Table', 'Text', 'Title'].
+
+3. Text Extraction & Formatting Rules:
+    - Picture: For the 'Picture' category, the text field should be omitted.
+    - Formula: Format its text as LaTeX.
+    - Table: Format its text as HTML.
+    - All Others (Text, Title, etc.): Format their text as Markdown.
+
+4. Constraints:
+    - The output text must be the original text from the image, with no translation.
+    - All layout elements must be sorted according to human reading order.
+
+5. Final Output: The entire output must be a single JSON object.`;
+
+function parseLayout(text) {
+  try {
+    let j = JSON.parse(String(text ?? '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+    if (!Array.isArray(j)) j = j && typeof j === 'object' ? Object.values(j).find(Array.isArray) : null;
+    if (!Array.isArray(j)) return [];
+    return j.filter(b => b && Array.isArray(b.bbox) && b.bbox.length === 4 && b.bbox.every(n => typeof n === 'number' && Number.isFinite(n)) && typeof b.text === 'string');
+  } catch { return []; }
+}
+function layoutTokens(block) {
+  if (block.category === 'Picture') return [];
+  const split = s => s.split(/\s+/).filter(Boolean);
+  if (block.category === 'Table') return tablesFromText(block.text).flatMap(rows => rows.flatMap(r => r.flatMap(c => split(c))));
+  return split(decodeEntities(block.text.replace(/<[^>]*>/g, ' ')).replace(/^[ \t]*[-+*][ \t]+/gm, '').replace(/[*_`#>]/g, ''));
+}
+function normToken(s) {
+  return String(s).toLowerCase().replace(/[^\p{L}\p{N}$#.,]/gu, '').replace(/^[.,]+|[.,]+$/g, '');
+}
+function bgraToGray({ width, height }, bmp) {
+  const data = new Uint8Array(width * height);
+  for (let i = 0; i < data.length; i++) data[i] = Math.round(0.299 * bmp[i * 4 + 2] + 0.587 * bmp[i * 4 + 1] + 0.114 * bmp[i * 4]);
+  return { width, height, data };
+}
+function filter1d(src, w, h, r, horizontal, max) {
+  const out = new Float32Array(src.length), n = horizontal ? w : h, lines = horizontal ? h : w;
+  const at = (l, i) => horizontal ? l * w + i : i * w + l;
+  for (let l = 0; l < lines; l++) {
+    if (max) for (let i = 0; i < n; i++) { let m = 0; for (let k = Math.max(0, i - r); k <= Math.min(n - 1, i + r); k++) m = Math.max(m, src[at(l, k)]); out[at(l, i)] = m; }
+    else {
+      const ps = new Float64Array(n + 1);
+      for (let i = 0; i < n; i++) ps[i + 1] = ps[i] + src[at(l, i)];
+      for (let i = 0; i < n; i++) { const a = Math.max(0, i - r), b = Math.min(n - 1, i + r); out[at(l, i)] = (ps[b + 1] - ps[a]) / (b - a + 1); }
+    }
+  }
+  return out;
+}
+function runs(flags, minLen = 1, maxGap = 0) {
+  const out = [];
+  for (let i = 0, s = -1, last = -1; i <= flags.length; i++) {
+    if (i < flags.length && flags[i]) { if (s < 0) s = i; last = i; continue; }
+    if (s >= 0 && (i === flags.length || i - last > maxGap)) { if (last - s + 1 >= minLen) out.push([s, last + 1]); s = -1; }
+  }
+  return out;
+}
+function inkWords(gray, block, tokens) {
+  const [bx0, by0, bx1, by1] = block.bbox;
+  const cx0 = Math.max(0, Math.floor(bx0 - 6)), cx1 = Math.min(gray.width, Math.ceil(bx1 + 6));
+  const cy0 = Math.max(0, Math.floor(by0 - 4)), cy1 = Math.min(gray.height, Math.ceil(by1 + 4));
+  const w = cx1 - cx0, h = cy1 - cy0;
+  const spread = (list, x0, x1, y0, y1) => {
+    const tw = list.map(t => t.length), total = tw.reduce((a, b) => a + b + 0.3, 0);
+    let pos = x0;
+    return list.map((t, i) => { const a = pos; pos += (tw[i] + 0.3) / total * (x1 - x0); return { x0: a, y0, x1: Math.max(a + 1, pos - 0.3 / total * (x1 - x0)), y1 }; });
+  };
+  if (w < 1 || h < 1 || !tokens.length) return spread(tokens, bx0, bx1, by0, by1);
+  const g = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) g[y * w + x] = gray.data[(cy0 + y) * gray.width + cx0 + x];
+  let bg = filter1d(filter1d(g, w, h, 4, true, true), w, h, 4, false, true);
+  for (let p = 0; p < 2; p++) bg = filter1d(filter1d(bg, w, h, 12, true, false), w, h, 12, false, false);
+  const ink = new Uint8Array(w * h);
+  for (let i = 0; i < ink.length; i++) ink[i] = g[i] < bg[i] * 0.72 ? 1 : 0;
+  const rowCount = Array.from({ length: h }, (_, y) => { let c = 0; for (let x = 0; x < w; x++) c += ink[y * w + x]; return c; });
+  const rowThr = Math.max(2, 0.01 * w);
+  const lines = runs(rowCount.map(c => c > rowThr), 3).map(([ys, ye]) => {
+    const lh = ye - ys, cols = Array.from({ length: w }, (_, x) => { for (let y = ys; y < ye; y++) if (ink[y * w + x]) return 1; return 0; });
+    const segs = runs(cols, 1, Math.max(2, 0.28 * lh)).map(([a, b]) => [a + cx0, b + cx0]);
+    return { y0: ys + cy0, y1: ye + cy0, segs };
+  }).filter(l => l.segs.length);
+  if (!lines.length) return spread(tokens, bx0, bx1, by0, by1);
+  const box = (l, s) => ({ x0: s[0], y0: l.y0, x1: s[1], y1: l.y1 });
+  if (lines.reduce((a, l) => a + l.segs.length, 0) === tokens.length) return lines.flatMap(l => l.segs.map(s => box(l, s)));
+  const ext = lines.map(l => [l.segs[0][0], l.segs[l.segs.length - 1][1]]);
+  const totalInk = ext.reduce((a, e) => a + e[1] - e[0], 0), totalTok = tokens.reduce((a, t) => a + t.length + 0.3, 0);
+  const out = [];
+  let ti = 0, cum = 0, bound = 0;
+  lines.forEach((l, k) => {
+    bound += (ext[k][1] - ext[k][0]) / totalInk * totalTok;
+    const mine = [];
+    while (ti < tokens.length && (k === lines.length - 1 || cum + (tokens[ti].length + 0.3) / 2 <= bound)) { mine.push(tokens[ti]); cum += tokens[ti].length + 0.3; ti++; }
+    if (mine.length === l.segs.length) mine.forEach((t, i) => out.push(box(l, l.segs[i])));
+    else spread(mine, ext[k][0], ext[k][1], l.y0, l.y1).forEach(b => out.push(b));
+  });
+  return out;
+}
+function mergeLayout({ blocks, tessWords, gray }) {
+  const used = new Set(), out = [];
+  const cen = w => [(w.x0 + w.x1) / 2, (w.y0 + w.y1) / 2];
+  const inside = (w, [x0, y0, x1, y1], m) => { const [cx, cy] = cen(w); return cx >= x0 - m && cx <= x1 + m && cy >= y0 - m && cy <= y1 + m; };
+  for (const block of blocks) {
+    const tokens = layoutTokens(block);
+    if (!tokens.length) continue;
+    const byY = tessWords.filter(w => !used.has(w) && inside(w, block.bbox, 8)).sort((a, b) => cen(a)[1] - cen(b)[1]);
+    const cands = [];
+    for (let i = 0; i < byY.length;) {
+      const first = byY[i], line = [first];
+      let j = i + 1;
+      while (j < byY.length && Math.abs(cen(byY[j])[1] - cen(first)[1]) <= (first.y1 - first.y0) / 2) line.push(byY[j++]);
+      cands.push(...line.sort((a, b) => a.x0 - b.x0));
+      i = j;
+    }
+    const tn = tokens.map(normToken), cn = cands.map(c => normToken(c.text));
+    const L = Array.from({ length: tn.length + 1 }, () => new Int32Array(cn.length + 1));
+    for (let i = tn.length - 1; i >= 0; i--) for (let j = cn.length - 1; j >= 0; j--)
+      L[i][j] = tn[i] && tn[i] === cn[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    const match = new Array(tokens.length).fill(null);
+    for (let i = 0, j = 0; i < tn.length && j < cn.length;) {
+      if (tn[i] && tn[i] === cn[j]) { match[i++] = cands[j++]; }
+      else if (L[i + 1][j] >= L[i][j + 1]) i++; else j++;
+    }
+    let est = null;
+    tokens.forEach((t, i) => {
+      if (match[i]) { used.add(match[i]); const m = match[i]; out.push({ text: t, x0: m.x0, y0: m.y0, x1: m.x1, y1: m.y1, source: 'tesseract' }); return; }
+      est ||= inkWords(gray, block, tokens);
+      out.push({ text: t, ...est[i], source: 'ink' });
+    });
+  }
+  for (const w of tessWords) if (!used.has(w) && !blocks.some(b => inside(w, b.bbox, 0)) && w.text && w.text.trim()) out.push({ text: w.text, x0: w.x0, y0: w.y0, x1: w.x1, y1: w.y1, source: 'tesseract-only' });
+  return out;
+}
+
+ipcMain.handle('ai-text-layer', async (event, { pngBase64 }) => {
+  try {
+    const buf = Buffer.from(pngBase64, 'base64');
+    const worker = await getOcrWorker('eng');
+    const { data } = await worker.recognize(buf, {}, { blocks: true });
+    const tessWords = [];
+    (data.blocks || []).forEach(b => b.paragraphs.forEach(pa => pa.lines.forEach(l => l.words.forEach(w => tessWords.push({ text: w.text, x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1 })))));
+    const blocks = parseLayout((await smartExtract(pngBase64, LAYOUT_PROMPT)).content);
+    if (!blocks.length) return { success: false, error: 'The AI engine returned no layout for this page' };
+    const img = nativeImage.createFromBuffer(buf);
+    const merged = mergeLayout({ blocks, tessWords, gray: bgraToGray(img.getSize(), img.toBitmap()) });
+    const count = s => merged.filter(w => w.source === s).length;
+    return { success: true, words: merged.map(({ source, ...w }) => w),
+      stats: { aiTokens: count('tesseract') + count('ink'), matched: count('tesseract'), estimated: count('ink'), tesseractOnly: count('tesseract-only') } };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
 
 ipcMain.handle('extract-tables', (event, pages) => {
   try {
