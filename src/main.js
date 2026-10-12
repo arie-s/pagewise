@@ -134,6 +134,15 @@ function createWindow() {
             {
               label: 'Export Selected Pages...',
               click: () => mainWindow.webContents.send('menu-export-pages')
+            },
+            { type: 'separator' },
+            {
+              label: 'Word Document (.docx)...',
+              click: () => mainWindow.webContents.send('menu-export-docx')
+            },
+            {
+              label: 'Excel Workbook (.xlsx)...',
+              click: () => mainWindow.webContents.send('menu-export-xlsx')
             }
           ]
         },
@@ -2616,6 +2625,198 @@ ipcMain.handle('save-markdown', async (event, { text, baseName } = {}) => {
   catch (e) { return { success: false, error: e.message }; }
 });
 
+
+// ---------- Word and Excel export: a minimal ZIP writer and hand-written OOXML, no dependencies ----------
+const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(buf) { let c = 0xFFFFFFFF; for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+// files: [{ name, data: string|Buffer }]. Deflated unless that does not shrink the file. No ZIP64 (files under 4 GB).
+function zipFiles(files) {
+  const d = new Date(), time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1), date = (Math.max(d.getFullYear() - 1980, 0) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  const parts = [], central = [];
+  let offset = 0;
+  for (const f of files) {
+    const name = Buffer.from(f.name, 'utf8'), raw = Buffer.isBuffer(f.data) ? f.data : Buffer.from(f.data, 'utf8'), crc = crc32(raw);
+    let body = zlib.deflateRawSync(raw), method = 8;
+    if (body.length >= raw.length) { body = raw; method = 0; }
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(0x0800, 6); local.writeUInt16LE(method, 8);
+    local.writeUInt16LE(time, 10); local.writeUInt16LE(date, 12); local.writeUInt32LE(crc, 14); local.writeUInt32LE(body.length, 18);
+    local.writeUInt32LE(raw.length, 22); local.writeUInt16LE(name.length, 26); local.writeUInt16LE(0, 28);
+    const cen = Buffer.alloc(46);
+    cen.writeUInt32LE(0x02014b50, 0); cen.writeUInt16LE(20, 4); cen.writeUInt16LE(20, 6); cen.writeUInt16LE(0x0800, 8); cen.writeUInt16LE(method, 10);
+    cen.writeUInt16LE(time, 12); cen.writeUInt16LE(date, 14); cen.writeUInt32LE(crc, 16); cen.writeUInt32LE(body.length, 20);
+    cen.writeUInt32LE(raw.length, 24); cen.writeUInt16LE(name.length, 28); cen.writeUInt32LE(offset, 42);
+    parts.push(local, name, body); central.push(cen, name);
+    offset += 30 + name.length + body.length;
+  }
+  const cd = Buffer.concat(central), end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(files.length, 8); end.writeUInt16LE(files.length, 10); end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...parts, cd, end]);
+}
+// XML 1.0 text: drop characters that cannot appear in a document (C0 controls except tab/LF/CR, U+FFFE/FFFF, lone surrogates), then escape.
+function xmlText(s) {
+  return String(s ?? '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')
+    .replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]);
+}
+const XML_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+const OPC_NS = 'http://schemas.openxmlformats.org/package/2006/';
+const OFFICE_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/';
+function coreXml(title) {
+  return XML_HEAD + '<cp:coreProperties xmlns:cp="' + OPC_NS + 'metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' +
+    '<dc:title>' + xmlText(title) + '</dc:title><dc:creator>Pagewise</dc:creator><cp:lastModifiedBy>Pagewise</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">' + new Date().toISOString().replace(/\.\d+Z$/, 'Z') + '</dcterms:created></cp:coreProperties>';
+}
+const rel = (id, type, target) => '<Relationship Id="' + id + '" Type="' + type + '" Target="' + target + '"/>';
+const relsXml = items => XML_HEAD + '<Relationships xmlns="' + OPC_NS + 'relationships">' + items.join('') + '</Relationships>';
+const CORE_REL = OPC_NS + 'relationships/metadata/core-properties';
+
+const DOCX_TYPES = new Set(['h1', 'h2', 'h3', 'p', 'li', 'table', 'pagebreak']);
+const DOCX_PAGES = { letter: { w: 12240, h: 15840 }, a4: { w: 11906, h: 16838 } };
+function wRuns(runs, forceBold) {
+  return (runs || []).map(r => {
+    const pr = (forceBold || r.bold ? '<w:b/>' : '') + (r.italic ? '<w:i/>' : '');
+    const body = String(r.text ?? '').split(/(\t|\r\n|\n|\r)/).map(p => p === '\t' ? '<w:tab/>' : /^[\r\n]/.test(p) ? '<w:br/>' : p ? '<w:t xml:space="preserve">' + xmlText(p) + '</w:t>' : '').join('');
+    return body ? '<w:r>' + (pr ? '<w:rPr>' + pr + '</w:rPr>' : '') + body + '</w:r>' : '';
+  }).join('');
+}
+function buildDocx(blocks, { title = '', pageSize = 'letter', landscape = false } = {}) {
+  const pg = DOCX_PAGES[pageSize] || DOCX_PAGES.letter, pw = landscape ? pg.h : pg.w, ph = landscape ? pg.w : pg.h, textW = pw - 2880;
+  const style = { h1: 'Heading1', h2: 'Heading2', h3: 'Heading3', li: 'ListParagraph' };
+  const body = blocks.map(b => {
+    if (b.type === 'pagebreak') return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+    if (b.type === 'table') {
+      const cols = Math.max(1, ...b.rows.map(r => r.length)), cw = Math.floor(textW / cols);
+      return '<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid>' + '<w:gridCol w:w="' + cw + '"/>'.repeat(cols) + '</w:tblGrid>' +
+        b.rows.map((r, ri) => '<w:tr>' + Array.from({ length: cols }, (_, ci) => '<w:tc><w:tcPr><w:tcW w:w="' + cw + '" w:type="dxa"/></w:tcPr><w:p>' + wRuns([{ text: r[ci] ?? '' }], ri === 0) + '</w:p></w:tc>').join('') + '</w:tr>').join('') + '</w:tbl><w:p/>';
+    }
+    return '<w:p>' + (style[b.type] ? '<w:pPr><w:pStyle w:val="' + style[b.type] + '"/></w:pPr>' : '') + wRuns(b.runs) + '</w:p>';
+  }).join('');
+  const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+  const heading = (n, sz, before) => '<w:style w:type="paragraph" w:styleId="Heading' + n + '"><w:name w:val="heading ' + n + '"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="' + before + '" w:after="120"/><w:outlineLvl w:val="' + (n - 1) + '"/></w:pPr><w:rPr><w:b/><w:sz w:val="' + sz + '"/></w:rPr></w:style>';
+  const border = s => '<w:' + s + ' w:val="single" w:sz="4" w:space="0" w:color="808080"/>';
+  const styles = XML_HEAD + '<w:styles ' + W + '><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Calibri"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="264" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>' +
+    '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>' + heading(1, 32, 360) + heading(2, 28, 280) + heading(3, 24, 200) +
+    '<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:after="60"/><w:ind w:left="720" w:hanging="360"/></w:pPr></w:style>' +
+    '<w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:uiPriority w:val="99"/><w:semiHidden/><w:tblPr><w:tblInd w:w="0" w:type="dxa"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>' +
+    '<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:basedOn w:val="TableNormal"/><w:uiPriority w:val="39"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:tblPr><w:tblBorders>' + ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(border).join('') + '</w:tblBorders></w:tblPr></w:style></w:styles>';
+  return zipFiles([
+    { name: '[Content_Types].xml', data: XML_HEAD + '<Types xmlns="' + OPC_NS + 'content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>' +
+      '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>' },
+    { name: '_rels/.rels', data: relsXml([rel('rId1', OFFICE_REL + 'officeDocument', 'word/document.xml'), rel('rId2', CORE_REL, 'docProps/core.xml'), rel('rId3', OFFICE_REL + 'extended-properties', 'docProps/app.xml')]) },
+    { name: 'word/document.xml', data: XML_HEAD + '<w:document ' + W + '><w:body>' + body + '<w:sectPr><w:pgSz w:w="' + pw + '" w:h="' + ph + '"' + (landscape ? ' w:orient="landscape"' : '') + '/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>' },
+    { name: 'word/styles.xml', data: styles },
+    { name: 'word/_rels/document.xml.rels', data: relsXml([rel('rId1', OFFICE_REL + 'styles', 'styles.xml')]) },
+    { name: 'docProps/core.xml', data: coreXml(title) },
+    { name: 'docProps/app.xml', data: XML_HEAD + '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Pagewise</Application></Properties>' }
+  ]);
+}
+
+// Plain numbers become numeric cells; everything else stays text. "1,5" (EU decimal), "007", dates and phone numbers are text.
+function xlsxNumber(text) {
+  let t = String(text ?? '').trim().replace(/^(-?)[$€£]/, '$1');
+  if (/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) t = t.replace(/,/g, '');
+  return /^-?\d{1,15}(\.\d+)?$/.test(t) && !/^-?0\d/.test(t) ? Number(t) : null;
+}
+function xlsxSheetNames(tables) {
+  const used = new Set();
+  return tables.map(t => {
+    const base = (('Page ' + (parseInt(t.page, 10) || 1)).replace(/[\[\]:*?\/\\]/g, '').replace(/^'+|'+$/g, '').trim() || 'Sheet').slice(0, 31);
+    let name = base;
+    for (let n = 2; used.has(name.toLowerCase()); n++) { const suffix = ' (' + n + ')'; name = base.slice(0, 31 - suffix.length) + suffix; }
+    used.add(name.toLowerCase());
+    return name;
+  });
+}
+function xlsxCol(i) { let s = ''; for (i++; i > 0; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + (i - 1) % 26) + s; return s; }
+function buildXlsx(tables, { title = '' } = {}) {
+  const names = xlsxSheetNames(tables), S = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
+  const sheets = tables.map(({ rows }) => {
+    const width = Math.max(1, ...rows.map(r => r.length));
+    const widths = Array.from({ length: width }, (_, c) => Math.min(60, Math.max(8, ...rows.map(r => String(r[c] ?? '').length + 2))));
+    const data = rows.map((r, ri) => '<row r="' + (ri + 1) + '">' + r.map((v, ci) => {
+      const ref = xlsxCol(ci) + (ri + 1), s = ri === 0 ? ' s="1"' : '', n = xlsxNumber(v), text = String(v ?? '');
+      if (n !== null) return '<c r="' + ref + '"' + s + '><v>' + n + '</v></c>';
+      return text ? '<c r="' + ref + '"' + s + ' t="inlineStr"><is><t xml:space="preserve">' + xmlText(text.slice(0, 32767)) + '</t></is></c>' : '';
+    }).join('') + '</row>').join('');
+    return XML_HEAD + '<worksheet ' + S + '><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>' +
+      '<cols>' + widths.map((w, c) => '<col min="' + (c + 1) + '" max="' + (c + 1) + '" width="' + w + '" customWidth="1"/>').join('') + '</cols><sheetData>' + data + '</sheetData></worksheet>';
+  });
+  const n = tables.length;
+  return zipFiles([
+    { name: '[Content_Types].xml', data: XML_HEAD + '<Types xmlns="' + OPC_NS + 'content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+      sheets.map((_, i) => '<Override PartName="/xl/worksheets/sheet' + (i + 1) + '.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>').join('') +
+      '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>' },
+    { name: '_rels/.rels', data: relsXml([rel('rId1', OFFICE_REL + 'officeDocument', 'xl/workbook.xml'), rel('rId2', CORE_REL, 'docProps/core.xml')]) },
+    { name: 'xl/workbook.xml', data: XML_HEAD + '<workbook ' + S + ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' + names.map((nm, i) => '<sheet name="' + xmlText(nm) + '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>').join('') + '</sheets></workbook>' },
+    { name: 'xl/_rels/workbook.xml.rels', data: relsXml([...sheets.map((_, i) => rel('rId' + (i + 1), OFFICE_REL + 'worksheet', 'worksheets/sheet' + (i + 1) + '.xml')), rel('rId' + (n + 1), OFFICE_REL + 'styles', 'styles.xml')]) },
+    { name: 'xl/styles.xml', data: XML_HEAD + '<styleSheet ' + S + '><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>' +
+      '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+      '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>' +
+      '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>' },
+    ...sheets.map((data, i) => ({ name: 'xl/worksheets/sheet' + (i + 1) + '.xml', data })),
+    { name: 'docProps/core.xml', data: coreXml(title) }
+  ]);
+}
+
+// dots.ocr markdown to document blocks: #, ##, ### headings, **bold**, -/*/1. list items, HTML tables as real tables, everything else (including $...$ LaTeX) as text.
+function blocksFromMarkdown(text) {
+  const blocks = [];
+  const inline = s => s.split(/\*\*(.+?)\*\*/g).map((t, i) => ({ text: t, bold: i % 2 === 1 })).filter(r => r.text).map(r => r.bold ? r : { text: r.text });
+  const lines = [];
+  // the AI reader writes a paragraph on one line, so separate lines are real breaks (addresses, rows)
+  const flush = () => { if (lines.length) { const runs = inline(lines.join('\n')); if (runs.length) blocks.push({ type: 'p', runs }); lines.length = 0; } };
+  const prose = chunk => {
+    for (const raw of chunk.split(/\r?\n/)) {
+      const line = raw.replace(/!\[[^\]]*\]\([^)]*\)/g, '').trim(), m = /^(#{1,6})\s+(.*)$/.exec(line), li = /^[-*]\s+(.*)$/.exec(line), ol = /^(\d{1,3}[.)])\s+(.*)$/.exec(line);
+      if (!line) flush();
+      else if (m) { flush(); const runs = inline(m[2]); if (runs.length) blocks.push({ type: 'h' + Math.min(m[1].length, 3), runs }); }
+      else if (li || ol) { flush(); blocks.push({ type: 'li', runs: inline(li ? '• ' + li[1] : ol[1] + ' ' + ol[2]) }); }
+      else lines.push(line);
+    }
+    flush();
+  };
+  let last = 0;
+  const src = String(text ?? '');
+  for (const t of src.matchAll(/<table\b[\s\S]*?<\/table\s*>/gi)) {
+    prose(src.slice(last, t.index));
+    const rows = tablesFromText(t[0])[0];
+    if (rows && rows.length) blocks.push({ type: 'table', rows });
+    last = t.index + t[0].length;
+  }
+  prose(src.slice(last));
+  return blocks;
+}
+function validateRows(rows) {
+  if (!Array.isArray(rows) || rows.length > 10000) throw new Error('Invalid table');
+  for (const r of rows) if (!Array.isArray(r) || r.length > 50 || r.some(c => typeof c !== 'string')) throw new Error('Invalid table row');
+}
+function validateBlocks(blocks) {
+  if (!Array.isArray(blocks) || !blocks.length || blocks.length > 200000) throw new Error('Nothing to export');
+  for (const b of blocks) {
+    if (!b || !DOCX_TYPES.has(b.type)) throw new Error('Invalid block');
+    if (b.type === 'table') validateRows(b.rows);
+    else if (b.type !== 'pagebreak') {
+      if (!Array.isArray(b.runs) || b.runs.length > 10000 || b.runs.some(r => !r || typeof r.text !== 'string')) throw new Error('Invalid text block');
+    }
+  }
+}
+ipcMain.handle('markdown-blocks', (event, { text } = {}) => { try { return blocksFromMarkdown(text); } catch (e) { return []; } });
+ipcMain.handle('export-docx', async (event, { blocks, baseName, pageSize, landscape } = {}) => {
+  try {
+    validateBlocks(blocks);
+    const base = safeBaseName(baseName);
+    return await saveTextFile(base + '.docx', 'Word Document', 'docx', buildDocx(blocks, { title: base, pageSize: pageSize === 'a4' ? 'a4' : 'letter', landscape: landscape === true }));
+  } catch (e) { return { success: false, error: e.message }; }
+});
+ipcMain.handle('export-xlsx', async (event, { tables, baseName } = {}) => {
+  try {
+    if (!Array.isArray(tables) || !tables.length || tables.length > 500) throw new Error('No tables to export');
+    for (const t of tables) { if (!t) throw new Error('Invalid table'); validateRows(t.rows); if (!t.rows.length) throw new Error('Invalid table'); }
+    const base = safeBaseName(baseName);
+    return await saveTextFile(base + '.xlsx', 'Excel Workbook', 'xlsx', buildXlsx(tables, { title: base }));
+  } catch (e) { return { success: false, error: e.message }; }
+});
 // CLI: cli engine-install | cli engine-start | cli engine-stop | cli engine-remove | cli engine-extract <image.png> [--prompt ...] [--csv out.csv] | cli extract <file|folder>... [--out DIR] [--csv FILE] [--skip-existing] [--prompt TEXT]
 // (engine-extract --csv writes each table found: the first to out.csv, later ones to out_t2.csv, out_t3.csv, ...)
 // (extract: per document <stem>.md + <stem>.csv/_t2.csv in --out (default ./pagewise-out); --csv FILE merges same-header tables from all documents with a Source column)

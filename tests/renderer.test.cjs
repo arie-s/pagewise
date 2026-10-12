@@ -350,7 +350,7 @@ test('showExtractResult offers table copy/export and saves markdown', async () =
   const pages = [{ page: 1, text: 'one' }, { page: 2, text: 'two' }];
   await h.functions.showExtractResult(pages);
   const b = h.buttons();
-  assert.deepEqual(Object.keys(b), ['Copy', 'Copy table', 'Export CSV (2 tables)', 'Save Markdown', 'Close']);
+  assert.deepEqual(Object.keys(b), ['Copy', 'Copy table', 'Export CSV (2 tables)', 'Export Excel', 'Save Markdown', 'Close']);
   await b['Copy table'].onclick();
   assert.equal(h.calls.copied[0], tables);
   await b['Export CSV (2 tables)'].onclick();
