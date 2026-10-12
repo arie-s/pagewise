@@ -346,6 +346,7 @@
 
   <script type="module">
     import * as pdfjsLib from '../node_modules/pdfjs-dist/build/pdf.mjs';
+    import { extractScale } from './extract-scale.mjs';
 
     const state = { pdfDoc: null, currentPage: 1, scale: 1.0, originalData: null, filePath: null, fileName: null, currentTool: 'select', isDrawing: false, annotations: {}, undoStack: [], redoStack: [], hasUnsavedChanges: false, currentPath: [], pendingStamp: null, pendingImage: null, pendingSignature: null, redactionMarks: {}, textEdits: {} };
     const $ = id => document.getElementById(id);
@@ -597,21 +598,6 @@
       })();
     }
 
-    // Render scale for Smart Extract: 2x, except image-only pages (screenshots, small scans) whose image
-    // has fewer pixels than that; upscaling them adds vision tokens without adding detail. Never above 2x:
-    // on a 12 MP photo, 4 MP and 9 MP renders read no better than 2x but took 3x and 12x longer on CPU.
-    // Every page is capped at 4 MP (~5k vision tokens) so oversized pages fit the engine context.
-    async function extractScale(page) {
-      const vp = page.getViewport({ scale: 1 }), area = vp.width * vp.height;
-      const ops = await page.getOperatorList(), O = pdfjsLib.OPS;
-      let imgPx = 0, hasText = false;
-      ops.fnArray.forEach((fn, k) => {
-        if (fn === O.showText || fn === O.showSpacedText) hasText = true;
-        else if (fn === O.paintImageXObject) imgPx = Math.max(imgPx, ops.argsArray[k][1] * ops.argsArray[k][2]);
-      });
-      const scale = imgPx && !hasText ? Math.min(2, Math.sqrt(imgPx / area)) : 2;
-      return Math.min(scale, Math.sqrt(4e6 / area));
-    }
     async function showExtractResult(pages) {
       const text = pages.map(p => '## Page ' + p.page + '\n\n' + p.text).join('\n\n---\n\n');
       const tables = await window.pdfAPI.extractTables(pages);
@@ -661,7 +647,7 @@
         for (let i = 1; i <= state.pdfDoc.numPages; i++) {
           $('loadingText').textContent = 'Smart Extract: page ' + i + ' of ' + state.pdfDoc.numPages + '...';
           const page = await state.pdfDoc.getPage(i);
-          const vp = page.getViewport({ scale: await extractScale(page) });
+          const vp = page.getViewport({ scale: await extractScale(page, pdfjsLib.OPS) });
           const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
           await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
           const r = await window.pdfAPI.smartExtract({ pngBase64: canvas.toDataURL('image/png').split(',')[1] });

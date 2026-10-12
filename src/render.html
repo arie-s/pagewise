@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:;">
+</head>
+<body>
+  <script type="module">
+    import * as pdfjsLib from '../node_modules/pdfjs-dist/build/pdf.mjs';
+    import { extractScale } from './extract-scale.mjs';
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '../node_modules/pdfjs-dist/build/pdf.worker.mjs';
+    window.renderPages = async (b64) => {
+      const doc = await pdfjsLib.getDocument({ data: Uint8Array.from(atob(b64), c => c.charCodeAt(0)) }).promise;
+      const out = [];
+      try {
+        for (let i = 1; i <= doc.numPages; i++) {
+          const page = await doc.getPage(i);
+          const vp = page.getViewport({ scale: await extractScale(page, pdfjsLib.OPS) });
+          const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
+          await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+          out.push({ page: i, png: canvas.toDataURL('image/png').split(',')[1] });
+          page.cleanup();
+        }
+      } finally { await doc.destroy(); }
+      return out;
+    };
+    window.renderReady = true;
+  </script>
+</body>
+</html>
