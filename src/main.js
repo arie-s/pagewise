@@ -417,11 +417,11 @@ function createWindow() {
           click: () => mainWindow.webContents.send('menu-make-fillable')
         },
         {
-          label: 'My Details...',
-          click: () => mainWindow.webContents.send('menu-my-details')
+          label: 'Profiles...',
+          click: () => mainWindow.webContents.send('menu-profiles')
         },
         {
-          label: 'Fill from My Details',
+          label: 'Fill from Profile',
           click: () => mainWindow.webContents.send('menu-autofill')
         },
         {
@@ -1685,11 +1685,13 @@ ipcMain.handle('remove-form-field', async (event, { data, name }) => {
   }
 });
 
-// ---------- My Details autofill: stored locally, matched to form labels by rules (no AI) ----------
+// ---------- Profiles autofill: stored locally, matched to form labels by rules (no AI) ----------
 const DETAIL_KEYS = ['firstName', 'middleName', 'lastName', 'email', 'phone', 'street', 'city', 'state', 'zip', 'country', 'dateOfBirth', 'ssn', 'company', 'jobTitle'];
 const DATE_FORMATS = ['MM/DD/YYYY', 'DD/MM/YYYY', 'YYYY-MM-DD'];
+const MAX_PROFILES = 50, MAX_PROFILE_NAME = 60;
 const emptyDetails = () => ({ ...Object.fromEntries(DETAIL_KEYS.map(k => [k, ''])), dateFormat: DATE_FORMATS[0], custom: [] });
-const detailsPath = () => path.join(app.getPath('userData'), 'my-details.json');
+const profilesPath = () => path.join(app.getPath('userData'), 'profiles.json');
+const oldDetailsPath = () => path.join(app.getPath('userData'), 'my-details.json');
 const canEncrypt = () => { try { return !!(safeStorage && safeStorage.isEncryptionAvailable()); } catch (e) { return false; } };
 function cleanDetails(raw) {
   const out = emptyDetails(), src = raw && typeof raw === 'object' ? raw : {};
@@ -1703,46 +1705,103 @@ function cleanDetails(raw) {
   }
   return out;
 }
-function loadDetails() {
+// Throws on anything invalid; unknown ids in lastSelf/lastSpouse become null
+function cleanStore(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  if (!Array.isArray(src.profiles)) throw new Error('profiles must be a list');
+  if (src.profiles.length > MAX_PROFILES) throw new Error(`At most ${MAX_PROFILES} profiles are allowed`);
+  const profiles = [], names = new Set(), ids = new Set();
+  for (const p of src.profiles) {
+    if (!p || typeof p !== 'object') throw new Error('Invalid profile');
+    const name = typeof p.name === 'string' ? p.name.trim() : '';
+    if (!name) throw new Error('Every profile needs a name');
+    if (name.length > MAX_PROFILE_NAME) throw new Error(`Profile names can be at most ${MAX_PROFILE_NAME} characters`);
+    if (names.has(name.toLowerCase())) throw new Error(`There is more than one profile called "${name}"`);
+    names.add(name.toLowerCase());
+    let id = typeof p.id === 'string' && p.id.length > 0 && p.id.length <= 100 && !ids.has(p.id) ? p.id : require('crypto').randomUUID();
+    ids.add(id);
+    profiles.push({ id, name, details: cleanDetails(p.details) });
+  }
+  const known = v => (typeof v === 'string' && ids.has(v) ? v : null);
+  return { profiles, lastSelf: known(src.lastSelf), lastSpouse: known(src.lastSpouse) };
+}
+function writeStore(store) {
+  const encrypted = canEncrypt();
+  const file = encrypted ? { v: 2, enc: safeStorage.encryptString(JSON.stringify(store)).toString('base64') } : { v: 2, plain: store };
+  fs.mkdirSync(path.dirname(profilesPath()), { recursive: true });
+  fs.writeFileSync(profilesPath(), JSON.stringify(file), { mode: 0o600 });
+  return encrypted;
+}
+const emptyStore = () => ({ profiles: [], lastSelf: null, lastSpouse: null });
+// Reads the v1 single-record file; null when it is missing or unreadable
+function readOldDetails() {
+  try {
+    const file = JSON.parse(fs.readFileSync(oldDetailsPath(), 'utf8'));
+    if (typeof file.enc === 'string') return cleanDetails(JSON.parse(safeStorage.decryptString(Buffer.from(file.enc, 'base64'))));
+    if (file.plain && typeof file.plain === 'object') return cleanDetails(file.plain);
+  } catch (e) { /* unreadable */ }
+  return null;
+}
+function loadStore() {
   let text;
-  try { text = fs.readFileSync(detailsPath(), 'utf8'); } catch (e) { return { details: emptyDetails(), encrypted: canEncrypt() }; }
+  try { text = fs.readFileSync(profilesPath(), 'utf8'); } catch (e) {
+    const old = fs.existsSync(oldDetailsPath()) ? readOldDetails() : null;
+    if (!old) return { ...emptyStore(), encrypted: canEncrypt() };
+    const store = cleanStore({ profiles: [{ name: 'Me', details: old }] });
+    const encrypted = writeStore(store);
+    fs.renameSync(oldDetailsPath(), oldDetailsPath().replace(/\.json$/, '.migrated.json')); // kept, never deleted
+    return { ...store, encrypted };
+  }
   try {
     const file = JSON.parse(text);
-    if (typeof file.enc === 'string') return { details: cleanDetails(JSON.parse(safeStorage.decryptString(Buffer.from(file.enc, 'base64')))), encrypted: true };
-    if (file.plain && typeof file.plain === 'object') return { details: cleanDetails(file.plain), encrypted: false };
+    if (typeof file.enc === 'string') return { ...cleanStore(JSON.parse(safeStorage.decryptString(Buffer.from(file.enc, 'base64')))), encrypted: true };
+    if (file.plain && typeof file.plain === 'object') return { ...cleanStore(file.plain), encrypted: false };
     throw new Error('unrecognized file');
   } catch (e) {
     // Keep the unreadable file (e.g. the keyring changed) so the next save can't destroy it
-    const kept = detailsPath().replace(/\.json$/, `.unreadable-${Date.now()}.json`);
-    try { fs.renameSync(detailsPath(), kept); } catch (err) { /* keep going with empty details */ }
-    return { details: emptyDetails(), encrypted: canEncrypt(), warning: `Your saved details could not be read (${e.message}). The file was kept as ${path.basename(kept)}.` };
+    const kept = profilesPath().replace(/\.json$/, `.unreadable-${Date.now()}.json`);
+    try { fs.renameSync(profilesPath(), kept); } catch (err) { /* keep going with no profiles */ }
+    return { ...emptyStore(), encrypted: canEncrypt(), warning: `Your saved profiles could not be read (${e.message}). The file was kept as ${path.basename(kept)}.` };
   }
 }
-function saveDetails(raw) {
-  const details = cleanDetails(raw), encrypted = canEncrypt();
-  const file = encrypted ? { v: 1, enc: safeStorage.encryptString(JSON.stringify(details)).toString('base64') } : { v: 1, plain: details };
-  fs.mkdirSync(path.dirname(detailsPath()), { recursive: true });
-  fs.writeFileSync(detailsPath(), JSON.stringify(file), { mode: 0o600 });
-  return { details, encrypted };
+function saveStore(raw) {
+  const store = cleanStore(raw);
+  return { store, encrypted: writeStore(store) };
 }
-ipcMain.handle('details-get', async () => {
-  try { return { success: true, ...loadDetails() }; } catch (error) { return { success: false, error: error.message }; }
+ipcMain.handle('profiles-get', async () => {
+  try { return { success: true, ...loadStore() }; } catch (error) { return { success: false, error: error.message }; }
 });
-ipcMain.handle('details-set', async (event, details) => {
-  try { const { encrypted } = saveDetails(details); return { success: true, encrypted }; } catch (error) { return { success: false, error: error.message }; }
+ipcMain.handle('profiles-set', async (event, { profiles, lastSelf, lastSpouse } = {}) => {
+  try { const { encrypted } = saveStore({ profiles, lastSelf, lastSpouse }); return { success: true, encrypted }; } catch (error) { return { success: false, error: error.message }; }
+});
+// Remember the last chosen profiles without touching profile data
+ipcMain.handle('profiles-remember', async (event, { lastSelf, lastSpouse } = {}) => {
+  try {
+    const { profiles, warning } = loadStore();
+    if (warning) throw new Error(warning);
+    saveStore({ profiles, lastSelf, lastSpouse });
+    return { success: true };
+  } catch (error) { return { success: false, error: error.message }; }
 });
 
-// Label -> detail key, or null. Missing stays missing: only labels that clearly ask for the user's own detail match.
-const OTHER_PERSON = /\b(spouse|decedent|deceased|representative|requester|preparer|beneficiary|child|children|dependents?|parent|guardian|emergency|witness|notary|landlord)\b/;
+// Label -> { who: 'self' | 'spouse', key }, or null. Missing stays missing: only labels that clearly ask for the user's (or, by name, the spouse's) own detail match.
+const OTHER_PERSON = /\b(spouse|wife|husband|decedent|deceased|representative|requester|preparer|beneficiary|child|children|dependents?|parent|guardian|emergency|witness|notary|landlord)\b|\bpartner['’]s\b/;
+const OTHER_NOT_SPOUSE = /\b(decedent|deceased|representative|requester|preparer|beneficiary|child|children|dependents?|parent|guardian|emergency|witness|notary|landlord)\b/;
+const SPOUSE_WORDS = /\b(spouse|wife|husband)(['’]s)?(?=\W|$)|\bpartner['’]s\b/g;
 const OTHER_PARTY = /\b(spouse|decedent|deceased|prior|former|previous|old|representative|requester|preparer|agent|employer|payer|beneficiary|child|dependent|parent|guardian|emergency|witness|notary|landlord|foreign|signature|initials)\b|\bsign here\b|\bbusiness name\b|\bdisregarded entity\b/;
 function classifyLabel(label) {
   const full = String(label || '').toLowerCase().replace(/\s+/g, ' ').trim();
-  const head = full.split(/\(|\. /)[0].trim(); // instructions follow the first '(' or sentence, and may mention anyone
-  if (OTHER_PERSON.test(full)) return null; // "Name (first and last name of spouse)": another person anywhere in the label
-  const key = classifyHead(head);
-  if (key === 'street' && /\b(city|town)\b/.test(full)) return 'fullAddress';
-  if (key === null && /^(your |the )?name( of (entity\/)?individual)?\W*$/.test(head) && /\bfirst\b/.test(full) && /\blast\b/.test(full)) return 'fullName';
-  return key;
+  let head = full.split(/\(|\. /)[0].trim(); // instructions follow the first '(' or sentence, and may mention anyone
+  let who = 'self';
+  if (new RegExp(SPOUSE_WORDS.source).test(head)) { // "Spouse's name (...)": the spouse's own detail, only when the head says so
+    if (OTHER_NOT_SPOUSE.test(full)) return null;
+    who = 'spouse';
+    head = head.replace(SPOUSE_WORDS, ' ').replace(/\s+/g, ' ').trim();
+  } else if (OTHER_PERSON.test(full)) return null; // "Name (first and last name of spouse)": another person anywhere in the label
+  let key = classifyHead(head);
+  if (key === 'street' && /\b(city|town)\b/.test(full)) key = 'fullAddress';
+  else if (key === null && /^(your |the )?name( of (entity\/)?individual)?\W*$/.test(head) && /\bfirst\b/.test(full) && /\blast\b/.test(full)) key = 'fullName';
+  return key ? { who, key } : null;
 }
 function classifyHead(t) {
   if (!t || OTHER_PARTY.test(t)) return null;
@@ -1809,33 +1868,40 @@ function combRun(f, fields, n) {
   return run.length > 1 && sum === n ? run : null;
 }
 const SENSITIVE_KEYS = new Set(['ssn', 'dateOfBirth']), DIGIT_KEYS = new Set(['ssn', 'phone', 'zip']);
-// fields: [{ id, page, label, maxLen, comb, box }] -> [{ id, label, key, value, sensitive }] for fields with a value to propose
-function planAutofill({ fields, details, now = new Date() }) {
-  const d = cleanDetails(details), vals = derivedValues(d, now), plan = [], done = new Set();
+// fields: [{ id, page, label, maxLen, comb, box }] -> [{ id, label, key, who, value, sensitive }] for fields with a value to propose.
+// self and spouse are detail objects; spouse may be null, and spouse fields are then skipped (never filled from self).
+function planAutofill({ fields, self, spouse = null, now = new Date() }) {
+  const people = { self: { d: cleanDetails(self) }, spouse: spouse ? { d: cleanDetails(spouse) } : null }, plan = [], done = new Set();
+  for (const p of Object.values(people)) if (p) p.vals = derivedValues(p.d, now);
   for (const f of fields) {
     if (done.has(f.id)) continue;
-    const custom = customMatch(d.custom, f.label), key = custom ? 'custom' : classifyLabel(f.label);
-    let value = custom ? custom.value : key && vals[key];
+    const cls = classifyLabel(f.label), who = cls ? cls.who : 'self', person = people[who];
+    if (!person) continue;
+    const custom = customMatch(person.d.custom, f.label), key = custom ? 'custom' : cls && cls.key;
+    let value = custom ? custom.value : key && person.vals[key];
     if (!value) continue;
     const sensitive = SENSITIVE_KEYS.has(key);
     if (key === 'ssn' || key === 'phone') {
       const digits = value.replace(/\D/g, ''), run = combRun(f, fields, digits.length);
       if (run) {
         let at = 0;
-        for (const [i, g] of run.entries()) { plan.push({ id: g.id, label: `${f.label} (part ${i + 1} of ${run.length})`, key, value: digits.slice(at, at + g.maxLen), sensitive }); done.add(g.id); at += g.maxLen; }
+        for (const [i, g] of run.entries()) { plan.push({ id: g.id, label: `${f.label} (part ${i + 1} of ${run.length})`, key, who, value: digits.slice(at, at + g.maxLen), sensitive }); done.add(g.id); at += g.maxLen; }
         continue;
       }
     }
     if (f.maxLen > 0 && value.length > f.maxLen && DIGIT_KEYS.has(key)) value = value.replace(/\D/g, '');
     if (f.maxLen > 0 && value.length > f.maxLen) continue;
-    plan.push({ id: f.id, label: f.label, key, value, sensitive });
+    plan.push({ id: f.id, label: f.label, key, who, value, sensitive });
   }
   return plan;
 }
 // pages: [{ page, width, fields: [{ id, name, alt, maxLen, comb, box }], words }]; box and words are in the page's pixel space
-ipcMain.handle('autofill-plan', async (event, { pages }) => {
+ipcMain.handle('autofill-plan', async (event, { pages, selfId, spouseId }) => {
   try {
-    const { details, encrypted } = loadDetails(), fields = [];
+    const { profiles, encrypted } = loadStore(), fields = [];
+    const self = profiles.find(p => p.id === selfId), spouse = spouseId ? profiles.find(p => p.id === spouseId) : null;
+    if (!self) throw new Error('Choose a profile to fill as');
+    if (spouseId && !spouse) throw new Error('The spouse profile no longer exists');
     for (const p of pages) {
       for (const f of p.fields) {
         let label = String(f.alt || '').trim().slice(0, 300) || labelFor({ kind: 'text', box: f.box, aboveFirst: f.comb && f.maxLen > 1 }, p.words || [], p.width / 1275); // comb cells sit under their heading, and text to their left is usually unrelated
@@ -1844,7 +1910,7 @@ ipcMain.handle('autofill-plan', async (event, { pages }) => {
         fields.push({ id: f.id, page: p.page, label, maxLen: f.maxLen || 0, comb: !!f.comb, box: f.box });
       }
     }
-    return { success: true, plan: planAutofill({ fields, details, now: new Date() }), encrypted };
+    return { success: true, plan: planAutofill({ fields, self: self.details, spouse: spouse ? spouse.details : null, now: new Date() }), encrypted };
   } catch (error) {
     return { success: false, error: error.message };
   }

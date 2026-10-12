@@ -1414,53 +1414,95 @@
         showNotification('Field removed');
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
     }
-    // My Details: stored locally by the main process; every stored value goes into the DOM via textContent/value only
+    // Profiles: stored locally by the main process; every stored value goes into the DOM via textContent/value only
     const DETAIL_GROUPS = [
       ['Name', [['firstName', 'First name'], ['middleName', 'Middle name'], ['lastName', 'Last name']]],
       ['Contact', [['email', 'Email'], ['phone', 'Phone']]],
       ['Address', [['street', 'Street address'], ['city', 'City'], ['state', 'State / province'], ['zip', 'ZIP / postal code'], ['country', 'Country']]],
       ['Other', [['dateOfBirth', 'Date of birth', true], ['ssn', 'SSN / tax ID', true], ['company', 'Company'], ['jobTitle', 'Job title']]]
     ];
+    const isEmptyDetails = d => !d.custom.length && !DETAIL_GROUPS.some(([, keys]) => keys.some(([k]) => d[k]));
     function el(tag, props, ...kids) { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; }
-    async function showMyDetails(notice) {
-      const r = await window.pdfAPI.detailsGet();
+    async function showProfiles(notice) {
+      const r = await window.pdfAPI.profilesGet();
       if (!r.success) { showNotification('Error: ' + r.error, 'error'); return; }
       if (r.warning) showNotification(r.warning, 'warning');
-      const d = r.details;
-      const m = showModal('My Details', '<div class="my-details" style="max-height:60vh;overflow:auto;"></div>', [{ label: 'Cancel', action: 'cancel' }, { label: 'Save', action: 'save', primary: true, handler: async mm => {
+      const profiles = r.profiles.map(p => ({ id: p.id, name: p.name, details: p.details }));
+      if (!profiles.length) profiles.push({ id: crypto.randomUUID(), name: 'Me', details: null });
+      let cur = profiles[0];
+      const form = el('div', { style: 'flex:1;min-width:0;max-height:60vh;overflow:auto;padding-right:6px;' }), list = el('div');
+      const collect = () => {
         const out = { custom: [] };
-        mm.querySelectorAll('[data-detail]').forEach(i => { out[i.dataset.detail] = i.value; });
-        mm.querySelectorAll('.custom-row').forEach(row => { const [l, v] = row.querySelectorAll('input'); out.custom.push({ label: l.value, value: v.value }); });
-        const s = await window.pdfAPI.detailsSet(out);
-        showNotification(s.success ? 'Details saved' : 'Error: ' + s.error, s.success ? 'success' : 'error');
-      } }]);
-      const body = m.querySelector('.my-details');
-      if (notice) body.append(el('div', { textContent: notice, style: 'margin-bottom:12px;color:var(--accent,inherit);font-weight:600;' }));
-      body.append(el('div', { textContent: 'Stored on this computer only. Used to fill matching form fields after you review them.', className: 'form-label' }));
-      if (!r.encrypted) body.append(el('div', { textContent: "Details are stored unencrypted because the system keyring isn't available.", className: 'form-label', style: 'margin-bottom:12px;' }));
-      for (const [group, keys] of DETAIL_GROUPS) {
-        body.append(el('div', { textContent: group, style: 'font-weight:600;margin:12px 0 6px;' }));
-        for (const [key, label, sensitive] of keys) {
-          const input = el('input', { type: 'text', className: 'form-input', value: d[key] || '', maxLength: 500 }); input.dataset.detail = key;
-          body.append(el('div', { className: 'form-group', style: 'margin-bottom:8px;' }, el('label', { className: 'form-label', textContent: label + (sensitive ? ' (only filled when you tick it in the review)' : '') }), input));
-        }
-      }
-      const fmt = el('select', { className: 'form-select' }, ...['MM/DD/YYYY', 'DD/MM/YYYY', 'YYYY-MM-DD'].map(f => el('option', { value: f, textContent: f })));
-      fmt.value = d.dateFormat; fmt.dataset.detail = 'dateFormat';
-      body.append(el('div', { className: 'form-group', style: 'margin-bottom:8px;' }, el('label', { className: 'form-label', textContent: 'Date format (for "Date" fields)' }), fmt));
-      body.append(el('div', { textContent: 'Custom entries', style: 'font-weight:600;margin:12px 0 6px;' }), el('div', { className: 'form-label', textContent: 'Filled into fields whose label contains the entry label.' }));
-      const list = el('div');
-      const addRow = (c = { label: '', value: '' }) => {
-        const row = el('div', { className: 'custom-row', style: 'display:flex;gap:6px;margin-bottom:6px;' },
-          el('input', { type: 'text', className: 'form-input', placeholder: 'Field label', value: c.label, maxLength: 100 }),
-          el('input', { type: 'text', className: 'form-input', placeholder: 'Value', value: c.value, maxLength: 500 }),
-          el('button', { className: 'modal-btn', textContent: '×', title: 'Remove', onclick: () => row.remove() }));
-        list.append(row);
+        form.querySelectorAll('[data-detail]').forEach(i => { out[i.dataset.detail] = i.value; });
+        form.querySelectorAll('.custom-row').forEach(row => { const [l, v] = row.querySelectorAll('input'); out.custom.push({ label: l.value, value: v.value }); });
+        cur.details = out;
       };
-      d.custom.forEach(addRow);
-      body.append(list, el('button', { className: 'modal-btn', textContent: 'Add entry', onclick: () => addRow() }));
+      const uniqueName = base => { let n = base, i = 2; while (profiles.some(p => p.name.trim().toLowerCase() === n.toLowerCase())) n = base + ' ' + i++; return n; };
+      const m = showModal('Profiles', '<div class="profiles-dialog" style="display:flex;gap:16px;"></div>', [{ label: 'Cancel', action: 'cancel' }, { label: 'Save', action: 'save', primary: true, handler: mm => {
+        collect();
+        const names = new Set();
+        for (const p of profiles) {
+          const n = p.name.trim().toLowerCase();
+          if (!n || p.name.trim().length > 60 || names.has(n)) { cur = p; renderList(); renderForm(); showNotification(!n ? 'Every profile needs a name' : p.name.trim().length > 60 ? 'Profile names can be at most 60 characters' : 'There is more than one profile called "' + p.name.trim() + '"', 'warning'); return 'keep-open'; }
+          names.add(n);
+        }
+        window.pdfAPI.profilesSet({ profiles, lastSelf: r.lastSelf, lastSpouse: r.lastSpouse }).then(s => showNotification(s.success ? 'Profiles saved' : 'Error: ' + s.error, s.success ? 'success' : 'error'));
+      } }]);
+      const renderList = () => {
+        list.replaceChildren(...profiles.map(p => {
+          const item = el('div', { textContent: p.name || '(no name)', style: 'padding:6px 8px;cursor:pointer;border-radius:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' + (p === cur ? 'background:var(--accent,#3b82f6);color:#fff;' : '') });
+          item.onclick = () => { if (p === cur) return; collect(); cur = p; renderList(); renderForm(); };
+          return item;
+        }));
+      };
+      const renderForm = (focusName) => {
+        const d = cur.details || { dateFormat: 'MM/DD/YYYY', custom: [] };
+        form.replaceChildren();
+        if (notice) form.append(el('div', { textContent: notice, style: 'margin-bottom:12px;color:var(--accent,inherit);font-weight:600;' }));
+        form.append(el('div', { textContent: 'Stored on this computer only. Used to fill matching form fields after you review them.', className: 'form-label' }));
+        if (!r.encrypted) form.append(el('div', { textContent: "Profiles are stored unencrypted because the system keyring isn't available.", className: 'form-label', style: 'margin-bottom:12px;' }));
+        const name = el('input', { type: 'text', className: 'form-input', value: cur.name, maxLength: 60, oninput: () => { cur.name = name.value; renderList(); } });
+        form.append(el('div', { className: 'form-group', style: 'margin:12px 0 8px;' }, el('label', { className: 'form-label', textContent: 'Profile name' }), name));
+        for (const [group, keys] of DETAIL_GROUPS) {
+          form.append(el('div', { textContent: group, style: 'font-weight:600;margin:12px 0 6px;' }));
+          for (const [key, label, sensitive] of keys) {
+            const input = el('input', { type: 'text', className: 'form-input', value: d[key] || '', maxLength: 500 }); input.dataset.detail = key;
+            form.append(el('div', { className: 'form-group', style: 'margin-bottom:8px;' }, el('label', { className: 'form-label', textContent: label + (sensitive ? ' (only filled when you tick it in the review)' : '') }), input));
+          }
+        }
+        const fmt = el('select', { className: 'form-select' }, ...['MM/DD/YYYY', 'DD/MM/YYYY', 'YYYY-MM-DD'].map(f => el('option', { value: f, textContent: f })));
+        fmt.value = d.dateFormat; fmt.dataset.detail = 'dateFormat';
+        form.append(el('div', { className: 'form-group', style: 'margin-bottom:8px;' }, el('label', { className: 'form-label', textContent: 'Date format (for "Date" fields)' }), fmt));
+        form.append(el('div', { textContent: 'Custom entries', style: 'font-weight:600;margin:12px 0 6px;' }), el('div', { className: 'form-label', textContent: 'Filled into fields whose label contains the entry label.' }));
+        const customs = el('div');
+        const addRow = (c = { label: '', value: '' }) => {
+          const row = el('div', { className: 'custom-row', style: 'display:flex;gap:6px;margin-bottom:6px;' },
+            el('input', { type: 'text', className: 'form-input', placeholder: 'Field label', value: c.label, maxLength: 100 }),
+            el('input', { type: 'text', className: 'form-input', placeholder: 'Value', value: c.value, maxLength: 500 }),
+            el('button', { className: 'modal-btn', textContent: '×', title: 'Remove', onclick: () => row.remove() }));
+          customs.append(row);
+        };
+        (d.custom || []).forEach(addRow);
+        form.append(customs, el('button', { className: 'modal-btn', textContent: 'Add entry', onclick: () => addRow() }));
+        notice = null;
+        if (focusName) { name.focus(); name.select(); }
+      };
+      const btn = (text, onclick) => el('button', { className: 'modal-btn', textContent: text, style: 'margin:0 4px 4px 0;', onclick });
+      const add = (name, details) => { collect(); cur = { id: crypto.randomUUID(), name, details }; profiles.push(cur); renderList(); renderForm(true); };
+      const side = el('div', { style: 'width:210px;flex:none;' }, list, el('div', { style: 'margin-top:10px;' },
+        btn('New', () => { if (profiles.length >= 50) return showNotification('At most 50 profiles are allowed', 'warning'); add(uniqueName('Profile'), null); }),
+        btn('Duplicate', () => { if (profiles.length >= 50) return showNotification('At most 50 profiles are allowed', 'warning'); collect(); add(uniqueName(cur.name.trim().slice(0, 50) + ' copy'), JSON.parse(JSON.stringify(cur.details))); }),
+        btn('Rename', () => { const i = form.querySelector('input'); i.focus(); i.select(); }),
+        btn('Delete', () => {
+          if (!confirm('Delete the profile "' + cur.name + '"?')) return;
+          const i = profiles.indexOf(cur); profiles.splice(i, 1);
+          if (!profiles.length) profiles.push({ id: crypto.randomUUID(), name: 'Me', details: null });
+          cur = profiles[Math.min(i, profiles.length - 1)]; renderList(); renderForm();
+        })));
+      m.querySelector('.profiles-dialog').append(side, form);
+      renderList(); renderForm();
     }
-    async function fillFromMyDetails() {
+    async function fillFromProfile() {
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
       setLoading(true, 'Reading form fields...');
       try {
@@ -1477,41 +1519,60 @@
           pages.push({ page: i, width: vp.width, fields, words: pageWords((await page.getTextContent()).items, vp) });
         }
         if (!pages.length) { showNotification('This PDF has no text fields to fill', 'warning'); return; }
-        const g = await window.pdfAPI.detailsGet();
+        const g = await window.pdfAPI.profilesGet();
         if (!g.success) throw new Error(g.error);
-        const d = g.details;
-        if (!d.custom.length && !DETAIL_GROUPS.some(([, keys]) => keys.some(([k]) => d[k]))) { setLoading(false); showMyDetails('Add your details first'); return; }
-        const r = await window.pdfAPI.autofillPlan({ pages });
-        if (!r.success) throw new Error(r.error);
-        if (!r.plan.length) { showNotification('No fields match your details', 'warning'); return; }
+        if (!g.profiles.length || g.profiles.every(p => isEmptyDetails(p.details))) { setLoading(false); showProfiles('Create a profile first'); return; }
+        const names = g.profiles.map(p => ({ id: p.id, name: p.name }));
+        const selfId = names.some(p => p.id === g.lastSelf) ? g.lastSelf : names[0].id;
+        const spouseId = names.some(p => p.id === g.lastSpouse) ? g.lastSpouse : null;
         setLoading(false);
-        showAutofillReview(r.plan, existing);
+        showAutofillReview(pages, existing, names, selfId, spouseId);
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
       finally { setLoading(false); }
     }
-    function showAutofillReview(plan, existing) {
+    function showAutofillReview(pages, existing, names, selfId, spouseId) {
       const storage = state.pdfDoc.annotationStorage;
-      const m = showModal('Fill from My Details', '<div class="autofill-review" style="max-height:60vh;overflow:auto;"></div>', [{ label: 'Cancel', action: 'cancel' }, { label: 'Fill', action: 'fill', primary: true, handler: mm => {
+      const m = showModal('Fill from Profile', '<div class="autofill-review" style="max-height:60vh;overflow:auto;"></div>', [{ label: 'Cancel', action: 'cancel' }, { label: 'Fill', action: 'fill', primary: true, handler: mm => {
         let n = 0;
         mm.querySelectorAll('tr[data-id]').forEach(tr => {
           const value = tr.querySelector('input[type=text]').value;
           if (tr.querySelector('input[type=checkbox]').checked && value) { storage.setValue(tr.dataset.id, { value }); n++; }
         });
+        window.pdfAPI.profilesRemember({ lastSelf: selfSel.value, lastSpouse: spouseSel.value || null }).catch(() => {});
         if (!n) return;
         markFormsDirty();
         renderAllPages().then(() => showNotification('Filled ' + n + (n === 1 ? ' field' : ' fields')));
       } }]);
-      const fillBtn = m.querySelector('[data-action=fill]'), table = el('table', { style: 'width:100%;border-collapse:collapse;' });
-      const sync = () => { const n = [...table.querySelectorAll('input[type=checkbox]')].filter(c => c.checked).length; fillBtn.textContent = 'Fill (' + n + ')'; fillBtn.disabled = !n; };
-      for (const p of plan) {
-        const current = storage.getRawValue(p.id)?.value ?? existing[p.id];
-        const tick = el('input', { type: 'checkbox', checked: !p.sensitive && !current, onchange: sync });
-        const hint = el('div', { style: 'font-size:11px;color:var(--text-dim);' }, p.key + (p.sensitive ? ' • sensitive' : '') + (current ? ' • already has "' + current + '"' : ''));
-        const tr = el('tr', {}, el('td', { style: 'padding:4px;' }, tick), el('td', { style: 'padding:4px;' }, el('div', { textContent: p.label }), hint), el('td', { style: 'padding:4px;' }, el('input', { type: 'text', className: 'form-input', value: p.value })));
-        tr.dataset.id = p.id; table.append(tr);
-      }
-      m.querySelector('.autofill-review').append(table);
-      sync();
+      const fillBtn = m.querySelector('[data-action=fill]'), box = m.querySelector('.autofill-review');
+      const mkSelect = (value, ...opts) => { const sel = el('select', { className: 'form-select' }, ...opts.map(o => el('option', { value: o.id, textContent: o.name }))); sel.value = value; return sel; };
+      const selfSel = mkSelect(selfId, ...names), spouseSel = mkSelect(spouseId || '', { id: '', name: 'None' }, ...names);
+      const rows = el('div');
+      box.append(
+        el('div', { className: 'form-group', style: 'margin-bottom:8px;' }, el('label', { className: 'form-label', textContent: 'Fill as' }), selfSel),
+        el('div', { className: 'form-group', style: 'margin-bottom:12px;' }, el('label', { className: 'form-label', textContent: 'Spouse' }), spouseSel),
+        rows);
+      let token = 0;
+      const sync = () => { const n = [...rows.querySelectorAll('input[type=checkbox]')].filter(c => c.checked).length; fillBtn.textContent = 'Fill (' + n + ')'; fillBtn.disabled = !n; };
+      const rebuild = async () => {
+        const mine = ++token;
+        fillBtn.disabled = true;
+        const r = await window.pdfAPI.autofillPlan({ pages, selfId: selfSel.value, spouseId: spouseSel.value || null });
+        if (mine !== token) return;
+        if (!r.success) { rows.replaceChildren(el('div', { textContent: 'Error: ' + r.error, className: 'form-label' })); sync(); return; }
+        if (!r.plan.length) { rows.replaceChildren(el('div', { textContent: 'No fields match this profile', className: 'form-label' })); sync(); return; }
+        const table = el('table', { style: 'width:100%;border-collapse:collapse;' });
+        for (const p of r.plan) {
+          const current = storage.getRawValue(p.id)?.value ?? existing[p.id];
+          const tick = el('input', { type: 'checkbox', checked: !p.sensitive && !current, onchange: sync });
+          const hint = el('div', { style: 'font-size:11px;color:var(--text-dim);' }, (p.who === 'spouse' ? 'spouse' : 'you') + ' • ' + p.key + (p.sensitive ? ' • sensitive' : '') + (current ? ' • already has "' + current + '"' : ''));
+          const tr = el('tr', {}, el('td', { style: 'padding:4px;' }, tick), el('td', { style: 'padding:4px;' }, el('div', { textContent: p.label }), hint), el('td', { style: 'padding:4px;' }, el('input', { type: 'text', className: 'form-input', value: p.value })));
+          tr.dataset.id = p.id; table.append(tr);
+        }
+        rows.replaceChildren(table);
+        sync();
+      };
+      selfSel.onchange = spouseSel.onchange = rebuild;
+      rebuild();
     }
     async function mergePdfs() {
       const files = await window.pdfAPI.openMultipleFiles(); if (files && files.error) { showNotification(files.error, 'error'); return; } if (!files || files.length < 2) { showNotification('Select at least 2 files', 'warning'); return; }
@@ -1548,7 +1609,7 @@
       const m = document.createElement('div'); m.className = 'modal-overlay';
       m.innerHTML = '<div class="modal"><div class="modal-header"><span class="modal-title">' + title + '</span><button class="modal-close">&times;</button></div><div class="modal-body">' + content + '</div><div class="modal-footer">' + buttons.map(b => '<button class="modal-btn' + (b.primary ? ' primary' : '') + '" data-action="' + b.action + '">' + b.label + '</button>').join('') + '</div></div>';
       m.querySelector('.modal-close').onclick = () => m.remove();
-      m.querySelectorAll('.modal-btn').forEach(btn => { btn.onclick = () => { const h = buttons.find(b => b.action === btn.dataset.action)?.handler; if (h) h(m); m.remove(); }; });
+      m.querySelectorAll('.modal-btn').forEach(btn => { btn.onclick = () => { const h = buttons.find(b => b.action === btn.dataset.action)?.handler; if (h && h(m) === 'keep-open') return; m.remove(); }; });
       $('modalContainer').appendChild(m); return m;
     }
 
@@ -1983,7 +2044,7 @@
     window.pdfAPI.onMenuUndo(undo); window.pdfAPI.onMenuRedo(redo); window.pdfAPI.onMenuFind(showSearch);
     window.pdfAPI.onMenuZoomIn(() => setZoom(state.scale + 0.25)); window.pdfAPI.onMenuZoomOut(() => setZoom(state.scale - 0.25)); window.pdfAPI.onMenuZoomReset(() => setZoom(1));
     window.pdfAPI.onMenuTool(selectTool); window.pdfAPI.onMenuRotate(rotatePage); window.pdfAPI.onMenuRotateAll(rotateAllPages); window.pdfAPI.onMenuDeletePage(deletePage); window.pdfAPI.onMenuInsertPage(insertBlankPage);
-    window.pdfAPI.onMenuAddWatermark(showWatermarkDialog); window.pdfAPI.onMenuFlattenForm(flattenForm); window.pdfAPI.onMenuMakeFillable(makeFillable); window.pdfAPI.onMenuMyDetails(() => showMyDetails()); window.pdfAPI.onMenuAutofill(fillFromMyDetails);
+    window.pdfAPI.onMenuAddWatermark(showWatermarkDialog); window.pdfAPI.onMenuFlattenForm(flattenForm); window.pdfAPI.onMenuMakeFillable(makeFillable); window.pdfAPI.onMenuProfiles(() => showProfiles()); window.pdfAPI.onMenuAutofill(fillFromProfile);
     window.pdfAPI.onMenuStamp(s => { state.pendingStamp = s; selectTool('stamp'); showNotification('Click to place stamp', 'info'); });
     window.pdfAPI.onMenuAddImage(async () => { const img = await window.pdfAPI.selectImage(); if (img) { state.pendingImage = img; selectTool('image'); showNotification('Click to place image', 'info'); } });
     window.pdfAPI.onMenuGoto(d => { if (d === 'first') goToPage(1); else if (d === 'last') goToPage(state.pdfDoc.numPages); else if (d === 'prev' && state.currentPage > 1) goToPage(state.currentPage - 1); else if (d === 'next' && state.currentPage < state.pdfDoc.numPages) goToPage(state.currentPage + 1); });
