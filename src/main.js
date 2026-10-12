@@ -13,7 +13,7 @@ if (!hasUserData(app.getPath('userData'))) {
 }
 // @cantoo/pdf-lib encryption needs Web Crypto; Electron <=28's bundled Node lacks the global
 if (!globalThis.crypto) globalThis.crypto = require('crypto').webcrypto;
-const { PDFDocument, rgb, degrees, StandardFonts, PDFName, PDFArray, PDFDict, PDFString, PDFHexString, PDFNumber, PDFRawStream, PDFRef, grayscale, cmyk, pushGraphicsState, popGraphicsState, rectangle, clip, endPath } = require('@cantoo/pdf-lib');
+const { PDFDocument, rgb, degrees, StandardFonts, PDFName, PDFArray, PDFDict, PDFString, PDFHexString, PDFNumber, PDFBool, PDFTextField, PDFCheckBox, PDFDropdown, PDFRawStream, PDFRef, grayscale, cmyk, pushGraphicsState, popGraphicsState, rectangle, clip, endPath } = require('@cantoo/pdf-lib');
 
 let mainWindow;
 let currentFilePath = null;
@@ -436,6 +436,16 @@ function createWindow() {
         {
           label: 'Add Page Numbers',
           click: () => mainWindow.webContents.send('menu-add-page-numbers')
+        },
+        {
+          label: 'Form Fields',
+          submenu: [
+            { label: 'Text Field', click: () => mainWindow.webContents.send('menu-tool', 'fieldText') },
+            { label: 'Checkbox', click: () => mainWindow.webContents.send('menu-tool', 'fieldCheck') },
+            { label: 'Dropdown', click: () => mainWindow.webContents.send('menu-tool', 'fieldDropdown') },
+            { type: 'separator' },
+            { label: 'Edit Form Fields', click: () => mainWindow.webContents.send('menu-tool', 'editFields') }
+          ]
         },
         {
           label: 'Make Fillable (detect form fields)',
@@ -1811,11 +1821,18 @@ ipcMain.handle('add-form-fields', async (event, { data, fields }) => {
     const form = pdfDoc.getForm(), pages = pdfDoc.getPages();
     const names = uniqueFieldNames(fields.map(f => f.name), form.getFields().map(f => f.getName()));
     fields.forEach((f, i) => {
+      if (f.kind === 'dropdown') f.options = checkFieldOptions(f.options);
       const { x, y, width, height } = f.rect, page = pages[f.pageIndex];
       if (!page) throw new Error('No page ' + (f.pageIndex + 1));
       // Invisible until clicked: no background or border, so the page underneath stays readable
       const look = { x, y, width, height, borderWidth: 0, backgroundColor: undefined, borderColor: undefined };
       if (f.kind === 'check') { form.createCheckBox(names[i]).addToPage(page, look); return; }
+      if (f.kind === 'dropdown') {
+        const dd = form.createDropdown(names[i]);
+        dd.addOptions(f.options); dd.addToPage(page, look);
+        dd.setFontSize(Math.min(11, height * 0.6));
+        return;
+      }
       const field = form.createTextField(names[i]);
       if (height > 30) field.enableMultiline();
       if (f.cells >= 2) { field.setMaxLength(f.cells); field.enableCombing(); }
@@ -1823,6 +1840,124 @@ ipcMain.handle('add-form-fields', async (event, { data, fields }) => {
       field.setFontSize(Math.min(11, height * 0.6));
     });
     return { success: true, data: Buffer.from(await pdfDoc.save()).toString('base64') };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+const MAX_FIELD_NAME = 100, MIN_WIDGET_SIZE = 6;
+function checkFieldOptions(options) { // 1-100 choices of 1-200 characters, one per entry
+  if (!Array.isArray(options) || !options.length || options.length > 100) throw new Error('A dropdown needs 1 to 100 options');
+  return options.map(o => {
+    const t = typeof o === 'string' ? o.trim() : '';
+    if (!t || t.length > 200) throw new Error('Each option must be 1 to 200 characters');
+    return t;
+  });
+}
+function fieldKind(field) { return field instanceof PDFTextField ? 'text' : field instanceof PDFCheckBox ? 'check' : field instanceof PDFDropdown ? 'dropdown' : 'other'; }
+const fieldFontSize = field => { const m = /([\d.]+)\s+Tf/.exec(field.acroField.getDefaultAppearance() || ''); return m ? parseFloat(m[1]) : 0; };
+
+// A name for a box the user drew: the printed text beside it (same pixels as the box, u = width / 1275), made unique among the document's fields
+ipcMain.handle('suggest-field-name', async (event, { data, kind, box, words, width }) => {
+  try {
+    const taken = data ? (await PDFDocument.load(Buffer.from(data, 'base64'), { ignoreEncryption: true })).getForm().getFields().map(f => f.getName()) : [];
+    const ws = Array.isArray(words) ? words : [], u = width / 1275 || 1, fallback = `Field ${taken.length + 1}`;
+    // Hand-drawn boxes usually sit on the underline, a little below their label: also try the box raised by half and a whole height
+    const h = box[3] - box[1];
+    let label = fallback;
+    for (const dy of [0, h / 2, h]) { label = labelFor({ kind: kind === 'check' ? 'check' : 'text', box: [box[0], box[1] - dy, box[2], box[3] - dy] }, ws, u, taken.length + 1); if (label !== fallback) break; }
+    return { success: true, name: uniqueFieldNames([label], taken)[0] };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-form-field', async (event, { data, name }) => {
+  try {
+    const field = (await PDFDocument.load(Buffer.from(data, 'base64'), { ignoreEncryption: true })).getForm().getField(name);
+    const kind = fieldKind(field), info = { kind, name: field.getName(), readOnly: field.isReadOnly(), required: field.isRequired() };
+    if (kind === 'text') Object.assign(info, { multiline: field.isMultiline(), maxLength: field.getMaxLength() || 0, comb: field.isCombed(), fontSize: fieldFontSize(field) });
+    if (kind === 'dropdown') Object.assign(info, { options: field.getOptions(), editable: field.isEditable() });
+    return { success: true, field: info };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// props.name is the full name; unchanged, it is ignored. A changed name replaces the partial name (/T of the field dict), so a field inside a hierarchy keeps its parents
+ipcMain.handle('update-form-field', async (event, { data, name, props }) => {
+  try {
+    const pdfDoc = await PDFDocument.load(Buffer.from(data, 'base64'), { ignoreEncryption: true });
+    const form = pdfDoc.getForm(), field = form.getField(name), kind = fieldKind(field), p = props || {};
+    const has = k => p[k] !== undefined && p[k] !== null;
+    const bool = k => { if (typeof p[k] !== 'boolean') throw new Error(k + ' must be true or false'); return p[k]; };
+    let resulting = null, newName, maxLength, fontSize, options, multiline, comb; // validate everything before changing anything
+    if (has('name') && p.name !== field.getName()) {
+      newName = typeof p.name === 'string' ? p.name.trim() : '';
+      if (!newName) throw new Error('The field name cannot be empty');
+      if (newName.length > MAX_FIELD_NAME) throw new Error(`The field name can be at most ${MAX_FIELD_NAME} characters`);
+      if (newName.includes('.')) throw new Error('The field name cannot contain a period');
+      const full = field.getName();
+      resulting = full.slice(0, full.length - (field.acroField.getPartialName() || '').length) + newName;
+      if (form.getFields().some(f => f !== field && f.getName() === resulting)) throw new Error('Another field is already named "' + resulting + '"');
+    }
+    if (kind === 'text') {
+      if (has('maxLength')) { maxLength = p.maxLength; if (!Number.isInteger(maxLength) || maxLength < 0 || maxLength > 32767) throw new Error('Max length must be a whole number from 0 to 32767'); }
+      if (has('fontSize')) { fontSize = p.fontSize; if (fontSize !== 0 && !(Number.isFinite(fontSize) && fontSize >= 4 && fontSize <= 72)) throw new Error('Font size must be 0 (auto) or 4 to 72'); }
+      if (has('multiline')) multiline = bool('multiline');
+      if (has('comb')) comb = bool('comb');
+      const finalComb = comb !== undefined ? comb : field.isCombed();
+      if (finalComb && (maxLength !== undefined ? maxLength : field.getMaxLength() || 0) < 2) throw new Error('Comb needs a max length of at least 2');
+      if (finalComb && (multiline !== undefined ? multiline : field.isMultiline())) throw new Error('A comb field cannot be multi-line');
+    }
+    if (kind === 'dropdown') { if (has('options')) options = checkFieldOptions(p.options); if (has('editable')) bool('editable'); }
+    if (has('readOnly')) bool('readOnly');
+    if (has('required')) bool('required');
+    if (kind === 'text') {
+      if (multiline !== undefined) multiline ? field.enableMultiline() : field.disableMultiline();
+      if (maxLength !== undefined) maxLength ? field.setMaxLength(maxLength) : field.removeMaxLength();
+      if (comb !== undefined) comb ? field.enableCombing() : field.disableCombing();
+      if (fontSize !== undefined) { field.acroField.setFontSize(fontSize); field.markAsDirty(); }
+    }
+    if (kind === 'dropdown') {
+      if (options) field.setOptions(options);
+      if (has('editable')) p.editable ? field.enableEditing() : field.disableEditing();
+    }
+    if (has('readOnly')) p.readOnly ? field.enableReadOnly() : field.disableReadOnly();
+    if (has('required')) p.required ? field.enableRequired() : field.disableRequired();
+    const keepAuto = kind === 'text' && fontSize === 0;
+    if (keepAuto) { form.updateFieldAppearances(); field.acroField.setFontSize(0); } // pdf-lib writes the size it picked into /DA while drawing; put "auto" back once the appearance exists
+    if (resulting) {
+      field.acroField.setPartialName(newName);
+      if (!form.getFields().some(f => f.getName() === resulting) || form.getFields().some(f => f.getName() === name)) throw new Error('Could not rename the field');
+    }
+    return { success: true, data: Buffer.from(await pdfDoc.save({ updateFieldAppearances: !keepAuto })).toString('base64') };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Move or resize one widget. ref is pdf.js's annotation id ("12R", or "12R3" for generation 3); rect is [x1, y1, x2, y2] in PDF points and must lie inside the page
+ipcMain.handle('move-form-widget', async (event, { data, ref, rect }) => {
+  try {
+    const m = /^(\d+)R(\d*)$/.exec(String(ref));
+    if (!m) throw new Error('Bad widget reference');
+    if (!Array.isArray(rect) || rect.length !== 4 || !rect.every(Number.isFinite)) throw new Error('Bad rectangle');
+    const pdfDoc = await PDFDocument.load(Buffer.from(data, 'base64'), { ignoreEncryption: true });
+    const wref = PDFRef.of(parseInt(m[1]), m[2] ? parseInt(m[2]) : 0), widget = pdfDoc.context.lookup(wref);
+    if (!(widget instanceof PDFDict) || widget.get(PDFName.of('Subtype')) !== PDFName.of('Widget')) throw new Error('That is not a form field widget');
+    const [x1, y1, x2, y2] = [Math.min(rect[0], rect[2]), Math.min(rect[1], rect[3]), Math.max(rect[0], rect[2]), Math.max(rect[1], rect[3])];
+    if (x2 - x1 < MIN_WIDGET_SIZE || y2 - y1 < MIN_WIDGET_SIZE) throw new Error(`A field must be at least ${MIN_WIDGET_SIZE} x ${MIN_WIDGET_SIZE} points`);
+    const page = pdfDoc.getPages().find(pg => { const a = pg.node.Annots(); return a && a.asArray().some(r => r instanceof PDFRef && r.tag === wref.tag); });
+    if (!page) throw new Error('This widget is not on a page');
+    const box = page.getCropBox();
+    if (x1 < box.x - 0.01 || y1 < box.y - 0.01 || x2 > box.x + box.width + 0.01 || y2 > box.y + box.height + 0.01) throw new Error('The field must stay inside the page');
+    const form = pdfDoc.getForm(), field = form.getFields().find(f => f.acroField.getWidgets().some(w => w.dict === widget));
+    widget.set(PDFName.of('Rect'), pdfDoc.context.obj([x1, y1, x2, y2]));
+    // Text appearances are drawn for the old size, so drop them and let readers regenerate. A checkbox keeps its on/off streams, which scale to the new rectangle
+    if (!(field instanceof PDFCheckBox)) widget.delete(PDFName.of('AP'));
+    form.acroForm.dict.set(PDFName.of('NeedAppearances'), PDFBool.True);
+    return { success: true, data: Buffer.from(await pdfDoc.save({ updateFieldAppearances: false })).toString('base64') };
   } catch (error) {
     return { success: false, error: error.message };
   }
@@ -2577,6 +2712,9 @@ ipcMain.handle('apply-modifications', async (event, { originalData, modification
     }
     const buffer = Buffer.from(originalData, 'base64');
     const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+    // A form flagged NeedAppearances (a field moved by hand has no /AP) is drawn here: pdf-lib only regenerates when the form has been touched
+    const acro = pdfDoc.catalog.lookup(PDFName.of('AcroForm'));
+    if (acro instanceof PDFDict && acro.get(PDFName.of('NeedAppearances')) === PDFBool.True) { try { pdfDoc.getForm().updateFieldAppearances(); } catch (e) { /* left to the viewer */ } }
     const helveticaFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
     const helveticaOblique = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);

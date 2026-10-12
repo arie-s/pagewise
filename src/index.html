@@ -108,6 +108,12 @@
     .annotationLayer { position: absolute; top: 0; left: 0; pointer-events: none; transform-origin: 0 0; overflow: hidden; --input-focus-border-color: Highlight; --input-focus-outline: 1px solid Canvas; --input-unfocused-border-color: transparent; --input-disabled-border-color: transparent; --input-hover-border-color: black; --annotation-unfocused-field-background: url("data:image/svg+xml;charset=UTF-8,<svg width='1px' height='1px' xmlns='http://www.w3.org/2000/svg'><rect width='100%' height='100%' style='fill:rgba(0, 54, 255, 0.13);'/></svg>"); }
     .annotationLayer section { position: absolute; text-align: initial; pointer-events: auto; box-sizing: border-box; transform-origin: 0 0; }
     .annotationLayer.disabled section { pointer-events: none; }
+    .field-edit-layer { position: absolute; top: 0; left: 0; pointer-events: none; }
+    .field-edit-box { position: absolute; box-sizing: border-box; border: 1.5px solid #2563eb; background: rgba(37,99,235,0.12); cursor: move; pointer-events: auto; overflow: visible; }
+    .field-edit-box.selected { border-color: #f59e0b; background: rgba(245,158,11,0.18); }
+    .field-edit-box .field-edit-name { position: absolute; left: 0; bottom: 100%; max-width: 220px; padding: 0 3px; font: 10px sans-serif; color: #fff; background: #2563eb; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+    .field-edit-box.selected .field-edit-name { background: #f59e0b; }
+    .field-edit-handle { position: absolute; right: -6px; bottom: -6px; width: 11px; height: 11px; background: #fff; border: 1.5px solid #2563eb; cursor: nwse-resize; }
     .annotationLayer .annotationContent, .annotationLayer .popupAnnotation { display: none; }
     .annotationLayer .linkAnnotation > a, .annotationLayer .buttonWidgetAnnotation.pushButton > a { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
     .annotationLayer .textWidgetAnnotation :is(input, textarea), .annotationLayer .choiceWidgetAnnotation select, .annotationLayer .buttonWidgetAnnotation:is(.checkBox, .radioButton) input { background-image: var(--annotation-unfocused-field-background); border: 2px solid var(--input-unfocused-border-color); box-sizing: border-box; font: calc(9px * var(--scale-factor)) sans-serif; height: 100%; margin: 0; vertical-align: top; width: 100%; }
@@ -1095,6 +1101,7 @@
         container.appendChild(pageDiv);
         renderAnnotations(i);
       }
+      buildFieldEditLayers();
       const storage = state.pdfDoc.annotationStorage;
       if (storage.onSetModified !== markFormsDirty) { storage.resetModified(); storage.onSetModified = markFormsDirty; state.formsDirty = false; }
     }
@@ -1260,6 +1267,12 @@
     function handleMouseUp(e, canvas, pageNum) {
       if (!state.isDrawing) return;
       state.isDrawing = false;
+      if (FIELD_TOOL_LABELS[state.currentTool]) {
+        const r = canvas.getBoundingClientRect(), p0 = state.currentPath[0], p1 = { x: (e.clientX - r.left) / state.scale, y: (e.clientY - r.top) / state.scale };
+        state.currentPath = []; renderAnnotations(pageNum);
+        placeField(pageNum, canvas, state.currentTool, p0, p1);
+        return;
+      }
       if (state.currentPath.length < 2) return;
       if (state.currentTool === 'crop') { confirmCrop(pageNum, canvas); return; }
       const rect = canvas.getBoundingClientRect();
@@ -1297,7 +1310,7 @@
       else if (tool === 'rectangle') ctx.strokeRect(p0.x, p0.y, pn.x - p0.x, pn.y - p0.y);
       else if (tool === 'circle') { ctx.beginPath(); ctx.ellipse((p0.x + pn.x) / 2, (p0.y + pn.y) / 2, Math.abs(pn.x - p0.x) / 2, Math.abs(pn.y - p0.y) / 2, 0, 0, 2 * Math.PI); ctx.stroke(); }
       else if (tool === 'line' || tool === 'arrow') { ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(pn.x, pn.y); ctx.stroke(); if (tool === 'arrow') { const a = Math.atan2(pn.y - p0.y, pn.x - p0.x), s = 10; ctx.beginPath(); ctx.moveTo(pn.x, pn.y); ctx.lineTo(pn.x - s * Math.cos(a - Math.PI / 6), pn.y - s * Math.sin(a - Math.PI / 6)); ctx.moveTo(pn.x, pn.y); ctx.lineTo(pn.x - s * Math.cos(a + Math.PI / 6), pn.y - s * Math.sin(a + Math.PI / 6)); ctx.stroke(); } }
-      else if (tool === 'redact' || tool === 'crop') { ctx.fillStyle = 'rgba(255,0,0,0.3)'; ctx.strokeStyle = '#f00'; const minX = Math.min(...state.currentPath.map(p => p.x)), maxX = Math.max(...state.currentPath.map(p => p.x)), minY = Math.min(...state.currentPath.map(p => p.y)), maxY = Math.max(...state.currentPath.map(p => p.y)); ctx.fillRect(minX, minY, maxX - minX, maxY - minY); ctx.strokeRect(minX, minY, maxX - minX, maxY - minY); }
+      else if (tool === 'redact' || tool === 'crop' || tool === 'fieldText' || tool === 'fieldCheck' || tool === 'fieldDropdown') { ctx.fillStyle = 'rgba(255,0,0,0.3)'; ctx.strokeStyle = '#f00'; const minX = Math.min(...state.currentPath.map(p => p.x)), maxX = Math.max(...state.currentPath.map(p => p.x)), minY = Math.min(...state.currentPath.map(p => p.y)), maxY = Math.max(...state.currentPath.map(p => p.y)); ctx.fillRect(minX, minY, maxX - minX, maxY - minY); ctx.strokeRect(minX, minY, maxX - minX, maxY - minY); }
       else { ctx.beginPath(); ctx.moveTo(state.currentPath[0].x, state.currentPath[0].y); for (let i = 1; i < state.currentPath.length; i++) ctx.lineTo(state.currentPath[i].x, state.currentPath[i].y); ctx.stroke(); }
       ctx.restore();
     }
@@ -1650,6 +1663,155 @@
         state.originalData = r.data; setUnsavedChanges(true);
         await reloadFromOriginal();
         showNotification('Field removed');
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+    }
+    // Form fields by hand: drawing a new field, moving/resizing existing ones, and field properties
+    const FIELD_TOOL_LABELS = { fieldText: 'Text Field', fieldCheck: 'Checkbox', fieldDropdown: 'Dropdown', editFields: 'Edit Form Fields' };
+    // Resolves with read(modal) on OK, or null on Cancel, Esc or the close button. read may throw to keep the dialog open
+    function askModal(title, content, okLabel, read, init) {
+      return new Promise(resolve => {
+        let m, obs, done = false;
+        const finish = v => { if (done) return; done = true; obs.disconnect(); m.remove(); resolve(v); };
+        m = showModal(title, content, [{ label: 'Cancel', action: 'cancel', handler: () => finish(null) },
+          { label: okLabel, action: 'ok', primary: true, handler: mm => { try { finish(read(mm)); } catch (err) { showNotification(err.message, 'error'); return 'keep-open'; } } }]);
+        obs = new MutationObserver(() => { if (!m.isConnected) finish(null); }); obs.observe($('modalContainer'), { childList: true });
+        m.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); finish(null); } else if (e.key === 'Enter' && e.target.tagName === 'INPUT' && e.target.type !== 'checkbox') { e.preventDefault(); m.querySelector('[data-action="ok"]').click(); } });
+        if (init) init(m);
+        const first = m.querySelector('input:not([type=checkbox]), textarea'); if (first) { first.focus(); if (first.select) first.select(); }
+      });
+    }
+    // Same as applyPageMods without a page change: values and pending marks are baked in, then call(data) edits the document and the view reloads
+    async function runFormOp(call, message) {
+      setLoading(true, 'Applying...');
+      try {
+        await commitFormValues();
+        const pending = collectModifications();
+        if (pending.some(m => m.type === 'redaction')) throw new Error('Apply or clear the redaction marks first');
+        if (pending.length) {
+          const b = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: pending });
+          if (!b.success) throw new Error(b.error || 'Could not apply the pending edits');
+          state.originalData = b.data; state.annotations = {}; state.textEdits = {}; state.undoStack = []; state.redoStack = []; updateUndoRedo(); updateAnnotationCount();
+        }
+        const r = await call(state.originalData);
+        if (!r.success) throw new Error(r.error);
+        state.originalData = r.data; setUnsavedChanges(true);
+        await reloadFromOriginal();
+        if (message) showNotification(message);
+        return true;
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); return false; }
+      finally { setLoading(false); }
+    }
+    async function fieldNameOf(pageNum, id) {
+      const name = (await (await state.pdfDoc.getPage(pageNum)).getAnnotations()).find(a => a.id === id)?.fieldName;
+      if (!name) throw new Error('Could not find this field');
+      return name;
+    }
+    async function placeField(pageNum, canvas, tool, p0, p1) {
+      const kind = tool === 'fieldCheck' ? 'check' : tool === 'fieldDropdown' ? 'dropdown' : 'text';
+      const pw = canvas.width / state.scale, ph = canvas.height / state.scale, MIN = 6; // page size in points at scale 1
+      if (collectModifications().some(m => m.type === 'redaction')) { showNotification('Apply or clear the redaction marks first', 'warning'); return; }
+      let x0 = Math.min(p0.x, p1.x), x1 = Math.max(p0.x, p1.x), y0 = Math.min(p0.y, p1.y), y1 = Math.max(p0.y, p1.y);
+      if (kind === 'check' && Math.max(x1 - x0, y1 - y0) < 4) { x0 = p0.x - 6; x1 = p0.x + 6; y0 = p0.y - 6; y1 = p0.y + 6; }
+      else if (x1 - x0 < MIN || y1 - y0 < MIN) { showNotification('Drag a larger rectangle', 'warning'); return; }
+      const clampBox = (a, b, max) => { const w = Math.min(b - a, max); a = Math.max(0, Math.min(a, max - w)); return [a, a + w]; };
+      [x0, x1] = clampBox(x0, x1, pw); [y0, y1] = clampBox(y0, y1, ph);
+      try {
+        let options;
+        if (kind === 'dropdown') {
+          options = await askModal('Dropdown Options', '<div class="form-group"><label class="form-label">One option per line (up to 100)</label><textarea class="form-input" id="ddOptions" rows="8"></textarea></div>', 'Next', m => {
+            const list = m.querySelector('#ddOptions').value.split('\n').map(t => t.trim()).filter(Boolean);
+            if (!list.length || list.length > 100) throw new Error('Enter 1 to 100 options');
+            if (list.some(t => t.length > 200)) throw new Error('Each option can be at most 200 characters');
+            return list;
+          });
+          if (!options) return;
+        }
+        const page = await state.pdfDoc.getPage(pageNum), vp = page.getViewport({ scale: 150 / 72 }), k = 150 / 72;
+        const sug = await window.pdfAPI.suggestFieldName({ data: state.originalData, kind, box: [x0 * k, y0 * k, x1 * k, y1 * k], words: pageWords((await page.getTextContent()).items, vp), width: vp.width });
+        const name = await askModal('Field Name', '<div class="form-group"><label class="form-label">Name</label><input class="form-input" id="fieldNameInput" maxlength="100"></div>', 'Add Field', m => {
+          const v = m.querySelector('#fieldNameInput').value.trim();
+          if (!v) throw new Error('Enter a name'); return v;
+        }, m => { m.querySelector('#fieldNameInput').value = sug.success ? sug.name : 'Field'; });
+        if (!name) return;
+        const vp1 = page.getViewport({ scale: 1 }), [ax, ay] = vp1.convertToPdfPoint(x0, y0), [bx, by] = vp1.convertToPdfPoint(x1, y1);
+        const field = { pageIndex: pageNum - 1, kind, name, rect: { x: Math.min(ax, bx), y: Math.min(ay, by), width: Math.abs(bx - ax), height: Math.abs(by - ay) }, ...(options ? { options } : {}) };
+        selectTool('select');
+        await runFormOp(d => window.pdfAPI.addFormFields({ data: d, fields: [field] }), 'Field added');
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+    }
+    // Edit Form Fields mode: every widget as a draggable, resizable box above the page
+    async function buildFieldEditLayers() {
+      const gen = state.fieldEditGen = (state.fieldEditGen || 0) + 1;
+      document.querySelectorAll('.field-edit-layer').forEach(l => l.remove());
+      if (state.currentTool !== 'editFields' || !state.pdfDoc) return;
+      for (const pageDiv of document.querySelectorAll('.page-container')) {
+        const pageNum = parseInt(pageDiv.dataset.page), page = await state.pdfDoc.getPage(pageNum), annots = await page.getAnnotations();
+        if (gen !== state.fieldEditGen) return;
+        const vp = page.getViewport({ scale: state.scale }), layer = document.createElement('div'); layer.className = 'field-edit-layer';
+        layer.style.width = vp.width + 'px'; layer.style.height = vp.height + 'px';
+        for (const a of annots) if (a.subtype === 'Widget' && a.rect && a.fieldName && !(a.annotationFlags & 2)) layer.appendChild(makeFieldEditBox(pageNum, vp, a));
+        pageDiv.appendChild(layer);
+      }
+    }
+    function makeFieldEditBox(pageNum, vp, a) {
+      const [vx0, vy0, vx1, vy1] = vp.convertToViewportRectangle(a.rect), minPx = 6 * state.scale;
+      const box = document.createElement('div'); box.className = 'field-edit-box'; box.dataset.ref = a.id; box.dataset.page = pageNum;
+      const geo = { l: Math.min(vx0, vx1), t: Math.min(vy0, vy1), w: Math.abs(vx1 - vx0), h: Math.abs(vy1 - vy0) };
+      const paint = () => { box.style.left = geo.l + 'px'; box.style.top = geo.t + 'px'; box.style.width = geo.w + 'px'; box.style.height = geo.h + 'px'; };
+      const name = document.createElement('span'); name.className = 'field-edit-name'; name.textContent = a.fieldName;
+      const handle = document.createElement('div'); handle.className = 'field-edit-handle';
+      box.append(name, handle); paint();
+      box.onmousedown = e => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        document.querySelectorAll('.field-edit-box.selected').forEach(b => b.classList.remove('selected'));
+        box.classList.add('selected'); state.fieldSel = { pageNum, ref: a.id };
+        const resize = e.target === handle, sx = e.clientX, sy = e.clientY, start = { ...geo };
+        let moved = false;
+        const onMove = ev => {
+          const dx = ev.clientX - sx, dy = ev.clientY - sy;
+          if (Math.abs(dx) + Math.abs(dy) > 1) moved = true;
+          if (resize) { geo.w = Math.max(minPx, Math.min(start.w + dx, vp.width - start.l)); geo.h = Math.max(minPx, Math.min(start.h + dy, vp.height - start.t)); }
+          else { geo.l = Math.max(0, Math.min(start.l + dx, vp.width - start.w)); geo.t = Math.max(0, Math.min(start.t + dy, vp.height - start.h)); }
+          paint();
+        };
+        const onUp = () => {
+          document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
+          if (!moved) return;
+          const [ax, ay] = vp.convertToPdfPoint(geo.l, geo.t), [bx, by] = vp.convertToPdfPoint(geo.l + geo.w, geo.t + geo.h);
+          runFormOp(d => window.pdfAPI.moveFormWidget({ data: d, ref: a.id, rect: [Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)] }));
+        };
+        document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+      };
+      return box;
+    }
+    document.addEventListener('mousedown', e => {
+      if (state.currentTool !== 'editFields' || e.target.closest('.field-edit-box')) return;
+      state.fieldSel = null; document.querySelectorAll('.field-edit-box.selected').forEach(b => b.classList.remove('selected'));
+    });
+    async function showFieldProperties(pageNum, id) {
+      try {
+        const name = await fieldNameOf(pageNum, id);
+        await commitFormValues();
+        const g = await window.pdfAPI.getFormField({ data: state.originalData, name });
+        if (!g.success) throw new Error(g.error);
+        const f = g.field, chk = (i, t) => '<label style="display:block;margin:4px 0;font-size:13px;"><input type="checkbox" id="' + i + '"> ' + t + '</label>';
+        let body = '<div class="form-group"><label class="form-label">Name</label><input class="form-input" id="fpName" maxlength="100"></div>';
+        if (f.kind === 'text') body += chk('fpMulti', 'Multi-line') + '<div class="form-row"><div class="form-group"><label class="form-label">Max length (0 = none)</label><input class="form-input" id="fpMax" type="number" min="0" max="32767"></div><div class="form-group"><label class="form-label">Font size (0 = auto, else 4 to 72)</label><input class="form-input" id="fpFont" type="number" min="0" max="72" step="0.5"></div></div>' + chk('fpComb', 'Comb (one character per cell; needs a max length of 2 or more)');
+        if (f.kind === 'dropdown') body += '<div class="form-group"><label class="form-label">Options, one per line</label><textarea class="form-input" id="fpOptions" rows="6"></textarea></div>' + chk('fpEditable', 'Allow typing');
+        body += chk('fpRO', 'Read-only') + chk('fpReq', 'Required');
+        const props = await askModal('Field Properties', body, 'Apply', m => {
+          const p = { name: m.querySelector('#fpName').value, readOnly: m.querySelector('#fpRO').checked, required: m.querySelector('#fpReq').checked };
+          if (f.kind === 'text') Object.assign(p, { multiline: m.querySelector('#fpMulti').checked, comb: m.querySelector('#fpComb').checked, maxLength: Number(m.querySelector('#fpMax').value || 0), fontSize: Number(m.querySelector('#fpFont').value || 0) });
+          if (f.kind === 'dropdown') Object.assign(p, { options: m.querySelector('#fpOptions').value.split('\n').map(t => t.trim()).filter(Boolean), editable: m.querySelector('#fpEditable').checked });
+          return p;
+        }, m => {
+          m.querySelector('#fpName').value = f.name; m.querySelector('#fpRO').checked = f.readOnly; m.querySelector('#fpReq').checked = f.required;
+          if (f.kind === 'text') { m.querySelector('#fpMulti').checked = f.multiline; m.querySelector('#fpComb').checked = f.comb; m.querySelector('#fpMax').value = f.maxLength; m.querySelector('#fpFont').value = f.fontSize; }
+          if (f.kind === 'dropdown') { m.querySelector('#fpOptions').value = f.options.join('\n'); m.querySelector('#fpEditable').checked = f.editable; }
+        });
+        if (!props) return;
+        await runFormOp(d => window.pdfAPI.updateFormField({ data: d, name, props }), 'Field updated');
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
     }
     // Profiles: stored locally by the main process; every stored value goes into the DOM via textContent/value only
@@ -2344,13 +2506,16 @@
     function selectTool(tool) {
       state.currentTool = tool;
       document.querySelectorAll('.tool-btn[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === tool));
-      const isDrawingTool = tool !== 'select' && tool !== 'hand';
+      const isDrawingTool = tool !== 'select' && tool !== 'hand' && tool !== 'editFields';
       document.querySelectorAll('.annotation-layer').forEach(l => { l.classList.toggle('active', isDrawingTool); });
       // Disable text layer when using drawing tools so clicks go through to annotation layer
       document.querySelectorAll('.annotationLayer').forEach(l => { l.classList.toggle('disabled', tool !== 'select'); });
       document.querySelectorAll('.text-layer').forEach(l => { l.style.pointerEvents = isDrawingTool ? 'none' : 'auto'; });
-      $('currentToolDisplay').textContent = tool.charAt(0).toUpperCase() + tool.slice(1);
+      $('currentToolDisplay').textContent = FIELD_TOOL_LABELS[tool] || tool.charAt(0).toUpperCase() + tool.slice(1);
       document.body.style.cursor = tool === 'hand' ? 'grab' : '';
+      state.fieldSel = null;
+      buildFieldEditLayers();
+      if (FIELD_TOOL_LABELS[tool] && tool !== 'editFields') showNotification(tool === 'fieldCheck' ? 'Click to place a checkbox, or drag to size it. Esc cancels.' : 'Drag a rectangle for the field. Esc cancels.', 'info');
     }
     function showContextMenu(e, pageNum) {
       e.preventDefault();
@@ -2360,10 +2525,10 @@
       menu.id = 'contextMenu';
       const hasDoc = !!state.pdfDoc;
       const selectedText = window.getSelection().toString();
-      const widget = state.currentTool === 'select' && e.target.closest('.annotationLayer section.textWidgetAnnotation, .annotationLayer section.buttonWidgetAnnotation');
-      const widgetId = widget?.querySelector('[data-element-id]')?.getAttribute('data-element-id');
+      const widget = state.currentTool === 'select' && e.target.closest('.annotationLayer section.textWidgetAnnotation, .annotationLayer section.buttonWidgetAnnotation, .annotationLayer section.choiceWidgetAnnotation');
+      const widgetId = state.currentTool === 'editFields' ? e.target.closest('.field-edit-box')?.dataset.ref : widget?.querySelector('[data-element-id]')?.getAttribute('data-element-id');
       const items = [
-        ...(widgetId ? [{ label: 'Remove field', icon: 'delete', action: () => removeFormField(pageNum, widgetId) }, { type: 'separator' }] : []),
+        ...(widgetId ? [{ label: 'Field Properties...', icon: 'properties', action: () => showFieldProperties(pageNum, widgetId) }, { label: 'Remove field', icon: 'delete', action: () => removeFormField(pageNum, widgetId) }, { type: 'separator' }] : []),
         { label: 'Copy Text', icon: 'copy', action: () => { if (selectedText) navigator.clipboard.writeText(selectedText); }, disabled: !selectedText },
         { label: 'Select All', icon: 'selectall', action: () => document.execCommand('selectAll') },
         { type: 'separator' },
@@ -2431,6 +2596,10 @@
     document.querySelectorAll('.sidebar-tab').forEach(tab => { tab.onclick = () => { document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active')); tab.classList.add('active'); $('thumbnailContainer').classList.toggle('hidden', tab.dataset.tab !== 'thumbnails'); $('bookmarksContainer').classList.toggle('hidden', tab.dataset.tab !== 'bookmarks'); }; });
     document.addEventListener('keydown', e => {
       if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      if (FIELD_TOOL_LABELS[state.currentTool] && !document.querySelector('.modal-overlay')) {
+        if (e.key === 'Escape') { state.isDrawing = false; state.currentPath = []; document.querySelectorAll('.annotation-layer').forEach(l => { const pg = l.dataset.page; if (pg) renderAnnotations(+pg); }); selectTool('select'); return; }
+        if ((e.key === 'Delete' || e.key === 'Backspace') && state.currentTool === 'editFields' && state.fieldSel) { e.preventDefault(); const { pageNum, ref } = state.fieldSel; removeFormField(pageNum, ref); return; }
+      }
       if (e.ctrlKey || e.metaKey) { switch (e.key.toLowerCase()) { case 'n': e.preventDefault(); createNewPdf(); break; case 'o': e.preventDefault(); openFile(); break; case 's': e.preventDefault(); saveDocument(e.shiftKey); break; case 'z': e.preventDefault(); undo(); break; case 'y': e.preventDefault(); redo(); break; case 'f': e.preventDefault(); showSearch(); break; case '=': case '+': e.preventDefault(); setZoom(state.scale + 0.25); break; case '-': e.preventDefault(); setZoom(state.scale - 0.25); break; case '0': e.preventDefault(); setZoom(1); break; } }
       else { switch (e.key.toLowerCase()) { case 'v': selectTool('select'); break; case 'h': selectTool('hand'); break; case 't': selectTool('text'); break; case 'p': selectTool('draw'); break; case 'e': selectTool('eraser'); break; case 'l': selectTool('line'); break; case 'a': selectTool('arrow'); break; case 'r': selectTool('rectangle'); break; case 'c': selectTool('circle'); break; } }
     });
@@ -2470,7 +2639,7 @@
     });
     window.pdfAPI.onMenuUndo(undo); window.pdfAPI.onMenuRedo(redo); window.pdfAPI.onMenuFind(showSearch);
     window.pdfAPI.onMenuZoomIn(() => setZoom(state.scale + 0.25)); window.pdfAPI.onMenuZoomOut(() => setZoom(state.scale - 0.25)); window.pdfAPI.onMenuZoomReset(() => setZoom(1));
-    window.pdfAPI.onMenuTool(selectTool); window.pdfAPI.onMenuRotate(rotatePage); window.pdfAPI.onMenuRotateAll(rotateAllPages); window.pdfAPI.onMenuDeletePage(deletePage); window.pdfAPI.onMenuInsertPage(insertBlankPage);
+    window.pdfAPI.onMenuTool(t => selectTool(t === 'editFields' && state.currentTool === 'editFields' ? 'select' : t)); window.pdfAPI.onMenuRotate(rotatePage); window.pdfAPI.onMenuRotateAll(rotateAllPages); window.pdfAPI.onMenuDeletePage(deletePage); window.pdfAPI.onMenuInsertPage(insertBlankPage);
     window.pdfAPI.onMenuAddWatermark(showWatermarkDialog); window.pdfAPI.onMenuFlattenForm(flattenForm); window.pdfAPI.onMenuMakeFillable(makeFillable); window.pdfAPI.onMenuProfiles(() => showProfiles()); window.pdfAPI.onMenuAutofill(fillFromProfile); window.pdfAPI.onMenuSaveAnswers(saveAnswersToProfile); window.pdfAPI.onMenuProfileFromDoc(profileFromDocument);
     window.pdfAPI.onMenuStamp(s => { state.pendingStamp = s; selectTool('stamp'); showNotification('Click to place stamp', 'info'); });
     window.pdfAPI.onMenuAddImage(async () => { const img = await window.pdfAPI.selectImage(); if (img) { state.pendingImage = img; selectTool('image'); showNotification('Click to place image', 'info'); } });
