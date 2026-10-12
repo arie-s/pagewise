@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('pdfAPI', {
 
   // OCR
   ocrPage: (options) => ipcRenderer.invoke('ocr-page', options),
+  aiTextLayer: (options) => ipcRenderer.invoke('ai-text-layer', options),
 
   // Advanced OCR engine (tier 2)
   engineStatus: () => ipcRenderer.invoke('engine-status'),
@@ -112,6 +113,7 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   onMenuRotate: (callback) => ipcRenderer.on('menu-rotate', (event, angle) => callback(angle)),
   onMenuRotateAll: (callback) => ipcRenderer.on('menu-rotate-all', (event, angle) => callback(angle)),
   onMenuOcr: (callback) => ipcRenderer.on('menu-ocr', callback),
+  onMenuOcrAi: (callback) => ipcRenderer.on('menu-ocr-ai', callback),
   onMenuDeletePage: (callback) => ipcRenderer.on('menu-delete-page', callback),
   onMenuInsertPage: (callback) => ipcRenderer.on('menu-insert-page', callback),
   onMenuInsertFromFile: (callback) => ipcRenderer.on('menu-insert-from-file', callback),
