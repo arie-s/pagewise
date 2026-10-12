@@ -76,6 +76,14 @@ test('labelFor prefers the line to the left, then the line above', () => {
   assert.equal(m.labelFor(field, [W('Too', 310, 100, 360, 120)], 1, 7), 'Field 7');
   assert.equal(m.labelFor(field, []), 'Field 1');
 });
+test('labelFor keeps a long left label whose start is far from the box', () => {
+  const field = { kind: 'text', box: [520, 200, 900, 224] };
+  const words = [W('Applicant\'s', 104, 205, 190, 222), W('legal', 196, 205, 236, 222), W('surname', 242, 205, 320, 222)];
+  assert.equal(m.labelFor(field, words), 'Applicant\'s legal surname');
+  // a short label at the margin, 266 px from its box
+  assert.equal(m.labelFor(field, [W('Given', 104, 205, 170, 222), W('name(s)', 176, 205, 254, 222)]), 'Given name(s)');
+  assert.equal(m.labelFor(field, [W('Far', 0, 205, 60, 222)]), 'Field 1');
+});
 test('labelFor reads a checkbox label to the right first', () => {
   const box = { kind: 'check', box: [100, 200, 120, 220] };
   const words = [W('Individual', 130, 202, 220, 220), W('or', 228, 202, 250, 220), W('sole', 258, 202, 300, 220), W('Partner', 20, 202, 90, 220)];

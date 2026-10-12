@@ -1421,7 +1421,7 @@
       ['Address', [['street', 'Street address'], ['city', 'City'], ['state', 'State / province'], ['zip', 'ZIP / postal code'], ['country', 'Country']]],
       ['Other', [['dateOfBirth', 'Date of birth', true], ['ssn', 'SSN / tax ID', true], ['company', 'Company'], ['jobTitle', 'Job title']]]
     ];
-    const isEmptyDetails = d => !d.custom.length && !DETAIL_GROUPS.some(([, keys]) => keys.some(([k]) => d[k]));
+    const isEmptyDetails = d => !d.custom.length && !d.notes && !DETAIL_GROUPS.some(([, keys]) => keys.some(([k]) => d[k]));
     function el(tag, props, ...kids) { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; }
     async function showProfiles(notice) {
       const r = await window.pdfAPI.profilesGet();
@@ -1470,6 +1470,8 @@
             form.append(el('div', { className: 'form-group', style: 'margin-bottom:8px;' }, el('label', { className: 'form-label', textContent: label + (sensitive ? ' (only filled when you tick it in the review)' : '') }), input));
           }
         }
+        const notes = el('textarea', { className: 'form-input', value: d.notes || '', maxLength: 4000, rows: 4, style: 'resize:vertical;' }); notes.dataset.detail = 'notes';
+        form.append(el('div', { textContent: 'Notes', style: 'font-weight:600;margin:12px 0 6px;' }), el('div', { className: 'form-group', style: 'margin-bottom:8px;' }, el('label', { className: 'form-label', textContent: 'About you / your business (used only for AI suggestions)' }), notes));
         const fmt = el('select', { className: 'form-select' }, ...['MM/DD/YYYY', 'DD/MM/YYYY', 'YYYY-MM-DD'].map(f => el('option', { value: f, textContent: f })));
         fmt.value = d.dateFormat; fmt.dataset.detail = 'dateFormat';
         form.append(el('div', { className: 'form-group', style: 'margin-bottom:8px;' }, el('label', { className: 'form-label', textContent: 'Date format (for "Date" fields)' }), fmt));
@@ -1551,14 +1553,54 @@
         el('div', { className: 'form-group', style: 'margin-bottom:8px;' }, el('label', { className: 'form-label', textContent: 'Fill as' }), selfSel),
         el('div', { className: 'form-group', style: 'margin-bottom:12px;' }, el('label', { className: 'form-label', textContent: 'Spouse' }), spouseSel),
         rows);
-      let token = 0;
-      const sync = () => { const n = [...rows.querySelectorAll('input[type=checkbox]')].filter(c => c.checked).length; fillBtn.textContent = 'Fill (' + n + ')'; fillBtn.disabled = !n; };
+      const aiBox = el('div', { style: 'margin-top:12px;' });
+      box.append(aiBox);
+      let token = 0, progressBound = false, installing = false;
+      const filledIds = () => pages.flatMap(p => p.fields).map(f => f.id).filter(id => storage.getRawValue(id)?.value ?? existing[id]);
+      const fillRow = (p, tick, hintText, warn) => {
+        const hint = el('div', { style: 'font-size:11px;color:var(--text-dim);' }, hintText);
+        if (warn) hint.append(el('span', { textContent: warn, style: 'color:var(--warning,#d97706);' }));
+        const tr = el('tr', {}, el('td', { style: 'padding:4px;' }, tick), el('td', { style: 'padding:4px;' }, el('div', { textContent: p.label }), hint), el('td', { style: 'padding:4px;' }, el('input', { type: 'text', className: 'form-input', value: p.value })));
+        tr.dataset.id = p.id; return tr;
+      };
+      const suggestRest = async (btn) => {
+        const mine = token;
+        if (installing) return;
+        try {
+          const st = await window.pdfAPI.writerStatus();
+          if (!st.installed) {
+            if (!confirm('AI suggestions use a small language model that runs on your computer (CPU). This is a one-time download of about 3.1 GB. Nothing you type or fill leaves the computer.\n\nDownload it now?')) return;
+            if (!progressBound) { progressBound = true; window.pdfAPI.onEngineProgress(pr => { if (installing) setLoading(true, pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : '')); }); }
+            installing = true; btn.disabled = true; setLoading(true, 'Downloading writing model...');
+            const ir = await window.pdfAPI.writerInstall();
+            installing = false;
+            if (!ir.success) { showNotification('Error: ' + ir.error, 'error'); btn.disabled = false; return; }
+          }
+          btn.disabled = true; setLoading(true, 'Asking the local AI…');
+          const r = await window.pdfAPI.aiSuggest({ pages, selfId: selfSel.value, skipIds: filledIds() });
+          if (mine !== token) return;
+          if (!r.success) { showNotification('Error: ' + r.error, 'error'); btn.disabled = false; return; }
+          if (!r.suggestions.length) { aiBox.replaceChildren(el('div', { textContent: 'The AI had no suggestions for these fields' + (r.failed ? ' (' + r.failed + ' could not be answered)' : ''), className: 'form-label' })); return; }
+          const table = el('table', { style: 'width:100%;border-collapse:collapse;' });
+          for (const p of r.suggestions) {
+            const tick = el('input', { type: 'checkbox', checked: false, onchange: sync });
+            const base = p.kind === 'draft' ? 'AI draft' : 'AI guess: ' + p.key;
+            table.append(fillRow(p, tick, p.notInProfile ? 'Not in your profile' : base, !p.notInProfile && p.unsupported.length ? ' • not in your profile: ' + p.unsupported.join(', ') : ''));
+          }
+          aiBox.replaceChildren(el('div', { textContent: 'AI suggestions — check before filling', style: 'font-weight:600;border-top:1px solid var(--border,#888);padding-top:8px;margin-bottom:6px;' }), table);
+          sync();
+        } catch (e) { showNotification('Error: ' + e.message, 'error'); btn.disabled = false; }
+        finally { installing = false; setLoading(false); }
+      };
+      const sync = () => { const n = [...box.querySelectorAll('tr[data-id] input[type=checkbox]')].filter(c => c.checked).length; fillBtn.textContent = 'Fill (' + n + ')'; fillBtn.disabled = !n; };
       const rebuild = async () => {
         const mine = ++token;
         fillBtn.disabled = true;
-        const r = await window.pdfAPI.autofillPlan({ pages, selfId: selfSel.value, spouseId: spouseSel.value || null });
+        aiBox.replaceChildren();
+        const r = await window.pdfAPI.autofillPlan({ pages, selfId: selfSel.value, spouseId: spouseSel.value || null, skipIds: filledIds() });
         if (mine !== token) return;
         if (!r.success) { rows.replaceChildren(el('div', { textContent: 'Error: ' + r.error, className: 'form-label' })); sync(); return; }
+        if (r.aiCount > 0) { const b = el('button', { className: 'modal-btn', textContent: 'Suggest the rest with AI (' + r.aiCount + ')' }); b.onclick = () => suggestRest(b); aiBox.append(b); }
         if (!r.plan.length) { rows.replaceChildren(el('div', { textContent: 'No fields match this profile', className: 'form-label' })); sync(); return; }
         const table = el('table', { style: 'width:100%;border-collapse:collapse;' });
         for (const p of r.plan) {
