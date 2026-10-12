@@ -18,7 +18,7 @@ function boot({ encrypt = true } = {}) {
   return { handlers, m: context, userData, file: path.join(userData, 'profiles.json'), oldFile: path.join(userData, 'my-details.json') };
 }
 const SPOUSE = { firstName: 'John', middleName: '', lastName: 'Roe', ssn: '987-65-4321', dateOfBirth: '03/04/1979', dateFormat: 'MM/DD/YYYY' };
-const DETAILS = { firstName: 'Jane', middleName: 'quinn', lastName: 'Doe', email: 'jane@example.com', phone: '555-123-4567', street: '12 Elm St Apt 4', city: 'Springfield', state: 'IL', zip: '62704', country: 'USA', dateOfBirth: '01/02/1980', ssn: '123-45-6789', company: 'Acme Inc', jobTitle: 'Engineer', dateFormat: 'MM/DD/YYYY' };
+const DETAILS = { firstName: 'Jane', middleName: 'quinn', lastName: 'Doe', email: 'jane@example.com', phone: '555-123-4567', street: '12 Elm St Apt 4', city: 'Springfield', state: 'IL', zip: '62704', country: 'USA', dateOfBirth: '01/02/1980', ssn: '123-45-6789', company: 'Acme Inc', jobTitle: 'Engineer', notes: '', dateFormat: 'MM/DD/YYYY' };
 
 const LABELS = [
   // W-9

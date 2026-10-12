@@ -34,6 +34,10 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   profilesSet: (store) => ipcRenderer.invoke('profiles-set', store),
   profilesRemember: (choice) => ipcRenderer.invoke('profiles-remember', choice),
   autofillPlan: (options) => ipcRenderer.invoke('autofill-plan', options),
+  aiSuggest: (options) => ipcRenderer.invoke('ai-suggest', options),
+  writerStatus: () => ipcRenderer.invoke('writer-status'),
+  writerInstall: () => ipcRenderer.invoke('writer-install'),
+  writerRemove: () => ipcRenderer.invoke('writer-remove'),
   setDocumentInfo: (options) => ipcRenderer.invoke('set-document-info', options),
 
   // OCR
