@@ -164,3 +164,67 @@ test('engine-start reuses a healthy server instead of spawning another', async t
   assert.equal(result.running, true);
   assert.equal(spawned, 0);
 });
+
+// Fake engine: spawn returns controllable processes; /health is 200 while one is alive; completions follow `replies`.
+function fakeEngine(t, replies) {
+  const spawns = [], cp = require('node:child_process'), realSpawn = cp.spawn;
+  cp.spawn = (bin, args) => { const p = { pid: 4242 + spawns.length, exitCode: null, signalCode: null, kill() { this.signalCode = 'SIGTERM'; } }; spawns.push({ args, p }); return p; };
+  t.after(() => { cp.spawn = realSpawn; });
+  const alive = () => spawns.some(s => s.p.exitCode === null && s.p.signalCode === null);
+  const net = { request(opts) {
+    const url = typeof opts === 'string' ? opts : opts.url;
+    let onResponse, onError;
+    const req = { setHeader() {}, on(ev, fn) { if (ev === 'response') onResponse = fn; if (ev === 'error') onError = fn; return req; },
+      end() { setImmediate(() => {
+        if (url.endsWith('/health')) return onResponse({ statusCode: alive() ? 200 : 0, resume() {} });
+        const r = replies.shift();
+        if (r instanceof Error) return onError(r);
+        const handlers = {};
+        onResponse({ statusCode: 200, setEncoding() {}, on(ev, fn) { handlers[ev] = fn; } });
+        handlers.data(JSON.stringify(r)); handlers.end();
+      }); } };
+    return req;
+  } };
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'pagewise-engine-'));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const dir = path.join(userData, 'ocr-engine'); fs.mkdirSync(dir);
+  for (const f of [BIN, 'device.txt', 'dots-ocr-text-Q8_0.gguf', 'dots-ocr-mmproj.gguf']) fs.writeFileSync(path.join(dir, f), 'x');
+  const app = { whenReady: () => ({ then: () => {} }), on: () => {}, quit: () => {}, exit: () => {}, getPath: () => userData };
+  return { spawns, ...loadMainHandlers({ electron: { app, net } }) };
+}
+const ok = text => ({ choices: [{ message: { content: text } }] });
+
+test('a GPU out-of-memory failure restarts the engine on the CPU and retries the page', async t => {
+  const { spawns, context, handlers } = fakeEngine(t, [{ error: { message: 'failed to process mtmd chunk' } }, ok('page text')]);
+  const r = await context.smartExtract('AAAA');
+  assert.equal(r.content, 'page text');
+  assert.equal(r.cpuFallback, true);
+  assert.equal(spawns.length, 2);
+  assert.ok(spawns[0].args.join(' ').includes('-ngl 999'));
+  assert.ok(spawns[1].args.join(' ').includes('-ngl 0 --device none --no-mmproj-offload'));
+  assert.match((await handlers.get('engine-status')()).device, /^CPU/);
+  await handlers.get('engine-stop')();
+  assert.doesNotMatch(String((await handlers.get('engine-status')()).device), /^CPU/, 'stopping from the UI goes back to the GPU');
+});
+
+test('an engine that dies mid-request also falls back to the CPU', async t => {
+  const { spawns, context } = fakeEngine(t, [Object.assign(new Error('net::ERR_EMPTY_RESPONSE')), ok('x')]);
+  assert.equal((await context.smartExtract('AAAA')).content, 'x');
+  assert.equal(spawns.length, 2);
+});
+
+test('other engine errors do not trigger the CPU fallback', async t => {
+  const { spawns, context } = fakeEngine(t, [{ error: { message: 'the request exceeds the available context size' } }]);
+  await assert.rejects(context.smartExtract('AAAA'), /context size/);
+  assert.equal(spawns.length, 1);
+});
+
+test('a crashed engine counts as stopped and is restarted on the next request', async t => {
+  const { spawns, context, handlers } = fakeEngine(t, [ok('a'), ok('b')]);
+  await context.smartExtract('AAAA');
+  spawns[0].p.exitCode = 139;
+  assert.equal((await handlers.get('engine-status')()).running, false);
+  assert.equal((await context.smartExtract('AAAA')).content, 'b');
+  assert.equal(spawns.length, 2);
+  assert.ok(spawns[1].args.join(' ').includes('-ngl 999'), 'a crash alone does not switch to CPU');
+});
