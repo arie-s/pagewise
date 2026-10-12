@@ -13,7 +13,7 @@ if (!hasUserData(app.getPath('userData'))) {
 }
 // @cantoo/pdf-lib encryption needs Web Crypto; Electron <=28's bundled Node lacks the global
 if (!globalThis.crypto) globalThis.crypto = require('crypto').webcrypto;
-const { PDFDocument, rgb, degrees, StandardFonts, PDFName, PDFArray, PDFDict, PDFString, PDFHexString, PDFNumber, grayscale, cmyk, pushGraphicsState, popGraphicsState, rectangle, clip, endPath } = require('@cantoo/pdf-lib');
+const { PDFDocument, rgb, degrees, StandardFonts, PDFName, PDFArray, PDFDict, PDFString, PDFHexString, PDFNumber, PDFRawStream, PDFRef, grayscale, cmyk, pushGraphicsState, popGraphicsState, rectangle, clip, endPath } = require('@cantoo/pdf-lib');
 
 let mainWindow;
 let currentFilePath = null;
@@ -114,6 +114,10 @@ function createWindow() {
         {
           label: 'Split PDF...',
           click: () => mainWindow.webContents.send('menu-split')
+        },
+        {
+          label: 'Reduce File Size...',
+          click: () => mainWindow.webContents.send('menu-compress')
         },
         { type: 'separator' },
         {
@@ -3007,6 +3011,146 @@ ipcMain.handle('extract-pages', async (event, { data, pageNumbers }) => {
       success: true,
       data: Buffer.from(pdfBytes).toString('base64')
     };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Reduce File Size: downsample and re-encode large images as JPEG, drop thumbnails and private app data
+const zlib = require('zlib');
+var jpegImage; // pdf.js's decoder: reads Adobe CMYK/YCCK JPEGs correctly, which Chromium does not
+var loadJpegImage = async () => jpegImage || (jpegImage = (await import('pdfjs-dist/image_decoders/pdf.image_decoders.min.mjs')).JpegImage);
+var imageCodec = { // var: tests swap it for an @napi-rs/canvas version (methods may be async)
+  fromRgba: ({ width, height, data }) => {
+    const bgra = Buffer.allocUnsafe(data.length);
+    for (let i = 0; i < data.length; i += 4) { bgra[i] = data[i + 2]; bgra[i + 1] = data[i + 1]; bgra[i + 2] = data[i]; bgra[i + 3] = 255; }
+    return nativeImage.createFromBitmap(bgra, { width, height });
+  },
+  resize: (img, width, height) => img.resize({ width, height, quality: 'good' }),
+  toJpeg: (img, q) => img.toJPEG(q),
+  size: img => img.getSize()
+};
+const COMPRESS_PRESETS = { screen: { dpi: 100, quality: 60, bpp: 0.35 }, standard: { dpi: 150, quality: 75, bpp: 0.6 }, print: { dpi: 220, quality: 85, bpp: 1 } };
+
+function unpredict(data, predictor, colors, columns) {
+  if (predictor < 10) return data;
+  const stride = colors * columns, rows = Math.floor(data.length / (stride + 1)), out = Buffer.alloc(rows * stride);
+  for (let y = 0; y < rows; y++) {
+    const type = data[y * (stride + 1)], src = y * (stride + 1) + 1, dst = y * stride;
+    for (let i = 0; i < stride; i++) {
+      const a = i >= colors ? out[dst + i - colors] : 0, b = y ? out[dst - stride + i] : 0, c = y && i >= colors ? out[dst - stride + i - colors] : 0;
+      let p = 0;
+      if (type === 1) p = a; else if (type === 2) p = b; else if (type === 3) p = (a + b) >> 1;
+      else if (type === 4) { const q = a + b - c, pa = Math.abs(q - a), pb = Math.abs(q - b), pc = Math.abs(q - c); p = pa <= pb && pa <= pc ? a : pb <= pc ? b : c; }
+      out[dst + i] = (data[src + i] + p) & 255;
+    }
+  }
+  return out;
+}
+
+// Samples (1, 3 or 4 components) to RGBA. Gray stays gray (r=g=b), so the JPEG is written as DeviceRGB.
+function samplesToRgba(s, comps, n) {
+  const out = Buffer.allocUnsafe(n * 4);
+  for (let i = 0; i < n; i++) {
+    let r, g, b;
+    if (comps === 1) r = g = b = s[i];
+    else if (comps === 3) { r = s[i * 3]; g = s[i * 3 + 1]; b = s[i * 3 + 2]; }
+    else { const k = 1 - s[i * 4 + 3] / 255; r = 255 * (1 - s[i * 4] / 255) * k; g = 255 * (1 - s[i * 4 + 1] / 255) * k; b = 255 * (1 - s[i * 4 + 2] / 255) * k; }
+    out[i * 4] = r; out[i * 4 + 1] = g; out[i * 4 + 2] = b; out[i * 4 + 3] = 255;
+  }
+  return out;
+}
+
+function imageComponents(doc, dict) {
+  let cs = doc.context.lookup(dict.get(PDFName.of('ColorSpace')));
+  if (cs instanceof PDFArray && cs.size() === 2 && cs.lookup(0) === PDFName.of('ICCBased')) {
+    const icc = cs.lookup(1), n = icc && icc.dict && icc.dict.lookup(PDFName.of('N'));
+    return n instanceof PDFNumber && [1, 3, 4].includes(n.asNumber()) ? n.asNumber() : 0;
+  }
+  return { DeviceGray: 1, DeviceRGB: 3, DeviceCMYK: 4 }[cs instanceof PDFName ? cs.decodeText() : ''] || 0;
+}
+
+async function recompressImage(doc, stream, maxPx, preset) {
+  const d = stream.dict, num = k => { const v = d.lookup(PDFName.of(k)); return v instanceof PDFNumber ? v.asNumber() : undefined; };
+  if (d.has(PDFName.of('SMask')) || d.has(PDFName.of('Mask'))) return null;
+  const im = d.lookup(PDFName.of('ImageMask')); if (im && im.toString() === 'true') return null;
+  const comps = imageComponents(doc, d), width = num('Width'), height = num('Height');
+  if (!comps || !(width > 0 && height > 0)) return null;
+  const dec = d.lookup(PDFName.of('Decode'));
+  if (dec) { const v = dec.asArray().map(x => x.asNumber()); if (v.some((x, i) => x !== i % 2)) return null; }
+  let filter = d.lookup(PDFName.of('Filter'));
+  if (filter instanceof PDFArray) filter = filter.size() === 1 ? filter.lookup(0) : null;
+  const fname = filter === undefined ? '' : filter instanceof PDFName ? filter.decodeText() : null;
+  const raw = Buffer.from(stream.getContents());
+  let img, isJpeg = fname === 'DCTDecode';
+  if (isJpeg) {
+    const jpg = new (await loadJpegImage())(); jpg.parse(new Uint8Array(raw));
+    const rgb = jpg.getData({ width: jpg.width, height: jpg.height, forceRGB: true, isSourcePDF: true });
+    img = await imageCodec.fromRgba({ width: jpg.width, height: jpg.height, data: samplesToRgba(rgb, 3, jpg.width * jpg.height) });
+  }
+  else if (fname === 'FlateDecode' || fname === '') {
+    const bpc = num('BitsPerComponent'); if (bpc !== 8) return null;
+    let parms = d.lookup(PDFName.of('DecodeParms')), predictor = 1;
+    if (parms instanceof PDFArray) return null;
+    if (parms) {
+      const g = k => { const v = parms.lookup(PDFName.of(k)); return v instanceof PDFNumber ? v.asNumber() : undefined; };
+      predictor = g('Predictor') || 1;
+      if (predictor !== 1 && (predictor < 10 || (g('Colors') || 1) !== comps || (g('Columns') || 1) !== width || (g('BitsPerComponent') || 8) !== 8)) return null;
+    }
+    let data = fname === 'FlateDecode' ? zlib.inflateSync(raw) : raw;
+    data = unpredict(data, predictor, comps, width);
+    if (data.length < width * height * comps) return null;
+    img = await imageCodec.fromRgba({ width, height, data: samplesToRgba(data, comps, width * height) });
+  } else return null;
+  const size = await imageCodec.size(img);
+  const long = Math.max(size.width, size.height);
+  const down = long > maxPx, heavy = isJpeg && raw.length / (size.width * size.height) > preset.bpp;
+  if (isJpeg && !down && !heavy && comps !== 4) return { kept: true };
+  if (down) { const k = maxPx / long; img = await imageCodec.resize(img, Math.max(1, Math.round(size.width * k)), Math.max(1, Math.round(size.height * k))); }
+  const out = Buffer.from(await imageCodec.toJpeg(img, preset.quality)), ns = await imageCodec.size(img);
+  if (out.length >= raw.length) return { kept: true };
+  const nd = doc.context.obj({ Type: 'XObject', Subtype: 'Image', Width: ns.width, Height: ns.height, ColorSpace: 'DeviceRGB', BitsPerComponent: 8, Filter: 'DCTDecode' });
+  for (const k of ['Interpolate', 'Intent', 'Name']) if (d.has(PDFName.of(k))) nd.set(PDFName.of(k), d.get(PDFName.of(k)));
+  return { stream: PDFRawStream.of(nd, out) };
+}
+
+async function compressPdf(bytes, presetName = 'standard') {
+  const preset = COMPRESS_PRESETS[presetName];
+  if (!preset) throw new Error('Unknown size preset');
+  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  if (doc.context.trailerInfo.Encrypt) throw new Error('Remove the password first (Security → Remove Password)');
+  const found = new Map(); // ref tag -> { ref, long } (longest page side the image appears on)
+  const resources = node => { for (let n = node; n; n = n.lookupMaybe(PDFName.of('Parent'), PDFDict)) { const r = n.lookupMaybe(PDFName.of('Resources'), PDFDict); if (r) return r; } };
+  const walk = (res, long, depth) => {
+    const xo = res && res.lookupMaybe(PDFName.of('XObject'), PDFDict); if (!xo) return;
+    for (const [, v] of xo.entries()) {
+      const s = doc.context.lookup(v), sub = s && s.dict && s.dict.lookup(PDFName.of('Subtype'));
+      if (!(s instanceof PDFRawStream) || !sub) continue;
+      if (sub === PDFName.of('Image') && v instanceof PDFRef) { const e = found.get(v.tag); if (e) e.long = Math.max(e.long, long); else found.set(v.tag, { ref: v, long }); }
+      else if (sub === PDFName.of('Form') && depth < 1) walk(s.dict.lookupMaybe(PDFName.of('Resources'), PDFDict), long, depth + 1);
+    }
+  };
+  for (const page of doc.getPages()) {
+    const { width, height } = page.getSize();
+    walk(resources(page.node), Math.max(width, height), 0);
+    page.node.delete(PDFName.of('Thumb')); page.node.delete(PDFName.of('PieceInfo'));
+  }
+  doc.catalog.delete(PDFName.of('PieceInfo'));
+  const images = { total: found.size, recompressed: 0, skipped: 0 };
+  for (const { ref, long } of found.values()) {
+    let r = null;
+    try { r = await recompressImage(doc, doc.context.lookup(ref), Math.ceil(preset.dpi * long / 72), preset); } catch (e) { r = null; }
+    if (!r) images.skipped++;
+    else if (r.stream) { doc.context.assign(ref, r.stream); images.recompressed++; }
+  }
+  const before = bytes.length, data = Buffer.from(await doc.save({ useObjectStreams: true }));
+  return data.length >= before ? { data: Buffer.from(bytes), before, after: before, images: { ...images, recompressed: 0 } } : { data, before, after: data.length, images };
+}
+
+ipcMain.handle('compress-pdf', async (event, { data, preset }) => {
+  try {
+    const r = await compressPdf(Buffer.from(data, 'base64'), preset);
+    return { success: true, data: r.data.toString('base64'), before: r.before, after: r.after, images: r.images };
   } catch (error) {
     return { success: false, error: error.message };
   }

@@ -1426,6 +1426,39 @@
         return applyPageMods(idx.map(pageIndex => ({ type: 'resize', pageIndex, width: landscape ? h : w, height: landscape ? w : h })), 'Pages resized');
       } }]);
     }
+    function showCompressDialog() {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      const opt = (v, t, d, c) => '<label style="display:block;margin-bottom:10px;"><input type="radio" name="cpPreset" value="' + v + '"' + (c ? ' checked' : '') + '> <b>' + t + '</b><div class="form-label" style="margin-left:22px;">' + d + '</div></label>';
+      const content = opt('screen', 'Smallest', 'Images at 100 dpi, lower quality. Good for email and screens.') + opt('standard', 'Balanced (recommended)', 'Images at 150 dpi. Looks fine on screen and in most prints.', true) + opt('print', 'High quality', 'Images at 220 dpi, high quality. For printing.') +
+        '<div class="form-label">Text and vector graphics are not changed; images are re-encoded as JPEG. Print-oriented (CMYK) images are converted to screen colours (RGB).</div>';
+      showModal('Reduce File Size', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Reduce', action: 'reduce', primary: true, handler: m => compressDocument(m.querySelector('input[name="cpPreset"]:checked').value) }]);
+    }
+    async function compressDocument(preset) {
+      setLoading(true, 'Reducing file size...');
+      try {
+        if (state.formsDirty) await commitFormValues();
+        const pending = collectModifications();
+        if (pending.some(m => m.type === 'redaction')) throw new Error('Apply or clear the redaction marks first');
+        let data = state.originalData;
+        if (pending.length) {
+          const a = await window.pdfAPI.applyModifications({ originalData: data, modifications: pending });
+          if (!a.success) throw new Error(a.error || 'Could not apply your changes');
+          data = a.data;
+        }
+        const r = await window.pdfAPI.compressPdf({ data, preset });
+        if (!r.success) throw new Error(r.error || 'Could not reduce the file size');
+        const mb = n => (n / 1048576).toFixed(1) + ' MB';
+        const small = r.after > r.before * 0.98; // under 2% saved is not worth re-encoding anything
+        const compactMsg = 'This PDF is already compact' + (r.images.recompressed ? '' : ': its size is mostly fonts and text, not images');
+        if (small && !pending.length) { showNotification(compactMsg); setLoading(false); return; }
+        state.originalData = r.data; setUnsavedChanges(true);
+        if (pending.length) { state.annotations = {}; state.textEdits = {}; state.undoStack = []; state.redoStack = []; updateUndoRedo(); updateAnnotationCount(); }
+        state.pdfDoc = await pdfjsLib.getDocument({ data: Uint8Array.from(atob(r.data), c => c.charCodeAt(0)) }).promise;
+        await renderThumbnails(); await renderAllPages(); goToPage(Math.min(state.currentPage, state.pdfDoc.numPages));
+        showNotification(small ? compactMsg : mb(r.before) + ' → ' + mb(r.after) + ' (' + Math.round(100 - 100 * r.after / r.before) + '% smaller, ' + r.images.recompressed + ' image' + (r.images.recompressed === 1 ? '' : 's') + ' recompressed)');
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      setLoading(false);
+    }
     async function showReplacePage() {
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
       const sources = await window.pdfAPI.openMultipleFiles();
@@ -2411,7 +2444,7 @@
     window.pdfAPI.onMenuOcr(() => runOcr()); window.pdfAPI.onMenuOcrAi(() => runOcr('ai')); window.pdfAPI.onMenuSmartExtract(runSmartExtract); window.pdfAPI.onMenuEngineSetup(showEngineSetup);
     window.pdfAPI.onMenuToggleBookmarks(() => activateSidebarTab('bookmarks')); window.pdfAPI.onMenuToggleThumbnails(() => activateSidebarTab('thumbnails'));
     window.pdfAPI.onMenuInsertFromFile(showInsertFromFile);
-    window.pdfAPI.onMenuReplacePage(showReplacePage); window.pdfAPI.onMenuCropPage(startCrop); window.pdfAPI.onMenuRemoveCrop(removeCrop); window.pdfAPI.onMenuResizePage(showResizeDialog);
+    window.pdfAPI.onMenuReplacePage(showReplacePage); window.pdfAPI.onMenuCropPage(startCrop); window.pdfAPI.onMenuRemoveCrop(removeCrop); window.pdfAPI.onMenuResizePage(showResizeDialog); window.pdfAPI.onMenuCompress(showCompressDialog);
     window.pdfAPI.onMenuAddPageNumbers(showPageNumbersDialog); window.pdfAPI.onMenuAddHeaderFooter(showHeaderFooterDialog);
     window.pdfAPI.onMenuGotoPage(showGotoPageDialog);
     window.pdfAPI.onMenuShortcuts(showShortcutsDialog);
