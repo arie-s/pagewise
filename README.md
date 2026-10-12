@@ -18,6 +18,7 @@
 - **Edit and annotate:** text, highlights, underline, strikethrough, pen, shapes, stamps, images and drawn signatures. Annotations are baked into the PDF on save.
 - **Organize pages:** drag to reorder, rotate one or all pages, insert blank pages or pages from another PDF or image, extract and delete.
 - **Document tools:** merge, split by page count or ranges, add page numbers, headers, footers and watermarks; export pages as PNG/JPEG.
+- **Fill forms:** click fields in a fillable PDF and type; values save as real form data, and *Tools → Flatten Form* makes them fixed page content.
 - **Protect documents:** AES-256 password protection and decryption.
 - **Make scans searchable:** local Tesseract OCR adds an invisible text layer at recognized word positions.
 - **Redact:** marked regions are masked and the entire output PDF is rebuilt from rendered images, removing the original content and hidden objects.

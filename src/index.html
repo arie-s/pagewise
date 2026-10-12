@@ -99,6 +99,26 @@
     .annotation-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
     .annotation-layer.active { pointer-events: auto; cursor: crosshair; }
     .annotation-layer canvas { position: absolute; top: 0; left: 0; }
+    .annotationLayer { position: absolute; top: 0; left: 0; pointer-events: none; transform-origin: 0 0; --input-focus-border-color: Highlight; --input-focus-outline: 1px solid Canvas; --input-unfocused-border-color: transparent; --input-disabled-border-color: transparent; --input-hover-border-color: black; --annotation-unfocused-field-background: url("data:image/svg+xml;charset=UTF-8,<svg width='1px' height='1px' xmlns='http://www.w3.org/2000/svg'><rect width='100%' height='100%' style='fill:rgba(0, 54, 255, 0.13);'/></svg>"); }
+    .annotationLayer section { position: absolute; text-align: initial; pointer-events: auto; box-sizing: border-box; transform-origin: 0 0; }
+    .annotationLayer.disabled section { pointer-events: none; }
+    .annotationLayer .annotationContent, .annotationLayer .popupAnnotation { display: none; }
+    .annotationLayer .linkAnnotation > a, .annotationLayer .buttonWidgetAnnotation.pushButton > a { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+    .annotationLayer .textWidgetAnnotation :is(input, textarea), .annotationLayer .choiceWidgetAnnotation select, .annotationLayer .buttonWidgetAnnotation:is(.checkBox, .radioButton) input { background-image: var(--annotation-unfocused-field-background); border: 2px solid var(--input-unfocused-border-color); box-sizing: border-box; font: calc(9px * var(--scale-factor)) sans-serif; height: 100%; margin: 0; vertical-align: top; width: 100%; }
+    .annotationLayer .choiceWidgetAnnotation select option { padding: 0; }
+    .annotationLayer .buttonWidgetAnnotation.radioButton input { border-radius: 50%; }
+    .annotationLayer .textWidgetAnnotation textarea { resize: none; }
+    .annotationLayer :is(input, textarea, select):disabled { background: none !important; cursor: not-allowed; }
+    .annotationLayer :is(input, textarea, select):hover { border: 2px solid var(--input-hover-border-color); }
+    .annotationLayer .textWidgetAnnotation :is(input, textarea):focus, .annotationLayer .choiceWidgetAnnotation select:focus { background: none; border: 2px solid var(--input-focus-border-color); border-radius: 2px; outline: var(--input-focus-outline); }
+    .annotationLayer .buttonWidgetAnnotation:is(.checkBox, .radioButton) :focus { background-image: none; background-color: transparent; border: 2px solid var(--input-focus-border-color); outline: var(--input-focus-outline); }
+    .annotationLayer .buttonWidgetAnnotation:is(.checkBox, .radioButton) input { appearance: none; }
+    .annotationLayer .buttonWidgetAnnotation.checkBox input:checked::before, .annotationLayer .buttonWidgetAnnotation.checkBox input:checked::after, .annotationLayer .buttonWidgetAnnotation.radioButton input:checked::before { background-color: CanvasText; content: ""; display: block; position: absolute; }
+    .annotationLayer .buttonWidgetAnnotation.checkBox input:checked::before, .annotationLayer .buttonWidgetAnnotation.checkBox input:checked::after { height: 80%; left: 45%; width: 1px; }
+    .annotationLayer .buttonWidgetAnnotation.checkBox input:checked::before { transform: rotate(45deg); }
+    .annotationLayer .buttonWidgetAnnotation.checkBox input:checked::after { transform: rotate(-45deg); }
+    .annotationLayer .buttonWidgetAnnotation.radioButton input:checked::before { border-radius: 50%; height: 50%; left: 25%; top: 25%; width: 50%; }
+    .annotationLayer .textWidgetAnnotation input.comb { font-family: monospace; padding-left: 2px; padding-right: 0; }
     .text-layer { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden; opacity: 0.2; line-height: 1.0; }
     .text-layer > span { color: transparent; position: absolute; white-space: pre; cursor: text; }
     .text-layer > span::selection { background: rgba(0, 0, 255, 0.3); }
@@ -348,7 +368,7 @@
     import * as pdfjsLib from '../node_modules/pdfjs-dist/build/pdf.mjs';
     import { extractScale } from './extract-scale.mjs';
 
-    const state = { pdfDoc: null, currentPage: 1, scale: 1.0, originalData: null, filePath: null, fileName: null, currentTool: 'select', isDrawing: false, annotations: {}, undoStack: [], redoStack: [], hasUnsavedChanges: false, currentPath: [], pendingStamp: null, pendingImage: null, pendingSignature: null, redactionMarks: {}, textEdits: {} };
+    const state = { pdfDoc: null, currentPage: 1, scale: 1.0, originalData: null, filePath: null, fileName: null, currentTool: 'select', isDrawing: false, annotations: {}, undoStack: [], redoStack: [], hasUnsavedChanges: false, formsDirty: false, currentPath: [], pendingStamp: null, pendingImage: null, pendingSignature: null, redactionMarks: {}, textEdits: {} };
     const $ = id => document.getElementById(id);
 
     function showNotification(msg, type = 'success') { const n = $('notification'); n.textContent = msg; n.className = `notification ${type}`; n.classList.remove('hidden'); setTimeout(() => n.classList.add('hidden'), 3000); }
@@ -363,6 +383,22 @@
     }
     function updateUndoRedo() { $('undoBtn').disabled = state.undoStack.length === 0; $('redoBtn').disabled = state.redoStack.length === 0; }
     function setUnsavedChanges(flag) { state.hasUnsavedChanges = flag; window.pdfAPI.setUnsaved(flag); }
+    function bytesToBase64(bytes) { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s); }
+    async function commitFormValues() {
+      if (!state.formsDirty) return;
+      state.originalData = bytesToBase64(await state.pdfDoc.saveDocument());
+      state.formsDirty = false; state.pdfDoc.annotationStorage.resetModified();
+    }
+    function markFormsDirty() { state.formsDirty = true; setUnsavedChanges(true); }
+    const formLinkService = {
+      getDestinationHash: () => '#', getAnchorUrl: () => '#', addLinkAttributes() {}, executeNamedAction() {}, executeSetOCGState() {},
+      async goToDestination(dest) {
+        try {
+          const d = typeof dest === 'string' ? await state.pdfDoc.getDestination(dest) : dest;
+          if (Array.isArray(d)) goToPage(typeof d[0] === 'object' && d[0] ? await state.pdfDoc.getPageIndex(d[0]) + 1 : d[0] + 1);
+        } catch (e) { /* unresolvable destination */ }
+      }
+    };
     function hexToRgb(hex) { const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex); return r ? { r: parseInt(r[1], 16) / 255, g: parseInt(r[2], 16) / 255, b: parseInt(r[3], 16) / 255 } : { r: 0, g: 0, b: 0 }; }
     function editSnapshot() { return JSON.stringify({ annotations: state.annotations, redactionMarks: state.redactionMarks, textEdits: state.textEdits }); }
     function saveState() { state.undoStack.push(editSnapshot()); if (state.undoStack.length > 50) state.undoStack.shift(); state.redoStack = []; setUnsavedChanges(true); updateUndoRedo(); }
@@ -447,6 +483,7 @@
         if (!pw) return;
         setLoading(true, 'Decrypting...');
         try {
+          if (state.formsDirty) await commitFormValues();
           const r = await window.pdfAPI.decryptPdf({ data: state.originalData, password: pw });
           if (r.success) { await window.pdfAPI.saveFileAs({ data: r.data, defaultName: 'decrypted.pdf' }); showNotification('Document decrypted'); }
           else showNotification('Wrong password: ' + r.error, 'error');
@@ -474,6 +511,7 @@
     async function reorderPages(newOrder) {
       setLoading(true, 'Reordering pages...');
       try {
+        if (state.formsDirty) await commitFormValues();
         const r = await window.pdfAPI.reorderPages({ data: state.originalData, newOrder });
         if (r.success) {
           const focusOld = state.currentPage - 1;
@@ -709,6 +747,7 @@
       if (sources.error) { showNotification(sources.error, 'error'); return; }
       setLoading(true, 'Inserting pages...');
       try {
+        if (state.formsDirty) await commitFormValues();
         let data = state.originalData, insertIndex = state.currentPage, pageCount = state.pdfDoc.numPages;
         for (const src of sources) {
           const r = await window.pdfAPI.insertPagesFromFile({ targetData: data, sourceData: src.data, insertIndex, pageNumbers: null });
@@ -738,6 +777,7 @@
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
       setLoading(true, 'Rotating all pages...');
       try {
+        if (state.formsDirty) await commitFormValues();
         const mods = []; for (let i = 0; i < state.pdfDoc.numPages; i++) mods.push({ type: 'rotate', pageIndex: i, angle });
         const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
         if (r.success) {
@@ -760,6 +800,7 @@
         const fmt = m.querySelector('#pnFormat').value, n = state.pdfDoc.numPages;
         const numText = (i) => fmt === 'plain' ? String(i + 1) : fmt === 'page' ? 'Page ' + (i + 1) : fmt === 'pageof' ? 'Page ' + (i + 1) + ' of ' + n : (i + 1) + ' / ' + n;
         setLoading(true, 'Adding page numbers...');
+        if (state.formsDirty) await commitFormValues();
         const mods = [];
         for (let i = 0; i < n; i++) mods.push({ type: 'pageNumber', pageIndex: i, text: numText(i), position: pos, fontSize: size, x: 0.4 });
         const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
@@ -777,6 +818,7 @@
         const header = m.querySelector('#hfHeader').value, footer = m.querySelector('#hfFooter').value;
         if (!header && !footer) { showNotification('Enter header or footer text', 'warning'); return; }
         setLoading(true, 'Adding header/footer...');
+        if (state.formsDirty) await commitFormValues();
         const mods = [];
         for (let i = 0; i < state.pdfDoc.numPages; i++) mods.push({ type: 'headerFooter', pageIndex: i, header: header || '', footer: footer || '' });
         const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
@@ -837,6 +879,8 @@
         $('filePath').textContent = state.fileName;
         $('statusText').textContent = 'Loaded: ' + state.fileName;
         goToPage(1); showNotification('Opened: ' + state.fileName);
+        const fields = await state.pdfDoc.getFieldObjects?.();
+        if (fields && Object.keys(fields).length) showNotification('This PDF has a fillable form. Click a field to type.');
         return true;
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
       finally { setLoading(false); }
@@ -878,6 +922,7 @@
       return false;
     }
     async function buildDocumentData() {
+      if (state.formsDirty) await commitFormValues();
       const mods = collectModifications();
       if (mods.some(m => !Number.isInteger(m.pageIndex) || m.pageIndex < 0 || m.pageIndex >= state.pdfDoc.numPages)) {
         throw new Error('An edit refers to a missing page');
@@ -929,7 +974,7 @@
         const page = await state.pdfDoc.getPage(i);
         const vp = page.getViewport({ scale: 0.2 });
         const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
-        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp, annotationMode: pdfjsLib.AnnotationMode.ENABLE_STORAGE, annotationStorage: state.pdfDoc.annotationStorage }).promise;
         const div = document.createElement('div'); div.className = 'thumbnail' + (i === 1 ? ' active' : ''); div.dataset.page = i;
         div.appendChild(canvas);
         const num = document.createElement('div'); num.className = 'thumbnail-number'; num.textContent = i; div.appendChild(num);
@@ -956,29 +1001,41 @@
       }
     }
     async function renderAllPages() {
-      const container = $('pagesContainer');
+      const container = $('pagesContainer'), gen = state.renderGen = (state.renderGen || 0) + 1;
       while (container.firstChild) container.removeChild(container.firstChild);
       for (let i = 1; i <= state.pdfDoc.numPages; i++) {
         const pageDiv = document.createElement('div'); pageDiv.className = 'page-container'; pageDiv.id = 'page-' + i; pageDiv.dataset.page = i;
         const page = await state.pdfDoc.getPage(i);
         const vp = page.getViewport({ scale: state.scale });
         const canvas = document.createElement('canvas'); canvas.className = 'page-canvas'; canvas.width = vp.width; canvas.height = vp.height;
-        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+        const annots = await page.getAnnotations(), hasForm = annots.some(a => a.subtype === 'Widget');
+        await page.render(hasForm ? { canvasContext: canvas.getContext('2d'), viewport: vp, annotationMode: pdfjsLib.AnnotationMode.ENABLE_FORMS } : { canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
         pageDiv.appendChild(canvas);
         // Text layer for selection and editing
         const textLayer = document.createElement('div'); textLayer.className = 'text-layer'; textLayer.dataset.page = i;
         textLayer.style.width = vp.width + 'px'; textLayer.style.height = vp.height + 'px';
         pageDiv.appendChild(textLayer);
         await renderTextLayer(page, vp, textLayer, i);
+        if (hasForm) {
+          pageDiv.style.setProperty('--scale-factor', vp.scale); pageDiv.style.setProperty('--total-scale-factor', vp.scale);
+          const formLayer = document.createElement('div'); formLayer.className = 'annotationLayer' + (state.currentTool !== 'select' ? ' disabled' : '');
+          formLayer.addEventListener('click', e => { if (e.target.closest('a')) e.preventDefault(); });
+          pageDiv.appendChild(formLayer);
+          await new pdfjsLib.AnnotationLayer({ div: formLayer, page, viewport: vp.clone({ dontFlip: true }), accessibilityManager: null, annotationCanvasMap: null, annotationEditorUIManager: null, structTreeLayer: null })
+            .render({ annotations: annots, viewport: vp.clone({ dontFlip: true }), linkService: formLinkService, renderForms: true, annotationStorage: state.pdfDoc.annotationStorage, enableScripting: false, imageResourcesPath: '' });
+        }
         // Annotation layer
         const annLayer = document.createElement('div'); annLayer.className = 'annotation-layer' + (state.currentTool !== 'select' ? ' active' : ''); annLayer.dataset.page = i;
         const annCanvas = document.createElement('canvas'); annCanvas.width = vp.width; annCanvas.height = vp.height;
         annLayer.appendChild(annCanvas);
         setupAnnotationCanvas(annCanvas, i);
         pageDiv.appendChild(annLayer);
+        if (gen !== state.renderGen) return; // a newer render (e.g. rapid zoom) took over
         container.appendChild(pageDiv);
         renderAnnotations(i);
       }
+      const storage = state.pdfDoc.annotationStorage;
+      if (storage.onSetModified !== markFormsDirty) { storage.resetModified(); storage.onSetModified = markFormsDirty; state.formsDirty = false; }
     }
     async function renderTextLayer(page, viewport, container, pageNum) {
       const textContent = await page.getTextContent();
@@ -1235,13 +1292,14 @@
     function goToPage(p) { state.currentPage = p; $('currentPage').textContent = p; document.querySelectorAll('.thumbnail').forEach(t => t.classList.remove('active')); document.querySelector('.thumbnail[data-page="' + p + '"]')?.classList.add('active'); document.getElementById('page-' + p)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
     async function rotatePage(angle) {
       if (!state.pdfDoc) return; setLoading(true, 'Rotating...');
-      try { const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: [{ type: 'rotate', pageIndex: state.currentPage - 1, angle }] }); if (r.success) { state.originalData = r.data; setUnsavedChanges(true); const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); showNotification('Page rotated'); } } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      try { if (state.formsDirty) await commitFormValues(); const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: [{ type: 'rotate', pageIndex: state.currentPage - 1, angle }] }); if (r.success) { state.originalData = r.data; setUnsavedChanges(true); const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); showNotification('Page rotated'); } } catch (e) { showNotification('Error: ' + e.message, 'error'); }
       setLoading(false);
     }
     async function deletePage() {
       if (!state.pdfDoc || state.pdfDoc.numPages <= 1) { showNotification('Cannot delete only page', 'error'); return; }
       if (!confirm('Delete page ' + state.currentPage + '?')) return; setLoading(true, 'Deleting...');
       try {
+        if (state.formsDirty) await commitFormValues();
         const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: [{ type: 'deletePage', pageIndex: state.currentPage - 1 }] });
         if (!r.success) throw new Error(r.error);
         const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
@@ -1260,6 +1318,7 @@
     async function insertBlankPage() {
       if (!state.pdfDoc) return; setLoading(true, 'Inserting...');
       try {
+        if (state.formsDirty) await commitFormValues();
         const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: [{ type: 'insertPage', pageIndex: state.currentPage }] });
         if (!r.success) throw new Error(r.error);
         const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
@@ -1275,6 +1334,20 @@
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
       setLoading(false);
     }
+    async function flattenForm() {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      setLoading(true, 'Flattening form...');
+      try {
+        if (state.formsDirty) await commitFormValues();
+        const r = await window.pdfAPI.flattenForm({ data: state.originalData });
+        if (!r.success) { showNotification(r.error, 'warning'); return; }
+        if (!confirm('Flatten the form? Fields become fixed page content and can no longer be edited.')) return;
+        state.originalData = r.data; setUnsavedChanges(true);
+        state.pdfDoc = await pdfjsLib.getDocument({ data: Uint8Array.from(atob(r.data), c => c.charCodeAt(0)) }).promise;
+        await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); showNotification('Form flattened');
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      finally { setLoading(false); }
+    }
     async function mergePdfs() {
       const files = await window.pdfAPI.openMultipleFiles(); if (files && files.error) { showNotification(files.error, 'error'); return; } if (!files || files.length < 2) { showNotification('Select at least 2 files', 'warning'); return; }
       setLoading(true, 'Merging...');
@@ -1286,7 +1359,7 @@
       const r = await window.pdfAPI.getDocumentInfo({ data: state.originalData }); if (!r.success) { showNotification('Error getting properties', 'error'); return; }
       const i = r.info;
       const content = '<div class="form-group"><label class="form-label">Title</label><input type="text" class="form-input" id="propTitle"></div><div class="form-group"><label class="form-label">Author</label><input type="text" class="form-input" id="propAuthor"></div><div class="form-group"><label class="form-label">Subject</label><input type="text" class="form-input" id="propSubject"></div><div class="form-section-title" style="margin-top:16px;">Statistics</div><div class="panel-row"><span class="panel-label">Pages:</span><span class="panel-value" id="propPages"></span></div><div class="panel-row"><span class="panel-label">Creator:</span><span class="panel-value" id="propCreator"></span></div>';
-      const modal = showModal('Document Properties', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Save', action: 'save', primary: true, handler: async m => { const info = { title: m.querySelector('#propTitle').value, author: m.querySelector('#propAuthor').value, subject: m.querySelector('#propSubject').value }; const res = await window.pdfAPI.setDocumentInfo({ data: state.originalData, info }); if (res.success) { state.originalData = res.data; setUnsavedChanges(true); showNotification('Properties updated'); } } }]);
+      const modal = showModal('Document Properties', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Save', action: 'save', primary: true, handler: async m => { if (state.formsDirty) await commitFormValues(); const info = { title: m.querySelector('#propTitle').value, author: m.querySelector('#propAuthor').value, subject: m.querySelector('#propSubject').value }; const res = await window.pdfAPI.setDocumentInfo({ data: state.originalData, info }); if (res.success) { state.originalData = res.data; setUnsavedChanges(true); showNotification('Properties updated'); } } }]);
       modal.querySelector('#propTitle').value = i.title || '';
       modal.querySelector('#propAuthor').value = i.author || '';
       modal.querySelector('#propSubject').value = i.subject || '';
@@ -1298,6 +1371,7 @@
       showModal('Add Watermark', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Add', action: 'add', primary: true, handler: async m => {
         const text = m.querySelector('#wmText').value, fontSize = parseInt(m.querySelector('#wmSize').value), opacity = parseInt(m.querySelector('#wmOpacity').value) / 100, pages = m.querySelector('#wmPages').value;
         setLoading(true, 'Adding watermark...');
+        if (state.formsDirty) await commitFormValues();
         const mods = []; const list = pages === 'all' ? Array.from({ length: state.pdfDoc.numPages }, (_, i) => i) : [state.currentPage - 1];
         for (const idx of list) mods.push({ type: 'watermark', pageIndex: idx, text, fontSize, opacity, color: { r: 0.7, g: 0.7, b: 0.7 }, rotation: -45 });
         const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
@@ -1621,6 +1695,7 @@
       const isDrawingTool = tool !== 'select' && tool !== 'hand';
       document.querySelectorAll('.annotation-layer').forEach(l => { l.classList.toggle('active', isDrawingTool); });
       // Disable text layer when using drawing tools so clicks go through to annotation layer
+      document.querySelectorAll('.annotationLayer').forEach(l => { l.classList.toggle('disabled', tool !== 'select'); });
       document.querySelectorAll('.text-layer').forEach(l => { l.style.pointerEvents = isDrawingTool ? 'none' : 'auto'; });
       $('currentToolDisplay').textContent = tool.charAt(0).toUpperCase() + tool.slice(1);
       document.body.style.cursor = tool === 'hand' ? 'grab' : '';
@@ -1700,7 +1775,7 @@
     $('signatureBtn').onclick = showSignatureDialog;
     document.querySelectorAll('.sidebar-tab').forEach(tab => { tab.onclick = () => { document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active')); tab.classList.add('active'); $('thumbnailContainer').classList.toggle('hidden', tab.dataset.tab !== 'thumbnails'); $('bookmarksContainer').classList.toggle('hidden', tab.dataset.tab !== 'bookmarks'); }; });
     document.addEventListener('keydown', e => {
-      if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+      if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
       if (e.ctrlKey || e.metaKey) { switch (e.key.toLowerCase()) { case 'n': e.preventDefault(); createNewPdf(); break; case 'o': e.preventDefault(); openFile(); break; case 's': e.preventDefault(); saveDocument(e.shiftKey); break; case 'z': e.preventDefault(); undo(); break; case 'y': e.preventDefault(); redo(); break; case 'f': e.preventDefault(); showSearch(); break; case '=': case '+': e.preventDefault(); setZoom(state.scale + 0.25); break; case '-': e.preventDefault(); setZoom(state.scale - 0.25); break; case '0': e.preventDefault(); setZoom(1); break; } }
       else { switch (e.key.toLowerCase()) { case 'v': selectTool('select'); break; case 'h': selectTool('hand'); break; case 't': selectTool('text'); break; case 'p': selectTool('draw'); break; case 'e': selectTool('eraser'); break; case 'l': selectTool('line'); break; case 'a': selectTool('arrow'); break; case 'r': selectTool('rectangle'); break; case 'c': selectTool('circle'); break; } }
     });
@@ -1740,7 +1815,7 @@
     window.pdfAPI.onMenuUndo(undo); window.pdfAPI.onMenuRedo(redo); window.pdfAPI.onMenuFind(showSearch);
     window.pdfAPI.onMenuZoomIn(() => setZoom(state.scale + 0.25)); window.pdfAPI.onMenuZoomOut(() => setZoom(state.scale - 0.25)); window.pdfAPI.onMenuZoomReset(() => setZoom(1));
     window.pdfAPI.onMenuTool(selectTool); window.pdfAPI.onMenuRotate(rotatePage); window.pdfAPI.onMenuRotateAll(rotateAllPages); window.pdfAPI.onMenuDeletePage(deletePage); window.pdfAPI.onMenuInsertPage(insertBlankPage);
-    window.pdfAPI.onMenuAddWatermark(showWatermarkDialog);
+    window.pdfAPI.onMenuAddWatermark(showWatermarkDialog); window.pdfAPI.onMenuFlattenForm(flattenForm);
     window.pdfAPI.onMenuStamp(s => { state.pendingStamp = s; selectTool('stamp'); showNotification('Click to place stamp', 'info'); });
     window.pdfAPI.onMenuAddImage(async () => { const img = await window.pdfAPI.selectImage(); if (img) { state.pendingImage = img; selectTool('image'); showNotification('Click to place image', 'info'); } });
     window.pdfAPI.onMenuGoto(d => { if (d === 'first') goToPage(1); else if (d === 'last') goToPage(state.pdfDoc.numPages); else if (d === 'prev' && state.currentPage > 1) goToPage(state.currentPage - 1); else if (d === 'next' && state.currentPage < state.pdfDoc.numPages) goToPage(state.currentPage + 1); });
