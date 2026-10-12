@@ -699,6 +699,7 @@
           if (r.success) showNotification('Exported ' + tables.length + ' table(s)');
           else if (!r.canceled) showNotification('Export error: ' + r.error, 'error');
         });
+        btn('Export Excel', () => saveXlsx(tables, baseName));
       }
       btn('Save Markdown', async () => {
         const r = await window.pdfAPI.saveMarkdown({ text, baseName });
@@ -732,9 +733,162 @@
           if (r.cpuFallback) showNotification('GPU memory is full (other apps are using it); continuing on the CPU, which is slower', 'warning');
           pages.push({ page: i, text: r.content || '(empty)' });
         }
+        state.extractCache = { doc: state.pdfDoc, pages };
         setLoading(false);
         await showExtractResult(pages);
       } catch (e) { setLoading(false); showNotification('Smart Extract error: ' + e.message, 'error'); }
+    }
+
+    // Digital page text to document blocks: lines by baseline, items left to right, paragraphs by vertical gap or font-size change, headings by size against the page median.
+    function blocksFromTextItems(items, styles) {
+      const LIST = /^(?:[•◦▪]\s*|[–-]\s+|\d{1,3}[.)]\s+|[a-z]\)\s+)/i, its = [];
+      for (const it of items) {
+        if (!it.str) continue; // whitespace-only items are the spaces between differently styled runs (e.g. Word exports)
+        const t = it.transform, st = styles?.[it.fontName] || {}, fn = (st.name || st.fontFamily || '') + ' ' + (it.fontName || '');
+        its.push({ str: it.str, x: t[4], y: t[5], w: it.width || 0, size: Math.hypot(t[0], t[1]) || it.height || 1, bold: /bold|black|heavy|semibold/i.test(fn), italic: /italic|oblique/i.test(fn) });
+      }
+      if (!its.length) return [];
+      // body size = median by characters, so many tiny items (bullets, spaces) don't drag it down
+      const bySize = its.filter(i => i.str.trim()).map(i => [i.size, i.str.trim().length]).sort((a, b) => a[0] - b[0]), half = bySize.reduce((n, [, c]) => n + c, 0) / 2;
+      let med = bySize.length ? bySize[bySize.length - 1][0] : 1;
+      for (let acc = 0, k = 0; k < bySize.length; k++) if ((acc += bySize[k][1]) >= half) { med = bySize[k][0]; break; }
+      const add = (runs, text, bold, italic) => {
+        const last = runs[runs.length - 1];
+        if (last && !!last.bold === bold && !!last.italic === italic) last.text += text;
+        else runs.push({ text, ...(bold && { bold: true }), ...(italic && { italic: true }) });
+      };
+      const rows = [];
+      for (const it of its.slice().sort((a, b) => b.y - a.y)) {
+        const cur = rows[rows.length - 1];
+        if (cur && Math.abs(cur.y - it.y) <= 0.5 * med) cur.items.push(it); else rows.push({ y: it.y, items: [it] });
+      }
+      const lines = rows.map(r => {
+        const sorted = r.items.sort((a, b) => a.x - b.x), runs = [], chars = new Map();
+        sorted.forEach((it, k) => {
+          const prev = sorted[k - 1];
+          if (prev && it.x - (prev.x + prev.w) > 0.25 * it.size && !/\s$/.test(prev.str) && !/^\s/.test(it.str)) add(runs, ' ', prev.bold, prev.italic);
+          add(runs, it.str, it.bold, it.italic);
+          chars.set(it.size, (chars.get(it.size) || 0) + it.str.length);
+        });
+        return { y: r.y, runs, size: [...chars].sort((a, b) => b[1] - a[1])[0][0], text: runs.map(x => x.text).join('') };
+      });
+      const paras = [];
+      lines.forEach((ln, k) => {
+        const prev = lines[k - 1];
+        if (prev && !(prev.y - ln.y > 1.5 * prev.size * 1.2 || Math.abs(ln.size - prev.size) / prev.size > 0.15 || LIST.test(ln.text))) {
+          const p = paras[paras.length - 1];
+          add(p.runs, ' ', !!p.runs[p.runs.length - 1].bold, !!p.runs[p.runs.length - 1].italic);
+          ln.runs.forEach(r => add(p.runs, r.text, !!r.bold, !!r.italic));
+        } else paras.push({ runs: ln.runs.map(r => ({ ...r })), size: ln.size });
+      });
+      return paras.map(p => {
+        p.runs[0].text = p.runs[0].text.replace(/^\s+/, ''); p.runs[p.runs.length - 1].text = p.runs[p.runs.length - 1].text.replace(/\s+$/, '');
+        const text = p.runs.map(r => r.text).join(''), ratio = p.size / med;
+        // documents that use one size for everything mark headings by bold alone: a short, fully bold line without closing punctuation
+        const boldHeading = p.runs.every(r => r.bold || !r.text.trim()) && text.length <= 80 && text.split(/\s+/).length <= 10 && !/[.:,;]$/.test(text) && !LIST.test(text);
+        return { type: ratio >= 1.35 ? 'h1' : ratio >= 1.15 || boldHeading ? 'h2' : LIST.test(text) ? 'li' : 'p', runs: p.runs.filter(r => r.text) };
+      }).filter(b => b.runs.length);
+    }
+    function parsePageRange(raw, total) {
+      raw = String(raw ?? '').trim();
+      if (!raw || /^all$/i.test(raw)) return Array.from({ length: total }, (_, i) => i + 1);
+      const out = new Set();
+      for (const part of raw.split(',')) {
+        const m = /^\s*(\d+)\s*(?:-\s*(\d+))?\s*$/.exec(part);
+        if (!m) return null;
+        const a = +m[1], b = m[2] ? +m[2] : a;
+        if (a < 1 || b < a || b > total) return null;
+        for (let i = a; i <= b; i++) out.add(i);
+      }
+      return [...out].sort((x, y) => x - y);
+    }
+    async function pageFontStyles(page, textContent) {
+      const styles = { ...textContent.styles };
+      try {
+        await page.getOperatorList();
+        for (const id of new Set(textContent.items.map(i => i.fontName))) if (page.commonObjs.has(id)) styles[id] = { ...styles[id], name: page.commonObjs.get(id).name };
+      } catch (e) { /* no font names: nothing is bold */ }
+      return styles;
+    }
+    async function aiReadPage(page, i) {
+      const vp = page.getViewport({ scale: await extractScale(page, pdfjsLib.OPS) });
+      const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+      const r = await window.pdfAPI.smartExtract({ pngBase64: canvas.toDataURL('image/png').split(',')[1] });
+      if (!r.success) throw new Error(r.error + ' (page ' + i + ')');
+      if (r.cpuFallback) showNotification('GPU memory is full (other apps are using it); continuing on the CPU, which is slower', 'warning');
+      return r.content || '';
+    }
+    async function engineReady() {
+      const st = await window.pdfAPI.engineStatus();
+      if (st.installed) return true;
+      showNotification(st.hasFiles ? 'Smart Extract needs an AI engine update (small download)' : 'Smart Extract needs the AI engine (one-time ~4.5GB download)', 'warning');
+      showEngineSetup();
+      return false;
+    }
+    const savedName = r => r.paths[0].split(/[\\/]/).pop();
+    async function showExportDocxDialog() {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      const total = state.pdfDoc.numPages, installed = (await window.pdfAPI.engineStatus()).installed;
+      const content = '<div class="form-group"><label class="form-label">Pages (e.g. 1-3,5; leave empty for all ' + total + ')</label><input type="text" class="form-input" id="docxPages" placeholder="All"></div>' +
+        '<div class="form-group"><label class="form-label"><input type="checkbox" id="docxAi"' + (installed ? '' : ' disabled') + '> Use AI reading for every page (better tables and layout, slower)</label>' +
+        (installed ? '' : '<div class="form-label" style="margin-top:6px;opacity:0.7;">The AI engine is not installed (Tools &rarr; Setup AI Reading Engine). Digital pages convert without it; scanned pages need it.</div>') + '</div>';
+      showModal('Export as Word Document', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Export', action: 'export', primary: true, handler: m => {
+        const pages = parsePageRange(m.querySelector('#docxPages').value, total);
+        if (!pages) { showNotification('Enter pages like 1-3,5 between 1 and ' + total, 'warning'); return 'keep-open'; }
+        exportDocx(pages, m.querySelector('#docxAi').checked);
+      } }]);
+    }
+    async function exportDocx(pages, ai) {
+      setLoading(true, 'Word export: preparing...');
+      try {
+        const blocks = [];
+        let engineOk = null;
+        const vp1 = (await state.pdfDoc.getPage(1)).getViewport({ scale: 1 }), side = Math.min(vp1.width, vp1.height);
+        for (const [k, i] of pages.entries()) {
+          $('loadingText').textContent = 'Word export: page ' + (k + 1) + ' of ' + pages.length + '...';
+          const page = await state.pdfDoc.getPage(i), tc = await page.getTextContent();
+          let pageBlocks = null;
+          if (!ai && tc.items.reduce((n, it) => n + it.str.replace(/\s/g, '').length, 0) >= 20) pageBlocks = blocksFromTextItems(tc.items, await pageFontStyles(page, tc));
+          if (!pageBlocks) {
+            if (engineOk === null) { setLoading(false); engineOk = await engineReady(); setLoading(true, 'Word export: page ' + (k + 1) + ' of ' + pages.length + '...'); }
+            if (!engineOk) { setLoading(false); return; }
+            pageBlocks = await window.pdfAPI.markdownBlocks({ text: await aiReadPage(page, i) });
+          }
+          if (k) blocks.push({ type: 'pagebreak' });
+          blocks.push(...pageBlocks);
+        }
+        if (blocks.every(b => b.type === 'pagebreak')) { setLoading(false); showNotification('No text found in the document', 'warning'); return; }
+        setLoading(false);
+        const r = await window.pdfAPI.exportDocx({ blocks, baseName: (state.fileName || 'document').replace(/\.pdf$/i, '') || 'document', pageSize: Math.abs(side - 595) < Math.abs(side - 612) ? 'a4' : 'letter', landscape: vp1.width > vp1.height });
+        if (r.success) showNotification('Saved ' + savedName(r));
+        else if (!r.canceled) showNotification('Export error: ' + r.error, 'error');
+      } catch (e) { setLoading(false); showNotification('Export error: ' + e.message, 'error'); }
+    }
+    async function saveXlsx(tables, baseName) {
+      const r = await window.pdfAPI.exportXlsx({ tables, baseName });
+      if (r.success) showNotification('Saved ' + savedName(r));
+      else if (!r.canceled) showNotification('Export error: ' + r.error, 'error');
+    }
+    async function exportXlsx() {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      let pages = state.extractCache?.doc === state.pdfDoc ? state.extractCache.pages : null;
+      try {
+        if (!pages) {
+          if (!(await engineReady())) return;
+          setLoading(true, 'Excel export: preparing engine...');
+          pages = [];
+          for (let i = 1; i <= state.pdfDoc.numPages; i++) {
+            $('loadingText').textContent = 'Excel export: page ' + i + ' of ' + state.pdfDoc.numPages + '...';
+            pages.push({ page: i, text: (await aiReadPage(await state.pdfDoc.getPage(i), i)) || '(empty)' });
+          }
+          state.extractCache = { doc: state.pdfDoc, pages };
+          setLoading(false);
+        }
+        const tables = await window.pdfAPI.extractTables(pages);
+        if (!tables.length) { showNotification('No tables found in this document', 'warning'); return; }
+        await saveXlsx(tables, (state.fileName || 'document').replace(/\.pdf$/i, '') || 'document');
+      } catch (e) { setLoading(false); showNotification('Export error: ' + e.message, 'error'); }
     }
 
     function activateSidebarTab(name) {
@@ -2609,7 +2763,7 @@
     window.pdfAPI.onMenuSplit(showSplitDialog); window.pdfAPI.onMenuExtractPages(showExtractPagesDialog); window.pdfAPI.onMenuExportPages(showExtractPagesDialog);
     window.pdfAPI.onMenuSetPassword(showSetPasswordDialog); window.pdfAPI.onMenuRemovePassword(showRemovePasswordDialog);
     window.pdfAPI.onMenuOpenRecent(async p => { try { const r = await window.pdfAPI.openSpecificFile(p); if (r && r.data) await loadPdf(r); else showNotification('File not accessible: ' + p, 'error'); } catch (e) { showNotification('Error: ' + e.message, 'error'); } });
-    window.pdfAPI.onMenuExportImages(exportImages);
+    window.pdfAPI.onMenuExportImages(exportImages); window.pdfAPI.onMenuExportDocx(showExportDocxDialog); window.pdfAPI.onMenuExportXlsx(exportXlsx);
     window.pdfAPI.onMenuOcr(() => runOcr()); window.pdfAPI.onMenuOcrAi(() => runOcr('ai')); window.pdfAPI.onMenuSmartExtract(runSmartExtract); window.pdfAPI.onMenuEngineSetup(showEngineSetup);
     window.pdfAPI.onMenuToggleBookmarks(() => activateSidebarTab('bookmarks')); window.pdfAPI.onMenuToggleThumbnails(() => activateSidebarTab('thumbnails'));
     window.pdfAPI.onMenuInsertFromFile(showInsertFromFile);
