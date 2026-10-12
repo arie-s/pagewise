@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   // Document operations
   createBlankPdf: (options) => ipcRenderer.invoke('create-blank-pdf', options),
   getDocumentInfo: (options) => ipcRenderer.invoke('get-document-info', options),
+  flattenForm: (options) => ipcRenderer.invoke('flatten-form', options),
   setDocumentInfo: (options) => ipcRenderer.invoke('set-document-info', options),
 
   // OCR
@@ -121,6 +122,7 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   onMenuReplacePage: (callback) => ipcRenderer.on('menu-replace-page', callback),
   onMenuCropPage: (callback) => ipcRenderer.on('menu-crop-page', callback),
   onMenuResizePage: (callback) => ipcRenderer.on('menu-resize-page', callback),
+  onMenuFlattenForm: (callback) => ipcRenderer.on('menu-flatten-form', callback),
   onMenuAddWatermark: (callback) => ipcRenderer.on('menu-add-watermark', callback),
   onMenuAddHeaderFooter: (callback) => ipcRenderer.on('menu-add-header-footer', callback),
   onMenuAddPageNumbers: (callback) => ipcRenderer.on('menu-add-page-numbers', callback),

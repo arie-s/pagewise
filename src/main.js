@@ -412,6 +412,10 @@ function createWindow() {
           label: 'Add Page Numbers',
           click: () => mainWindow.webContents.send('menu-add-page-numbers')
         },
+        {
+          label: 'Flatten Form',
+          click: () => mainWindow.webContents.send('menu-flatten-form')
+        },
         { type: 'separator' },
         {
           label: 'Go to Page...',
@@ -2081,6 +2085,19 @@ ipcMain.handle('set-document-info', async (event, { data, info }) => {
       success: true,
       data: Buffer.from(pdfBytes).toString('base64')
     };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Flatten form fields into page content
+ipcMain.handle('flatten-form', async (event, { data }) => {
+  try {
+    const pdfDoc = await PDFDocument.load(Buffer.from(data, 'base64'), { ignoreEncryption: true });
+    const form = pdfDoc.getForm();
+    if (form.getFields().length === 0) return { success: false, error: 'This PDF has no form fields' };
+    form.flatten();
+    return { success: true, data: Buffer.from(await pdfDoc.save()).toString('base64') };
   } catch (error) {
     return { success: false, error: error.message };
   }
