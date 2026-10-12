@@ -1636,6 +1636,149 @@
       selfSel.onchange = spouseSel.onchange = rebuild;
       rebuild();
     }
+    // Profile input: details read from a filled form or a document go through one review dialog; nothing is saved until Save
+    const DETAIL_LABEL = Object.fromEntries(DETAIL_GROUPS.flatMap(([, keys]) => keys.map(([k, l]) => [k, l])));
+    const normLbl = s => String(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    // The same set/change/omit rule as the main process, for proposals that were made against an empty profile
+    function rediffProposals(proposals, details) {
+      const out = [];
+      for (const p of proposals) {
+        const d = details || { custom: [] };
+        const current = p.key === 'custom' ? ((d.custom || []).find(c => normLbl(c.label) === normLbl(p.label)) || {}).value || '' : d[p.key] || '';
+        if (current && current.toLowerCase().replace(/\s+/g, ' ').trim() === p.value.toLowerCase().replace(/\s+/g, ' ').trim()) continue;
+        const q = { ...p, action: current ? 'change' : 'set' }; delete q.current; if (current) q.current = current;
+        out.push(q);
+      }
+      return out;
+    }
+    function showProfileReview({ title, profiles, selfId, spouseId, newName, load }) {
+      const m = showModal(title, '<div class="profile-review" style="max-height:60vh;overflow:auto;"></div>', [{ label: 'Cancel', action: 'cancel' }, { label: 'Save', action: 'save', primary: true, handler: mm => {
+        const updates = [];
+        mm.querySelectorAll('tr[data-i]').forEach(tr => {
+          const p = shown[+tr.dataset.i], value = tr.querySelector('input[type=text]').value.trim();
+          if (!tr.querySelector('input[type=checkbox]').checked || !value) return;
+          updates.push(p.key === 'custom' ? { who: 'self', custom: { label: p.label, value } } : { who: p.who, key: p.key, value });
+        });
+        const isNew = !selfSel.value, name = nameInput.value.trim();
+        if (isNew && !name) { showNotification('Enter a name for the new profile', 'warning'); return 'keep-open'; }
+        window.pdfAPI.profileApply({ profileId: selfSel.value || null, newName: name, spouseId: spouseSel.value || null, updates }).then(r => {
+          if (!r.success) showNotification('Error: ' + r.error, 'error');
+          else showNotification('Saved ' + r.count + (r.count === 1 ? ' detail' : ' details') + ' to ' + r.name, 'success');
+        });
+      } }]);
+      const saveBtn = m.querySelector('[data-action=save]'), box = m.querySelector('.profile-review');
+      const mkSelect = (value, ...opts) => { const sel = el('select', { className: 'form-select' }, ...opts.map(o => el('option', { value: o.id, textContent: o.name }))); sel.value = value; return sel; };
+      const selfSel = mkSelect(selfId, ...profiles.map(p => ({ id: p.id, name: p.name })), { id: '', name: 'New profile…' }), spouseSel = mkSelect(spouseId || '', { id: '', name: 'None' }, ...profiles.map(p => ({ id: p.id, name: p.name })));
+      const nameInput = el('input', { type: 'text', className: 'form-input', value: newName || '', maxLength: 60, placeholder: 'Name for the new profile' });
+      const nameRow = el('div', { className: 'form-group', style: 'margin-bottom:8px;' }, el('label', { className: 'form-label', textContent: 'New profile name' }), nameInput);
+      const rows = el('div');
+      box.append(
+        el('div', { className: 'form-group', style: 'margin-bottom:8px;' }, el('label', { className: 'form-label', textContent: 'Save to' }), selfSel),
+        nameRow,
+        el('div', { className: 'form-group', style: 'margin-bottom:12px;' }, el('label', { className: 'form-label', textContent: 'Spouse' }), spouseSel),
+        rows);
+      let shown = [], token = 0;
+      const sync = () => { const n = [...box.querySelectorAll('tr[data-i] input[type=checkbox]')].filter(c => c.checked).length; saveBtn.textContent = 'Save (' + n + ')'; saveBtn.disabled = !n; };
+      const rebuild = async () => {
+        const mine = ++token;
+        nameRow.style.display = selfSel.value ? 'none' : '';
+        saveBtn.disabled = true;
+        const r = await load(selfSel.value || null, spouseSel.value || null);
+        if (mine !== token) return;
+        if (!r.success) { shown = []; rows.replaceChildren(el('div', { textContent: 'Error: ' + r.error, className: 'form-label' })); sync(); return; }
+        shown = r.proposals;
+        if (!nameInput.value) { const v = k => shown.find(p => p.who === 'self' && p.key === k)?.value; nameInput.value = [v('firstName'), v('lastName')].filter(Boolean).join(' ').slice(0, 60); } // suggest a name for a new profile
+        if (!shown.length) { rows.replaceChildren(el('div', { textContent: 'Nothing new to save', className: 'form-label' })); sync(); return; }
+        const table = el('table', { style: 'width:100%;border-collapse:collapse;' });
+        shown.forEach((p, i) => {
+          const tick = el('input', { type: 'checkbox', checked: p.action === 'set' && !p.sensitive && !p.unsure, onchange: sync });
+          const what = p.key === 'custom' ? p.label + ' (custom)' : (p.who === 'spouse' ? 'Spouse ' : '') + DETAIL_LABEL[p.key];
+          const hint = el('div', { style: 'font-size:11px;color:var(--text-dim);' }, (p.source ? 'from "' + p.source.replace(/\s+/g, ' ').slice(0, 60) + '"' : '') + (p.sensitive ? ' • sensitive' : '') + (p.current ? ' • currently: ' + p.current : ''));
+          const tr = el('tr', {}, el('td', { style: 'padding:4px;' }, tick), el('td', { style: 'padding:4px;' }, el('div', { textContent: what }), hint), el('td', { style: 'padding:4px;' }, el('input', { type: 'text', className: 'form-input', value: p.value, maxLength: 500 })));
+          tr.dataset.i = i; table.append(tr);
+        });
+        rows.replaceChildren(table);
+        sync();
+      };
+      selfSel.onchange = spouseSel.onchange = rebuild;
+      rebuild();
+    }
+    async function saveAnswersToProfile() {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      setLoading(true, 'Reading form fields...');
+      try {
+        const doc = state.pdfDoc, storage = doc.annotationStorage, pages = [];
+        let filled = 0;
+        for (let i = 1; i <= doc.numPages; i++) {
+          const page = await doc.getPage(i), vp = page.getViewport({ scale: 150 / 72 });
+          const widgets = (await page.getAnnotations()).filter(a => a.subtype === 'Widget' && a.fieldType === 'Tx' && !a.readOnly);
+          if (!widgets.length) continue;
+          const fields = widgets.map(a => {
+            const [ax, ay, bx, by] = vp.convertToViewportRectangle(a.rect), raw = storage.getRawValue(a.id)?.value ?? a.fieldValue, value = typeof raw === 'string' ? raw.trim() : '';
+            if (value) filled++;
+            return { id: a.id, name: a.fieldName, alt: a.alternativeText, maxLen: a.maxLen || 0, comb: !!a.comb, value, box: [Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)] };
+          });
+          pages.push({ page: i, width: vp.width, fields, words: pageWords((await page.getTextContent()).items, vp) });
+        }
+        if (!filled) { showNotification('No filled fields to save', 'warning'); return; }
+        const g = await window.pdfAPI.profilesGet();
+        if (!g.success) throw new Error(g.error);
+        const ids = g.profiles.map(p => p.id);
+        setLoading(false);
+        showProfileReview({ title: 'Save Answers to Profile', profiles: g.profiles, selfId: ids.includes(g.lastSelf) ? g.lastSelf : ids[0] || '', spouseId: ids.includes(g.lastSpouse) ? g.lastSpouse : null, load: (selfId, spouseId) => window.pdfAPI.answersToProfile({ pages, selfId, spouseId }) });
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      finally { setLoading(false); }
+    }
+    async function profileFromDocument() {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      let installing = false;
+      setLoading(true, 'Reading the document...');
+      try {
+        const texts = [], n = Math.min(state.pdfDoc.numPages, 3);
+        for (let i = 1; i <= n; i++) {
+          const page = await state.pdfDoc.getPage(i);
+          let text = (await page.getTextContent()).items.map(it => it.str + (it.hasEOL ? '\n' : ' ')).join('');
+          if (text.replace(/\s/g, '').length < 40) {
+            const st = await window.pdfAPI.engineStatus();
+            if (!st.installed) {
+              setLoading(false);
+              showNotification(st.hasFiles ? 'Smart Extract needs an AI engine update (small download)' : 'Smart Extract needs the AI engine (one-time ~4.5GB download)', 'warning');
+              showEngineSetup();
+              return;
+            }
+            $('loadingText').textContent = 'Reading page ' + i + ' of ' + n + ' with Smart Extract...';
+            const vp = page.getViewport({ scale: await extractScale(page, pdfjsLib.OPS) });
+            const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
+            await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+            const r = await window.pdfAPI.smartExtract({ pngBase64: canvas.toDataURL('image/png').split(',')[1] });
+            if (!r.success) throw new Error(r.error + ' (page ' + i + ')');
+            text = r.content || '';
+          }
+          texts.push(text);
+        }
+        const text = texts.join('\n\n');
+        if (text.replace(/\s/g, '').length < 10) { showNotification('No text found in the document', 'warning'); return; }
+        const st = await window.pdfAPI.writerStatus();
+        if (!st.installed) {
+          if (!confirm('Reading details from a document uses a small language model that runs on your computer (CPU). This is a one-time download of about 3.1 GB. Nothing you type or fill leaves the computer.\n\nDownload it now?')) return;
+          window.pdfAPI.onEngineProgress(pr => { if (installing) setLoading(true, pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : '')); });
+          installing = true; setLoading(true, 'Downloading writing model...');
+          const ir = await window.pdfAPI.writerInstall();
+          installing = false;
+          if (!ir.success) throw new Error(ir.error);
+        }
+        setLoading(true, 'Asking the local AI…');
+        const r = await window.pdfAPI.profileFromText({ text });
+        if (!r.success) throw new Error(r.error);
+        const g = await window.pdfAPI.profilesGet();
+        if (!g.success) throw new Error(g.error);
+        const first = r.proposals.find(p => p.key === 'firstName'), last = r.proposals.find(p => p.key === 'lastName');
+        setLoading(false);
+        showProfileReview({ title: 'New Profile from Document', profiles: g.profiles, selfId: '', spouseId: null, newName: [first, last].filter(Boolean).map(p => p.value).join(' ').slice(0, 60),
+          load: async (selfId) => ({ success: true, proposals: rediffProposals(r.proposals, selfId ? g.profiles.find(p => p.id === selfId)?.details : null) }) });
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      finally { installing = false; setLoading(false); }
+    }
     async function mergePdfs() {
       const files = await window.pdfAPI.openMultipleFiles(); if (files && files.error) { showNotification(files.error, 'error'); return; } if (!files || files.length < 2) { showNotification('Select at least 2 files', 'warning'); return; }
       setLoading(true, 'Merging...');
@@ -2106,7 +2249,7 @@
     window.pdfAPI.onMenuUndo(undo); window.pdfAPI.onMenuRedo(redo); window.pdfAPI.onMenuFind(showSearch);
     window.pdfAPI.onMenuZoomIn(() => setZoom(state.scale + 0.25)); window.pdfAPI.onMenuZoomOut(() => setZoom(state.scale - 0.25)); window.pdfAPI.onMenuZoomReset(() => setZoom(1));
     window.pdfAPI.onMenuTool(selectTool); window.pdfAPI.onMenuRotate(rotatePage); window.pdfAPI.onMenuRotateAll(rotateAllPages); window.pdfAPI.onMenuDeletePage(deletePage); window.pdfAPI.onMenuInsertPage(insertBlankPage);
-    window.pdfAPI.onMenuAddWatermark(showWatermarkDialog); window.pdfAPI.onMenuFlattenForm(flattenForm); window.pdfAPI.onMenuMakeFillable(makeFillable); window.pdfAPI.onMenuProfiles(() => showProfiles()); window.pdfAPI.onMenuAutofill(fillFromProfile);
+    window.pdfAPI.onMenuAddWatermark(showWatermarkDialog); window.pdfAPI.onMenuFlattenForm(flattenForm); window.pdfAPI.onMenuMakeFillable(makeFillable); window.pdfAPI.onMenuProfiles(() => showProfiles()); window.pdfAPI.onMenuAutofill(fillFromProfile); window.pdfAPI.onMenuSaveAnswers(saveAnswersToProfile); window.pdfAPI.onMenuProfileFromDoc(profileFromDocument);
     window.pdfAPI.onMenuStamp(s => { state.pendingStamp = s; selectTool('stamp'); showNotification('Click to place stamp', 'info'); });
     window.pdfAPI.onMenuAddImage(async () => { const img = await window.pdfAPI.selectImage(); if (img) { state.pendingImage = img; selectTool('image'); showNotification('Click to place image', 'info'); } });
     window.pdfAPI.onMenuGoto(d => { if (d === 'first') goToPage(1); else if (d === 'last') goToPage(state.pdfDoc.numPages); else if (d === 'prev' && state.currentPage > 1) goToPage(state.currentPage - 1); else if (d === 'next' && state.currentPage < state.pdfDoc.numPages) goToPage(state.currentPage + 1); });
