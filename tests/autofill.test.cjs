@@ -15,8 +15,9 @@ function boot({ encrypt = true } = {}) {
   };
   const app = { whenReady: () => ({ then: () => {} }), on: () => {}, quit: () => {}, exit: () => {}, getPath: () => userData, setPath: () => {} };
   const { handlers, context } = loadMainHandlers({ electron: { app, safeStorage } });
-  return { handlers, m: context, userData, file: path.join(userData, 'my-details.json') };
+  return { handlers, m: context, userData, file: path.join(userData, 'profiles.json'), oldFile: path.join(userData, 'my-details.json') };
 }
+const SPOUSE = { firstName: 'John', middleName: '', lastName: 'Roe', ssn: '987-65-4321', dateOfBirth: '03/04/1979', dateFormat: 'MM/DD/YYYY' };
 const DETAILS = { firstName: 'Jane', middleName: 'quinn', lastName: 'Doe', email: 'jane@example.com', phone: '555-123-4567', street: '12 Elm St Apt 4', city: 'Springfield', state: 'IL', zip: '62704', country: 'USA', dateOfBirth: '01/02/1980', ssn: '123-45-6789', company: 'Acme Inc', jobTitle: 'Engineer', dateFormat: 'MM/DD/YYYY' };
 
 const LABELS = [
@@ -34,9 +35,11 @@ const LABELS = [
   ['Employer identification number', null],
   // 8822
   ['Your name (first name, initial, and last name)', 'fullName'],
-  ['Spouse\'s name (first name, initial, and last name)', null],
+  ['Spouse\'s name (first name, initial, and last name)', 'spouse/fullName'],
   ['Your social security number', 'ssn'],
-  ['Spouse\'s social security number', null],
+  ['Spouse\'s social security number', 'spouse/ssn'],
+  ['Spouse\'s prior name(s)', null], ['Spouse\'s old address', null], ['Partnership', null],
+  ['Name (first and last name of spouse)', null],
   ['Your prior name(s)', null],
   ['Your old address (no., street, apt. no., city or town, state, and ZIP code)', null],
   ['New address (no., street, apt. no., city or town, state, and ZIP code) (see instructions)', 'fullAddress'],
@@ -58,13 +61,14 @@ const LABELS = [
 ];
 test('classifyLabel matches labels that ask for the user\'s own details and skips everything else', () => {
   assert.ok(LABELS.length >= 40);
-  for (const [label, key] of LABELS) assert.equal(plain(app.m.classifyLabel(label)), key, JSON.stringify(label));
+  const want = k => !k ? null : k.includes('/') ? { who: k.split('/')[0], key: k.split('/')[1] } : { who: 'self', key: k };
+  for (const [label, key] of LABELS) assert.deepEqual(plain(app.m.classifyLabel(label)), want(key), JSON.stringify(label));
 });
 const app = boot();
 
 const NOW = new Date(2026, 9, 5); // 5 Oct 2026, local time
 const F = (id, label, extra = {}) => ({ id, page: 1, label, maxLen: 0, comb: false, box: [0, 0, 100, 20], ...extra });
-const plan = (fields, details = DETAILS) => plain(app.m.planAutofill({ fields, details, now: NOW }));
+const plan = (fields, self = DETAILS, spouse = null) => plain(app.m.planAutofill({ fields, self, spouse, now: NOW }));
 const valueOf = (p, id) => p.find(x => x.id === id)?.value;
 
 test('planAutofill derives full name, city/state/zip and full address', () => {
@@ -108,8 +112,8 @@ test('planAutofill splits an SSN across a comb run (3/2/4) and a phone across 3/
   assert.deepEqual(apart.map(x => x.id), []);
 });
 test('a custom entry matches by label, overrides the rules and is checked first', () => {
-  const details = { ...DETAILS, custom: [{ label: 'Driver license no.', value: 'D123' }, { label: 'First name', value: 'Janey' }, { label: 'Spouse', value: 'John' }] };
-  const p = plan([F('d', 'Driver\'s license no. (state issued)'), F('x', 'driver license no'), F('f', 'First name'), F('sp', 'Spouse\'s name')], details);
+  const details = { ...DETAILS, custom: [{ label: 'Driver license no.', value: 'D123' }, { label: 'First name', value: 'Janey' }, { label: 'Landlord', value: 'John' }] };
+  const p = plan([F('d', 'Driver\'s license no. (state issued)'), F('x', 'driver license no'), F('f', 'First name'), F('sp', 'Landlord\'s name')], details);
   assert.equal(valueOf(p, 'd'), 'D123', 'punctuation is ignored when matching words');
   assert.equal(valueOf(p, 'x'), 'D123');
   assert.equal(valueOf(p, 'f'), 'Janey');
@@ -122,52 +126,70 @@ test('missing details propose nothing', () => {
 });
 
 // ---------- storage ----------
-test('details round trip encrypted when safeStorage is available, with no plaintext in the file', async () => {
+const profile = (name, details, id) => ({ ...(id ? { id } : {}), name, details });
+const setP = (t, profiles, extra = {}) => t.handlers.get('profiles-set')(null, { profiles, ...extra });
+const getP = t => t.handlers.get('profiles-get')().then(plain);
+// Saves self (and optionally spouse) profiles and returns their ids
+async function seed(t, self = DETAILS, spouse = null) {
+  const r = await setP(t, [profile('Me', self), ...(spouse ? [profile('Partner', spouse)] : [])]);
+  assert.equal(r.success, true, r.error);
+  const g = await getP(t);
+  return { selfId: g.profiles[0].id, spouseId: spouse ? g.profiles[1].id : null };
+}
+
+test('profiles round trip encrypted when safeStorage is available, with no plaintext in the file', async () => {
   const t = boot();
-  const empty = await t.handlers.get('details-get')();
+  const empty = await getP(t);
   assert.equal(empty.success, true);
-  assert.equal(empty.details.firstName, '');
-  assert.equal(empty.details.dateFormat, 'MM/DD/YYYY');
-  assert.deepEqual(plain(empty.details.custom), []);
-  assert.equal(empty.encrypted, true);
-  const saved = await t.handlers.get('details-set')(null, { ...DETAILS, custom: [{ label: 'Passport', value: 'X9' }] });
+  assert.deepEqual([empty.profiles, empty.lastSelf, empty.lastSpouse, empty.encrypted], [[], null, null, true]);
+  const saved = await setP(t, [profile('Me', { ...DETAILS, custom: [{ label: 'Passport', value: 'X9' }] }), profile('Partner', SPOUSE)]);
   assert.deepEqual([saved.success, saved.encrypted], [true, true]);
   const raw = fs.readFileSync(t.file, 'utf8');
-  assert.equal(JSON.parse(raw).v, 1);
-  for (const secret of ['Jane', '123-45-6789', 'Springfield', 'Passport']) assert.ok(!raw.includes(secret), secret);
-  const back = await t.handlers.get('details-get')();
+  assert.equal(JSON.parse(raw).v, 2);
+  for (const secret of ['Jane', '123-45-6789', 'Springfield', 'Passport', 'Partner', 'Roe', '987-65-4321']) assert.ok(!raw.includes(secret), secret);
+  assert.equal(fs.statSync(t.file).mode & 0o777, 0o600);
+  const back = await getP(t);
   assert.equal(back.encrypted, true);
-  assert.deepEqual(plain(back.details), { ...DETAILS, custom: [{ label: 'Passport', value: 'X9' }] });
+  assert.deepEqual(back.profiles.map(p => p.name), ['Me', 'Partner']);
+  assert.equal(new Set(back.profiles.map(p => p.id)).size, 2);
+  assert.match(back.profiles[0].id, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(back.profiles[0].details, { ...DETAILS, custom: [{ label: 'Passport', value: 'X9' }] });
+  assert.equal(back.profiles[1].details.lastName, 'Roe');
 });
-test('details are stored as plain JSON when encryption is unavailable', async () => {
+test('profiles are stored as plain JSON when encryption is unavailable', async () => {
   const t = boot({ encrypt: false });
-  const saved = await t.handlers.get('details-set')(null, DETAILS);
+  const saved = await setP(t, [profile('Me', DETAILS), profile('Partner', SPOUSE)]);
   assert.deepEqual([saved.success, saved.encrypted], [true, false]);
-  assert.equal(JSON.parse(fs.readFileSync(t.file, 'utf8')).plain.firstName, 'Jane');
-  const back = await t.handlers.get('details-get')();
-  assert.deepEqual([back.encrypted, back.details.ssn], [false, '123-45-6789']);
+  assert.equal(JSON.parse(fs.readFileSync(t.file, 'utf8')).plain.profiles[1].details.firstName, 'John');
+  const back = await getP(t);
+  assert.deepEqual([back.encrypted, back.profiles[0].details.ssn, back.profiles.length], [false, '123-45-6789', 2]);
 });
-test('a corrupt or undecryptable file gives empty details and a warning, never an error', async () => {
-  const t = boot();
-  for (const text of ['{not json', '{"v":1,"enc":"AAAA"}', '{"v":1}', '[]']) {
-    fs.writeFileSync(t.file, text);
-    const r = await t.handlers.get('details-get')();
-    assert.equal(r.success, true, text);
-    assert.equal(r.details.firstName, '');
-    assert.ok(r.warning, text);
-  }
-  const kept = fs.readdirSync(path.dirname(t.file)).filter(f => /^my-details\.unreadable-\d+\.json$/.test(f));
-  assert.ok(kept.length >= 1, 'unreadable file kept');
-  assert.ok(!fs.existsSync(t.file), 'unreadable file moved aside, so a save cannot overwrite it');
-  const keyringGone = boot({ encrypt: false });
-  fs.writeFileSync(keyringGone.file, JSON.stringify({ v: 1, enc: 'AAAA' }));
-  assert.ok((await keyringGone.handlers.get('details-get')()).warning);
+test('profiles-set validates names, count, ids and the remembered choices', async () => {
+  const t = boot({ encrypt: false });
+  const rejects = async (profiles, what) => { const r = await setP(t, profiles); assert.equal(r.success, false, what); assert.ok(r.error, what); };
+  await rejects([profile('A', {}), profile(' a ', {})], 'duplicate names, case-insensitive and trimmed');
+  await rejects([profile('', {})], 'empty name');
+  await rejects([profile('   ', {})], 'blank name');
+  await rejects([{ details: {} }], 'missing name');
+  await rejects([profile('x'.repeat(61), {})], 'over-long name');
+  await rejects(Array.from({ length: 51 }, (_, i) => profile('P' + i, {})), 'more than 50 profiles');
+  await rejects('nope', 'not a list');
+  assert.equal(fs.existsSync(t.file), false, 'a rejected save writes nothing');
+  assert.equal((await setP(t, Array.from({ length: 50 }, (_, i) => profile('P' + i, {})))).success, true);
+  assert.equal((await setP(t, [profile('x'.repeat(60), {})])).success, true);
+  const ok = await setP(t, [profile('A', {}, 'id-a'), profile('B', {}, 'id-b')], { lastSelf: 'id-a', lastSpouse: 'id-b' });
+  assert.equal(ok.success, true);
+  let g = await getP(t);
+  assert.deepEqual([g.lastSelf, g.lastSpouse], ['id-a', 'id-b']);
+  await setP(t, [profile('A', {}, 'id-a')], { lastSelf: 'id-zzz', lastSpouse: 'id-b' });
+  g = await getP(t);
+  assert.deepEqual([g.lastSelf, g.lastSpouse], [null, null], 'unknown ids become null');
 });
-test('details-set keeps only known keys, string values up to 500 chars, and non-empty custom entries', async () => {
+test('profile details keep only known keys, string values up to 500 chars, and non-empty custom entries', async () => {
   const t = boot({ encrypt: false });
   const custom = [{ label: 'ok', value: 'v' }, { label: '', value: 'no label' }, { label: 'no value', value: '' }, { label: 'x'.repeat(101), value: 'v' }, { label: 'long', value: 'y'.repeat(501) }, null, { label: 5, value: 'v' }];
-  await t.handlers.get('details-set')(null, { firstName: 'Jane', lastName: 'z'.repeat(501), email: 7, hacker: 'x', ssn: 's'.repeat(500), dateFormat: 'DD.MM.YY', custom });
-  const d = plain((await t.handlers.get('details-get')()).details);
+  await setP(t, [profile('Me', { firstName: 'Jane', lastName: 'z'.repeat(501), email: 7, hacker: 'x', ssn: 's'.repeat(500), dateFormat: 'DD.MM.YY', custom })]);
+  const d = (await getP(t)).profiles[0].details;
   assert.equal(d.firstName, 'Jane');
   assert.equal(d.lastName, '');
   assert.equal(d.email, '');
@@ -175,10 +197,63 @@ test('details-set keeps only known keys, string values up to 500 chars, and non-
   assert.equal(d.dateFormat, 'MM/DD/YYYY');
   assert.equal('hacker' in d, false);
   assert.deepEqual(d.custom, [{ label: 'ok', value: 'v' }]);
-  const many = await t.handlers.get('details-set')(null, { custom: Array.from({ length: 250 }, (_, i) => ({ label: 'l' + i, value: 'v' })) });
+  const many = await setP(t, [profile('Me', { custom: Array.from({ length: 250 }, (_, i) => ({ label: 'l' + i, value: 'v' })) })]);
   assert.equal(many.success, true);
-  assert.equal((await t.handlers.get('details-get')()).details.custom.length, 200);
+  assert.equal((await getP(t)).profiles[0].details.custom.length, 200);
   assert.equal(JSON.stringify(Object.keys(d).sort()), JSON.stringify([...Object.keys(DETAILS), 'custom'].sort()));
+});
+test('profiles-remember changes only the remembered choices', async () => {
+  const t = boot();
+  await setP(t, [profile('A', DETAILS, 'a'), profile('B', SPOUSE, 'b')]);
+  const before = (await getP(t)).profiles;
+  assert.equal((await t.handlers.get('profiles-remember')(null, { lastSelf: 'b', lastSpouse: 'a' })).success, true);
+  const g = await getP(t);
+  assert.deepEqual([g.lastSelf, g.lastSpouse, g.profiles], ['b', 'a', before]);
+  await t.handlers.get('profiles-remember')(null, { lastSelf: 'gone', lastSpouse: null });
+  assert.deepEqual([(await getP(t)).lastSelf, (await getP(t)).lastSpouse], [null, null]);
+});
+test('a corrupt or undecryptable file gives no profiles and a warning, never an error', async () => {
+  const t = boot();
+  for (const text of ['{not json', '{"v":2,"enc":"AAAA"}', '{"v":2}', '[]']) {
+    fs.writeFileSync(t.file, text);
+    const r = await getP(t);
+    assert.equal(r.success, true, text);
+    assert.deepEqual(r.profiles, []);
+    assert.ok(r.warning, text);
+  }
+  const kept = fs.readdirSync(path.dirname(t.file)).filter(f => /^profiles\.unreadable-\d+\.json$/.test(f));
+  assert.ok(kept.length >= 1, 'unreadable file kept');
+  assert.ok(!fs.existsSync(t.file), 'unreadable file moved aside, so a save cannot overwrite it');
+  const keyringGone = boot({ encrypt: false });
+  fs.writeFileSync(keyringGone.file, JSON.stringify({ v: 2, enc: 'AAAA' }));
+  assert.ok((await getP(keyringGone)).warning);
+});
+test('a v1 my-details.json becomes one "Me" profile, the old file is renamed (never deleted) and nothing migrates twice', async () => {
+  for (const encrypt of [true, false]) {
+    const t = boot({ encrypt });
+    const d = { ...DETAILS, custom: [{ label: 'Passport', value: 'X9' }] };
+    fs.writeFileSync(t.oldFile, JSON.stringify(encrypt ? { v: 1, enc: Buffer.from('ENC:' + Buffer.from(JSON.stringify(d)).toString('hex')).toString('base64') } : { v: 1, plain: d }));
+    const g = await getP(t);
+    assert.equal(g.success, true);
+    assert.deepEqual(g.profiles.map(p => p.name), ['Me']);
+    assert.deepEqual(g.profiles[0].details, d);
+    assert.equal(g.encrypted, encrypt);
+    assert.ok(fs.existsSync(t.file), 'profiles.json written');
+    assert.ok(!fs.existsSync(t.oldFile), 'old file moved');
+    const migrated = path.join(path.dirname(t.file), 'my-details.migrated.json');
+    assert.ok(fs.existsSync(migrated), 'old file kept as my-details.migrated.json');
+    const id = g.profiles[0].id;
+    fs.writeFileSync(t.oldFile, JSON.stringify({ v: 1, plain: { firstName: 'Other' } }));
+    const again = await getP(t);
+    assert.deepEqual(again.profiles.map(p => [p.id, p.details.firstName]), [[id, 'Jane']], 'a second get does not migrate again');
+  }
+  const none = boot();
+  assert.deepEqual((await getP(none)).profiles, []);
+  assert.ok(!fs.existsSync(none.file), 'nothing to migrate writes nothing');
+  const bad = boot();
+  fs.writeFileSync(bad.oldFile, '{not json');
+  assert.deepEqual((await getP(bad)).profiles, []);
+  assert.ok(fs.existsSync(bad.oldFile), 'an unreadable old file is left alone');
 });
 
 // ---------- real forms ----------
@@ -219,14 +294,14 @@ test('fw9: the plan fills the person\'s own lines only, and splits the SSN over 
   const doc = await P.getDocument({ data: new Uint8Array(fs.readFileSync(path.join(root, 'tests/fixtures/forms/fw9.pdf'))), standardFontDataUrl: path.join(root, 'node_modules/pdfjs-dist/standard_fonts/'), verbosity: 0 }).promise;
   const pages = (await collectPages(doc, P)).filter(p => p.page === 1);
   const t = boot();
-  await t.handlers.get('details-set')(null, DETAILS);
-  const r = plain(await t.handlers.get('autofill-plan')(null, { pages }));
+  const { selfId } = await seed(t);
+  const r = plain(await t.handlers.get('autofill-plan')(null, { pages, selfId, spouseId: null }));
   assert.equal(r.success, true, r.error);
   // The label of every text field and what it matches, for review
   const planned = new Map(r.plan.map(p => [p.id, p]));
   console.log(pages[0].fields.map(f => {
     const label = app.m.labelFor({ kind: 'text', box: f.box, aboveFirst: f.comb && f.maxLen > 1 }, pages[0].words, pages[0].width / 1275), p = planned.get(f.id);
-    return `${f.name.replace(/^topmostSubform\[0\]\.Page1\[0\]\./, '').padEnd(32)} ${JSON.stringify(label).padEnd(64)} -> ${String(app.m.classifyLabel(label)).padEnd(13)} ${p ? JSON.stringify(p.value) + (p.sensitive ? ' (sensitive)' : '') : ''}`;
+    return `${f.name.replace(/^topmostSubform\[0\]\.Page1\[0\]\./, '').padEnd(32)} ${JSON.stringify(label).padEnd(64)} -> ${JSON.stringify(app.m.classifyLabel(label)).padEnd(34)} ${p ? JSON.stringify(p.value) + (p.sensitive ? ' (sensitive)' : '') : ''}`;
   }).join('\n'));
   const byName = n => { const f = pages[0].fields.find(f => f.name.endsWith(n)); return planned.get(f.id); };
   assert.equal(byName('f1_01[0]')?.value, 'Jane Q. Doe', 'line 1');
@@ -237,6 +312,7 @@ test('fw9: the plan fills the person\'s own lines only, and splits the SSN over 
   assert.deepEqual(['f1_11[0]', 'f1_12[0]', 'f1_13[0]'].map(n => [byName(n)?.value, byName(n)?.sensitive]), [['123', true], ['45', true], ['6789', true]]);
   for (const n of ['f1_02[0]', 'f1_03[0]', 'f1_04[0]', 'f1_05[0]', 'f1_06[0]', 'f1_09[0]', 'f1_10[0]', 'f1_14[0]', 'f1_15[0]']) assert.equal(byName(n), undefined, n + ' stays empty');
   assert.equal(r.plan.length, 6);
+  assert.ok(r.plan.every(p => p.who === 'self'));
   assert.equal(r.encrypted, true);
 });
 
@@ -250,14 +326,21 @@ test('8822-style labels: only the person\'s own fields are planned', async () =>
     fields.push({ id: 'f' + i, name: 'Field ' + (i + 1), alt: '', maxLen: 0, comb: false, box: [75, y + 25, 900, y + 60] });
   });
   const t = boot({ encrypt: false });
-  await t.handlers.get('details-set')(null, DETAILS);
-  const r = plain(await t.handlers.get('autofill-plan')(null, { pages: [{ page: 1, width: 1275, fields, words }] }));
+  const { selfId, spouseId } = await seed(t, DETAILS, SPOUSE);
+  const pages = [{ page: 1, width: 1275, fields, words }];
+  const r = plain(await t.handlers.get('autofill-plan')(null, { pages, selfId, spouseId: null }));
   assert.deepEqual(r.plan.map(p => [p.id, p.value]), labels.map(([, v], i) => v && ['f' + i, v]).filter(Boolean));
   assert.equal(r.encrypted, false);
+  // with a spouse profile chosen, the spouse lines are filled from it and the self lines are unchanged
+  const w = plain(await t.handlers.get('autofill-plan')(null, { pages, selfId, spouseId }));
+  assert.deepEqual(w.plan.map(p => [p.id, p.who, p.value]), [['f0', 'self', 'Jane Q. Doe'], ['f1', 'spouse', 'John Roe'], ['f6', 'self', '555-123-4567'], ['f7', 'self', '123-45-6789'], ['f8', 'spouse', '987-65-4321']]);
+  assert.deepEqual(w.plan.map(p => p.sensitive), [false, false, false, true, true]);
+  assert.equal((await t.handlers.get('autofill-plan')(null, { pages, selfId, spouseId: 'nope' })).success, false);
+  assert.equal((await t.handlers.get('autofill-plan')(null, { pages, selfId: 'nope', spouseId: null })).success, false);
 });
 test('autofill-plan prefers the tooltip, then the printed label, then a human field name', async () => {
   const t = boot();
-  await t.handlers.get('details-set')(null, DETAILS);
+  const { selfId } = await seed(t);
   const words = [{ text: 'Surname', box: [10, 100, 90, 120] }];
   const fields = [
     { id: 'a', name: 'x', alt: 'First name', maxLen: 0, comb: false, box: [100, 100, 300, 120] },
@@ -266,12 +349,36 @@ test('autofill-plan prefers the tooltip, then the printed label, then a human fi
     { id: 'd', name: 'topmostSubform[0].Page1[0].email[0]', alt: '', maxLen: 0, comb: false, box: [100, 500, 300, 520] },
     { id: 'e', name: 'f1_01', alt: '', maxLen: 0, comb: false, box: [100, 600, 300, 620] }
   ];
-  const r = plain(await t.handlers.get('autofill-plan')(null, { pages: [{ page: 1, width: 1275, fields, words }] }));
+  const r = plain(await t.handlers.get('autofill-plan')(null, { pages: [{ page: 1, width: 1275, fields, words }], selfId }));
   assert.deepEqual(r.plan.map(p => [p.id, p.value]), [['a', 'Jane'], ['b', 'Doe'], ['c', 'jane@example.com']]);
 });
 
 test('another person anywhere in the label blocks the match, even after the head', () => {
   for (const l of ['Name (first and last name of spouse)', 'Phone (of emergency contact)', 'Address. Enter the address of the child', 'Name (as shown on the dependent\'s card)'])
     assert.equal(app.m.classifyLabel(l), null, l);
-  assert.equal(app.m.classifyLabel('Name of entity/individual. An entry is required. (For a sole proprietor or disregarded entity, enter the owner\'s name on line 1, and enter the business/disregarded entity\'s name on line 2.)'), 'fullName');
+  for (const l of ['Spouse\'s name (witness)', 'Spouse\'s emergency contact', 'Landlord and spouse phone', 'Husband\'s decedent name'])
+    assert.equal(app.m.classifyLabel(l), null, l);
+  assert.deepEqual(plain(app.m.classifyLabel('Wife\'s phone number')), { who: 'spouse', key: 'phone' });
+  assert.equal(plain(app.m.classifyLabel('Name of entity/individual. An entry is required. (For a sole proprietor or disregarded entity, enter the owner\'s name on line 1, and enter the business/disregarded entity\'s name on line 2.)')).key, 'fullName');
+});
+
+test('spouse fields: skipped without a spouse profile, filled from the spouse when one is chosen, never from self', () => {
+  const fields = [F('n', 'Your name (first name, initial, and last name)'), F('sn', 'Spouse\'s name (first name, initial, and last name)'), F('ss', 'Spouse\'s social security number'), F('sp', 'Spouse\'s prior name(s)')];
+  const without = plan(fields);
+  assert.deepEqual(without.map(x => [x.id, x.who]), [['n', 'self']]);
+  const withSpouse = plan(fields, DETAILS, SPOUSE);
+  assert.deepEqual(withSpouse.map(x => [x.id, x.who, x.key, x.value, x.sensitive]), [['n', 'self', 'fullName', 'Jane Q. Doe', false], ['sn', 'spouse', 'fullName', 'John Roe', false], ['ss', 'spouse', 'ssn', '987-65-4321', true]]);
+  // a spouse profile that lacks a value leaves the field empty instead of borrowing the self value
+  assert.deepEqual(plan([F('ss', 'Spouse\'s social security number'), F('sd', 'Spouse\'s date of birth')], DETAILS, { firstName: 'John' }), []);
+  // a custom entry on the spouse profile applies to spouse fields only
+  assert.equal(valueOf(plan([F('c', 'Spouse\'s name')], { ...DETAILS, custom: [{ label: 'Spouse\'s name', value: 'SELF' }] }, { ...SPOUSE, custom: [{ label: 'Spouse\'s name', value: 'SPOUSE' }] }), 'c'), 'SPOUSE');
+});
+test('self and spouse SSN comb runs on one page are both split correctly', () => {
+  const comb = (id, label, x, y, maxLen) => F(id, label, { comb: true, maxLen, box: [x, y, x + maxLen * 12, y + 20] });
+  const p = plan([
+    comb('a1', 'Your social security number', 100, 100, 3), comb('a2', 'x', 150, 100, 2), comb('a3', 'x', 190, 100, 4),
+    comb('b1', 'Spouse\'s social security number', 100, 200, 3), comb('b2', 'x', 150, 200, 2), comb('b3', 'x', 190, 200, 4)
+  ], DETAILS, SPOUSE);
+  assert.deepEqual(p.map(x => [x.id, x.who, x.value, x.sensitive]), [['a1', 'self', '123', true], ['a2', 'self', '45', true], ['a3', 'self', '6789', true], ['b1', 'spouse', '987', true], ['b2', 'spouse', '65', true], ['b3', 'spouse', '4321', true]]);
+  assert.deepEqual(plan([comb('b1', 'Spouse\'s social security number', 100, 200, 3), comb('b2', 'x', 150, 200, 2), comb('b3', 'x', 190, 200, 4)]), []);
 });
