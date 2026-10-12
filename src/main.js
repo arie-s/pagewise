@@ -1645,7 +1645,9 @@ function detectFormFields(gray) {
         while (d < rows && !ink[(y0 - 2 - d) * W + c]) d++;
         clr[c - cx0] = d + 1;
       }
+      const rest = boxed ? [] : runs(clr.map(v => v < 4 * u ? 1 : 0), Math.ceil(30 * u), Math.ceil(12 * u));
       for (const [p, q] of runs(clr.map(v => v >= 12 * u ? 1 : 0), Math.ceil((boxed ? 18 : 45) * u), Math.floor(3 * u) - 1)) {
+        if (rest.some(([s, e]) => e <= p && e >= p - 3 * u)) continue; // text resting on the rule just before the run: a heading's own line, not a blank to fill
         const sorted = Array.from(clr.subarray(p, q)).sort((m, n) => m - n), pos = 0.1 * (sorted.length - 1), lo = Math.floor(pos);
         const p10 = sorted[lo] + (sorted[Math.min(lo + 1, sorted.length - 1)] - sorted[lo]) * (pos - lo);
         const h = Math.min(Math.floor(p10), Math.floor(50 * u));
@@ -1698,7 +1700,7 @@ function cleanFieldLabel(text) {
     .replace(/\s+/g, ' ').trim().replace(/^\d{1,2}[a-z]?[.)]?\s+/i, '').trim().slice(0, 60).trim();
   return (label.match(/\p{L}/gu) || []).length >= 2 ? label : ''; // "6a", "|" or OCR crumbs are not labels
 }
-function labelFor(field, words, u = 1, n = 1) {
+function labelFor(field, words, u = 1, n = 1, out = null) { // out, when given, receives lineLeft: every word on the box's line that lies left of it
   const [fx0, fy0, fx1, fy1] = field.box, hOf = w => w.box[3] - w.box[1];
   const vOverlap = (w, y0, y1) => Math.min(w.box[3], y1) - Math.max(w.box[1], y0);
   const sameLine = (w, ref) => vOverlap(w, ref.box[1], ref.box[3]) >= 0.5 * Math.min(hOf(w), hOf(ref));
@@ -1734,6 +1736,7 @@ function labelFor(field, words, u = 1, n = 1) {
     }
     return join(lines.flatMap(l => l.sort((a, b) => a.box[0] - b.box[0])));
   };
+  if (out) out.lineLeft = words.filter(w => w.text && w.text.trim() && vOverlap(w, fy0, fy1) >= 0.5 * hOf(w) && w.box[2] <= fx0 + 2 * u).sort((a, b) => a.box[0] - b.box[0]).map(w => w.text).join(' ');
   const order = field.kind === 'check' ? [() => side(1), () => side(-1), above] : field.aboveFirst ? [above, () => side(-1)] : [() => side(-1), above];
   for (const f of order) { const l = f(); if (l) return l; }
   return `Field ${n}`;
@@ -1913,6 +1916,8 @@ const labelParts = label => {
   return { full, head: full.split(/\(|\. /)[0].trim() }; // instructions follow the first '(' or sentence, and may mention anyone
 };
 const mentionsOtherPerson = full => OTHER_PERSON.test(full), isOtherPartyHead = head => OTHER_PARTY.test(head);
+// A field printed on one line after another person's label ("Decedent's name [ ] Social security number [ ]") is theirs, unless its own head says it is the user's
+const sharesLineWithOther = f => !!f.lineText && mentionsOtherPerson(labelParts(f.lineText).full) && !/\b(your|applicant|taxpayer)\b/.test(labelParts(f.label).head);
 // True when the rules would skip the label because it concerns another person or a never-fill item
 function otherParty(label) {
   const { full, head } = labelParts(label);
@@ -1998,7 +2003,7 @@ function combRun(f, fields, n) {
   return run.length > 1 && sum === n ? run : null;
 }
 const SENSITIVE_KEYS = new Set(['ssn', 'dateOfBirth']), DIGIT_KEYS = new Set(['ssn', 'phone', 'zip']);
-// fields: [{ id, page, label, maxLen, comb, box }] -> [{ id, label, key, who, value, sensitive }] for fields with a value to propose.
+// fields: [{ id, page, label, lineText, maxLen, comb, box }] -> [{ id, label, key, who, value, sensitive }] for fields with a value to propose.
 // self and spouse are detail objects; spouse may be null, and spouse fields are then skipped (never filled from self).
 function planAutofill({ fields, self, spouse = null, now = new Date() }) {
   const people = { self: { d: cleanDetails(self) }, spouse: spouse ? { d: cleanDetails(spouse) } : null }, plan = [], done = new Set();
@@ -2006,7 +2011,7 @@ function planAutofill({ fields, self, spouse = null, now = new Date() }) {
   for (const f of fields) {
     if (done.has(f.id)) continue;
     const cls = classifyLabel(f.label), who = cls ? cls.who : 'self', person = people[who];
-    if (!person) continue;
+    if (!person || (who === 'self' && sharesLineWithOther(f))) continue;
     const custom = customMatch(person.d.custom, f.label), key = custom ? 'custom' : cls && cls.key;
     let value = custom ? custom.value : key && person.vals[key];
     if (!value) continue;
@@ -2030,10 +2035,11 @@ function autofillFields(pages) {
   const fields = [];
   for (const p of pages) {
     for (const f of p.fields) {
-      let label = String(f.alt || '').trim().slice(0, 300) || labelFor({ kind: 'text', box: f.box, aboveFirst: f.comb && f.maxLen > 1 }, p.words || [], p.width / 1275); // comb cells sit under their heading, and text to their left is usually unrelated
+      const out = {}, found = labelFor({ kind: 'text', box: f.box, aboveFirst: f.comb && f.maxLen > 1 }, p.words || [], p.width / 1275, 1, out); // comb cells sit under their heading, and text to their left is usually unrelated
+      let label = String(f.alt || '').trim().slice(0, 300) || found;
       const name = String(f.name || '');
       if (/^Field \d+$/.test(label) && /\s/.test(name) && !name.includes('[') && !/^[a-z]+\d+$/i.test(name)) label = cleanFieldLabel(name) || label;
-      fields.push({ id: f.id, page: p.page, label, maxLen: f.maxLen || 0, comb: !!f.comb, box: f.box });
+      fields.push({ id: f.id, page: p.page, label, lineText: out.lineLeft, maxLen: f.maxLen || 0, comb: !!f.comb, box: f.box });
     }
   }
   return fields;
@@ -2108,7 +2114,7 @@ function checkAnswer(answer, profile) {
 // Labels the AI may be asked about: text fields the rules did not match, that are not about someone else, with a real label and no value yet
 function aiCandidates(fields, selfDetails, skip = new Set()) {
   const custom = cleanDetails(selfDetails).custom;
-  return fields.filter(f => !f.comb && !skip.has(f.id) && f.label && !/^Field \d+$/.test(f.label) && !classifyLabel(f.label) && !otherParty(f.label) && !customMatch(custom, f.label));
+  return fields.filter(f => !f.comb && !skip.has(f.id) && f.label && !/^Field \d+$/.test(f.label) && !classifyLabel(f.label) && !otherParty(f.label) && !sharesLineWithOther(f) && !customMatch(custom, f.label));
 }
 const MAP_KEY_HELP = 'firstName, middleName, lastName, fullName, email, phone, street (street address line), city, state, zip, country, fullAddress, cityStateZip, company (the person\'s own business or employer), jobTitle, today (today\'s date), answer (a question or free-text prompt about the person or their business), none (anything else, or if unsure)';
 function mapLabelsPrompt(labels) {

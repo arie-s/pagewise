@@ -382,3 +382,60 @@ test('showExtractResult hides table buttons without tables and shows model text 
   assert.equal(find(h.container).textContent, '## Page 1\n\n' + evil);
   assert.equal(find(h.container).innerHTML, undefined);
 });
+
+function formHarness(annots) {
+  const store = new Map();
+  const storage = {
+    getAll: () => store.size ? Object.fromEntries([...store].map(([k, v]) => [k, { ...v }])) : null,
+    setValue: (id, v) => store.set(id, { ...(store.get(id) || {}), ...v })
+  };
+  const state = {
+    pdfDoc: { numPages: 1, annotationStorage: storage, getPage: async () => ({ getAnnotations: async () => annots }) },
+    annotations: {}, redactionMarks: {}, textEdits: {}, undoStack: [], redoStack: [], hasUnsavedChanges: false
+  };
+  const { functions } = loadRendererFunctions(['saveState', 'undo', 'redo'], {
+    state, helperNames: ['editSnapshot', 'restoreForms'],
+    extra: { setUnsavedChanges: flag => { state.hasUnsavedChanges = flag; }, updateUndoRedo: () => {}, renderAllPages: inert, updateAnnotationCount: () => {} }
+  });
+  const values = () => JSON.parse(JSON.stringify(storage.getAll() || {}));
+  return { state, functions, storage, values };
+}
+
+test('editSnapshot includes the typed form values and nothing else from the storage entries', () => {
+  const { state, functions, storage } = formHarness([]);
+  const snap = () => JSON.parse(state.undoStack[state.undoStack.length - 1]);
+  functions.saveState();
+  assert.deepEqual(snap().forms, {});
+  storage.setValue('12R', { value: 'Jane', extra: 1 });
+  storage.setValue('13R', { value: true });
+  functions.saveState();
+  assert.deepEqual(snap().forms, { '12R': { value: 'Jane' }, '13R': { value: true } });
+  assert.deepEqual(Object.keys(snap()).sort(), ['annotations', 'forms', 'redactionMarks', 'textEdits']);
+});
+
+test('undo after a fill restores the previous form values and redo applies them again', async () => {
+  const { state, functions, storage, values } = formHarness([
+    { id: '12R', fieldType: 'Tx', fieldValue: 'printed' }, { id: '13R', fieldType: 'Tx' }, { id: '14R', fieldType: 'Btn', checkBox: true, exportValue: 'Yes', fieldValue: 'Off' }
+  ]);
+  storage.setValue('12R', { value: 'typed' });
+  functions.saveState(); // what Fill does before applying
+  storage.setValue('12R', { value: 'Jane Q. Doe' });
+  storage.setValue('13R', { value: '555-1234' });
+  storage.setValue('14R', { value: true });
+  await functions.undo();
+  assert.deepEqual(values(), { '12R': { value: 'typed' }, '13R': { value: '' }, '14R': { value: false } });
+  assert.equal(state.undoStack.length, 0);
+  await functions.redo();
+  assert.deepEqual(values(), { '12R': { value: 'Jane Q. Doe' }, '13R': { value: '555-1234' }, '14R': { value: true } });
+  await functions.undo();
+  assert.equal(values()['12R'].value, 'typed');
+});
+
+test('a field first typed into after the snapshot goes back to the value the document holds', async () => {
+  const { functions, storage, values } = formHarness([{ id: '5R', fieldType: 'Tx', fieldValue: 'printed' }, { id: '6R', fieldType: 'Tx' }]);
+  functions.saveState();
+  storage.setValue('5R', { value: 'x' });
+  storage.setValue('6R', { value: 'y' });
+  await functions.undo();
+  assert.deepEqual(values(), { '5R': { value: 'printed' }, '6R': { value: '' } });
+});

@@ -64,6 +64,12 @@ test('comb boxes merge into one field per group of cells (W-9 social security nu
   assert.deepEqual(Array.from(ssn, f => Math.round(f.box[0] / 10) * 10), [870, 990, 1080]);
 });
 
+test('a heading resting on a full-width rule gets no field beside it (f8822 Part I)', async () => {
+  const { fields } = await detect('f8822');
+  const beside = fields.filter(f => f.kind === 'text' && (f.box[0] + f.box[2]) / 2 >= 700 && (f.box[0] + f.box[2]) / 2 <= 1200 && (f.box[1] + f.box[3]) / 2 >= 195 && (f.box[1] + f.box[3]) / 2 <= 225);
+  assert.equal(beside.length, 0, JSON.stringify(beside.map(f => f.box)));
+});
+
 const W = (text, x0, y0, x1, y1) => ({ text, box: [x0, y0, x1, y1] });
 test('labelFor prefers the line to the left, then the line above', () => {
   const field = { kind: 'text', box: [300, 200, 600, 224] };

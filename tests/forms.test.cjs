@@ -79,3 +79,27 @@ test('bytesToBase64 handles files larger than one chunk', () => {
   const { context } = loadRendererFunctions(['bytesToBase64'], { extra: { btoa: s => Buffer.from(s, 'binary').toString('base64') } });
   assert.equal(context.__functions.bytesToBase64(big), Buffer.from(big).toString('base64'));
 });
+
+test('a radio group and a dropdown set the way the AnnotationLayer sets them are saved and flatten cleanly', async () => {
+  const src = await PDFDocument.create(), page = src.addPage([300, 300]), form = src.getForm();
+  const radio = form.createRadioGroup('Choice');
+  ['Red', 'Green', 'Blue'].forEach((o, i) => radio.addOptionToPage(o, page, { x: 20, y: 240 - i * 30, width: 16, height: 16 }));
+  const drop = form.createDropdown('Size');
+  drop.addOptions(['Small', 'Medium', 'Large']);
+  drop.addToPage(page, { x: 20, y: 100, width: 120, height: 22 });
+  const doc = await load(Buffer.from(await src.save()));
+  const widgets = (await (await doc.getPage(1)).getAnnotations()).filter(a => a.subtype === 'Widget');
+  const radios = widgets.filter(a => a.radioButton), choice = widgets.find(a => a.fieldType === 'Ch');
+  assert.deepEqual(radios.map(a => a.buttonValue), ['0', '1', '2']); // pdf-lib names the on-states by index and keeps the labels in /Opt
+  // RadioButtonWidget: { value: true } on the chosen widget, { value: false } on its siblings. ChoiceWidget (single select): { value: '<exportValue>' }
+  for (const a of radios) doc.annotationStorage.setValue(a.id, { value: a === radios[1] });
+  doc.annotationStorage.setValue(choice.id, { value: 'Medium' });
+  const saved = Buffer.from(await doc.saveDocument());
+  const out = (await PDFDocument.load(saved)).getForm();
+  assert.equal(out.getRadioGroup('Choice').getSelected(), 'Green');
+  assert.deepEqual(out.getDropdown('Size').getSelected(), ['Medium']);
+  const { handlers } = loadMainHandlers();
+  const r = await handlers.get('flatten-form')(null, { data: b64(saved) });
+  assert.equal(r.success, true, r.error);
+  assert.equal((await PDFDocument.load(Buffer.from(r.data, 'base64'))).getForm().getFields().length, 0);
+});
