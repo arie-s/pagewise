@@ -7,7 +7,7 @@
     {"q": "add a password", "expectPath": "Security → Set Password Protection...", "expectPassage": "Security → Set Password Protection...", "expectAny": ["set password"]},
     {"q": "fill this form with my details", "expectPath": "Forms → Fill from Profile", "expectPassage": "Forms → Fill from Profile", "expectAny": ["fill from profile"]},
     {"q": "combine two pdfs", "expectPath": "File → Merge PDFs...", "expectPassage": "File → Merge PDFs...", "expectAny": ["merge"]},
-    {"q": "remove a page", "expectPath": null, "expectPassage": "Rotate, insert, delete", "expectAny": ["page menu", "right panel"]},
+    {"q": "remove a page", "expectPath": "Page → Delete Page", "expectPassage": "Page → Delete Page", "expectAny": ["delete page"]},
     {"q": "how do I reply to a comment", "expectPath": null, "expectPassage": "Comments panel", "expectAny": ["reply"]},
     {"q": "what does flatten mean", "expectPath": "Forms → Flatten Form (make answers permanent)", "expectPassage": "Forms → Flatten Form (make answers permanent)", "expectAny": ["permanent", "ordinary page content"]},
     {"q": "where do I download the AI thing", "expectPath": "Tools → Scanned Pages → Download AI Reading Model (4.5 GB)...", "expectPassage": "Download AI Reading Model", "expectAny": ["download"]},

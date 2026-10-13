@@ -319,6 +319,7 @@
     .annotation-layer.active .sig-hit { pointer-events: none; }
     .sign-place { position: absolute; border: 2px dashed var(--primary); background: rgba(37, 99, 235, 0.08); cursor: pointer; pointer-events: auto; box-sizing: border-box; }
     .sign-panel { position: fixed; right: 16px; top: 80px; width: 270px; max-height: 70vh; overflow: auto; background: var(--bg-light); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.2); padding: 10px; z-index: 600; }
+    body.assistant-open .sign-panel { right: 276px; }
     .sign-panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
     .sign-panel-choice { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12px; color: var(--text-dim); }
     .sign-panel-choice img { max-width: 130px; max-height: 40px; background: white; border: 1px solid var(--border); border-radius: 4px; }
@@ -3580,7 +3581,7 @@
       return m;
     }
     async function openAssistant() {
-      asst.open = true; $('assistantDrawer').classList.remove('hidden');
+      asst.open = true; $('assistantDrawer').classList.remove('hidden'); document.body.classList.add('assistant-open');
       const hadSelection = !!asst.sel;
       await refreshAssistantInfo();
       if (hadSelection && asst.sel) setAssistantScope('selection'); else if (asst.scope === 'selection' && !asst.sel) setAssistantScope('help'); else setAssistantScope(asst.scope);
@@ -3591,7 +3592,7 @@
     }
     function closeAssistant() {
       if (asst.cur) stopAssistant();
-      asst.open = false; $('assistantDrawer').classList.add('hidden'); clearAssistantHighlights();
+      asst.open = false; $('assistantDrawer').classList.add('hidden'); document.body.classList.remove('assistant-open'); clearAssistantHighlights();
     }
     function toggleAssistant() { if (asst.open && document.activeElement && document.activeElement.closest('#assistantDrawer')) closeAssistant(); else openAssistant(); }
     function setAssistantBusy(busy) { asst.busy = busy; $('assistantSend').classList.toggle('hidden', busy); $('assistantStop').classList.toggle('hidden', !busy); $('assistantInput').disabled = busy; if (!busy) $('assistantInput').focus(); }

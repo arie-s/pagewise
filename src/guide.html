@@ -84,7 +84,7 @@
   <h2>7. Pages</h2>
   <ul>
     <li><b>Reorder:</b> drag thumbnails in the left panel; a blue line shows where the page will land.</li>
-    <li><b>Rotate, insert, delete:</b> from the right panel or the <i>Page</i> menu. <i>Rotate All</i> turns every page. <i>Insert Pages From File...</i> adds pages of another PDF after the current page.</li>
+    <li><b>Rotate, insert, delete:</b> from the right panel or the <i>Page</i> menu. To delete the current page: <i>Page → Delete Page</i>. <i>Rotate All</i> turns every page. <i>Insert Pages From File...</i> adds pages of another PDF after the current page.</li>
     <li><b>Replace Page...</b> swaps the current page for a page of another PDF. <b>Extract Pages...</b> saves chosen pages as their own file.</li>
     <li><b>Crop Page...</b> hides everything outside a rectangle you drag (it is hidden, not deleted; <i>Remove Crop</i> brings it back). <b>Resize Pages...</b> fits the content to A4, Letter, Legal or A5.</li>
     <li><b>Add Watermark</b>, <b>Add Header &amp; Footer</b> and <b>Add Page Numbers</b> are in the <i>Page</i> menu.</li>
@@ -97,7 +97,7 @@
   </ul>
 
   <h2>9. Scanned pages</h2>
-  <p>A scanned or photographed page is only a picture of text, so you cannot search or copy from it. The <i>Tools → Scanned Pages</i> menu fixes that:</p>
+  <p>A scanned or photographed page is only a picture of text, so you cannot search or copy from it. The <i>Tools → Scanned Pages</i> menu fixes that. To make a scan searchable, use <i>Tools → Scanned Pages → Recognize Text (fast, built-in)</i>:</p>
   <table>
     <tr><th></th><th>Recognize Text (fast, built-in)</th><th>Recognize Text with AI (more accurate)</th><th>Read Tables &amp; Handwriting with AI</th></tr>
     <tr><td><b>Result</b></td><td>Adds an invisible text layer. The page looks the same, but search and copy work.</td><td>Same invisible text layer, from the AI reading model.</td><td>Shows the page as text you can copy or save as Markdown, with tables you can copy or export to CSV / Excel. The PDF is not changed.</td></tr>
@@ -117,7 +117,7 @@
   <p><i>File → Reduce File Size...</i> lowers the resolution of scans and photos and re-saves them as JPEG. Choose <i>Smallest</i> (100 dpi), <i>Balanced</i> (150 dpi, recommended) or <i>High quality</i> (220 dpi). Text and vector graphics are not changed.</p>
 
   <h2>12. Security</h2>
-  <p><i>Security → Set Password Protection...</i> adds real AES-256 encryption. <i>Remove Password</i> decrypts with the current password. An encrypted PDF is saved as a new file, because the editor holds your working copy unencrypted while you edit.</p>
+  <p><i>Security → Set Password Protection...</i> adds real AES-256 encryption. To unlock a PDF, <i>Security → Remove Password</i> decrypts it with the current password. An encrypted PDF is saved as a new file, because the editor holds your working copy unencrypted while you edit.</p>
   <p><b>Redact:</b> use <i>Tools → Redact → Mark for Redaction</i>, drag over the content, then save. Applying redactions rebuilds the entire document from rendered images with opaque black masks, removing the original text, images and hidden objects. Text selection, forms, links, bookmarks and metadata are removed from the output. The app asks before applying this change; canceling Save keeps your pending edits.</p>
 
   <h2>13. Optional AI features</h2>

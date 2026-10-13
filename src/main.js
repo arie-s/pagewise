@@ -1983,7 +1983,7 @@ function historyMessages(history) {
   while (out.length && out[0].role !== 'user') out.shift();
   return out.filter((m, i) => !i || m.role !== out[i - 1].role);
 }
-const HELP_SYSTEM = `You are the Pagewise help assistant. Answer using ONLY the guide excerpts. Give the steps briefly, with the menu path exactly as written in the excerpts. If the excerpts don't answer it, reply exactly: ${ASSISTANT_NOT_FOUND}`;
+const HELP_SYSTEM = `You are the Pagewise help assistant. Answer using ONLY the guide excerpts. Give the steps briefly, with the menu path exactly as written in the excerpts. Prefer the menus; mention the command line only if the question asks for it. If the excerpts don't answer it, reply exactly: ${ASSISTANT_NOT_FOUND}`;
 function helpMessages(question, history, passages) {
   const excerpts = passages.map(p => `[${p.heading}] ${p.text}`).join('\n');
   return [{ role: 'system', content: HELP_SYSTEM }, ...historyMessages(history), { role: 'user', content: `Guide excerpts:\n<<<GUIDE\n${excerpts}\nGUIDE>>>\n\nQuestion: ${question}` }];
