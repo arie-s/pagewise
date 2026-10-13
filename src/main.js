@@ -13,7 +13,7 @@ if (!hasUserData(app.getPath('userData'))) {
 }
 // @cantoo/pdf-lib encryption needs Web Crypto; Electron <=28's bundled Node lacks the global
 if (!globalThis.crypto) globalThis.crypto = require('crypto').webcrypto;
-const { PDFDocument, rgb, degrees, StandardFonts, StandardFontEmbedder, decodePDFRawStream, EncryptedPDFError, PDFName, PDFArray, PDFDict, PDFString, PDFHexString, PDFNumber, PDFBool, PDFTextField, PDFCheckBox, PDFDropdown, PDFRawStream, PDFRef, grayscale, cmyk, pushGraphicsState, popGraphicsState, rectangle, clip, endPath } = require('@cantoo/pdf-lib');
+const { PDFDocument, rgb, degrees, StandardFonts, StandardFontEmbedder, decodePDFRawStream, EncryptedPDFError, PDFName, PDFArray, PDFDict, PDFString, PDFHexString, PDFNumber, PDFBool, PDFTextField, PDFCheckBox, PDFDropdown, PDFRawStream, PDFRef, grayscale, cmyk, pushGraphicsState, popGraphicsState, rectangle, clip, endPath, concatTransformationMatrix } = require('@cantoo/pdf-lib');
 
 let mainWindow;
 let currentFilePath = null;
@@ -2983,6 +2983,12 @@ function cropPage(page, rect) {
   page.setCropBox(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay));
 }
 
+// The page as the viewer shows it: the CropBox, turned by /Rotate. Edits are placed in this frame (origin bottom-left, width x height in points); m maps it to the page's own coordinates
+function viewFrame(page) {
+  const { x: cx, y: cy, width: cw, height: ch } = page.getCropBox(), rot = ((page.getRotation().angle % 360) + 360) % 360, turned = rot === 90 || rot === 270;
+  const m = rot === 90 ? [0, 1, -1, 0, cx + cw, cy] : rot === 180 ? [-1, 0, 0, -1, cx + cw, cy + ch] : rot === 270 ? [0, -1, 1, 0, cx, cy + ch] : [1, 0, 0, 1, cx, cy];
+  return { width: turned ? ch : cw, height: turned ? cw : ch, m, identity: m.join() === '1,0,0,1,0,0', toUser: (X, Y) => [m[0] * X + m[2] * Y + m[4], m[1] * X + m[3] * Y + m[5]] };
+}
 // Fit the visible page (its CropBox) into W x H as shown on screen, centred. Annotations move with the content.
 function resizePage(page, W, H) {
   if (!(W > 0 && H > 0)) throw new Error('Invalid page size');
@@ -3035,25 +3041,27 @@ function addTextNote(pdfDoc, page, x, y, text) {
   }));
 }
 // Highlight / Underline / StrikeOut as real annotations with their own appearance stream, so every viewer draws them the same way and they can be listed, edited and deleted as comments
+const DRAWN_MODS = new Set(['text', 'cover', 'rectangle', 'circle', 'line', 'arrow', 'path', 'stamp', 'watermark', 'image', 'signature', 'pageNumber', 'headerFooter']);
 const MARKUP_KINDS = { highlight: { Subtype: 'Highlight', color: [1, 0.94, 0.2] }, underline: { Subtype: 'Underline', color: [0, 0, 1] }, strikethrough: { Subtype: 'StrikeOut', color: [1, 0, 0] } };
 const HIGHLIGHT_OPACITY = 0.4;
-function addTextMarkup(pdfDoc, page, mod) {
-  const kind = MARKUP_KINDS[mod.type], { width: pw, height: ph } = page.getSize(), ctx = pdfDoc.context;
+function addTextMarkup(pdfDoc, page, mod, frame = viewFrame(page)) {
+  const kind = MARKUP_KINDS[mod.type], { width: pw, height: ph } = frame, ctx = pdfDoc.context;
   const num = (v, d) => Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : d;
   const color = ['r', 'g', 'b'].map((k, i) => num(mod.color && mod.color[k], kind.color[i]));
   const sw = Number.isFinite(mod.strokeWidth) && mod.strokeWidth > 0 ? Math.min(mod.strokeWidth, 20) : 1;
   const boxes = (Array.isArray(mod.rects) && mod.rects.length ? mod.rects : [mod]).filter(r => [r.x, r.y, r.width, r.height].every(Number.isFinite))
     .map(r => ({ l: r.x * pw, r: (r.x + r.width) * pw, t: ph - r.y * ph, b: ph - (r.y + r.height) * ph }));
   if (!boxes.length) return;
-  const rect = [Math.min(...boxes.map(b => b.l)), Math.min(...boxes.map(b => b.b)), Math.max(...boxes.map(b => b.r)), Math.max(...boxes.map(b => b.t))];
+  const quads = boxes.map(b => [frame.toUser(b.l, b.t), frame.toUser(b.r, b.t), frame.toUser(b.l, b.b), frame.toUser(b.r, b.b)]), pts = quads.flat(); // corners in text order, in the page's own coordinates
+  const rect = [Math.min(...pts.map(q => q[0])), Math.min(...pts.map(q => q[1])), Math.max(...pts.map(q => q[0])), Math.max(...pts.map(q => q[1]))];
   const rgbOps = color.map(c => +c.toFixed(4)).join(' '), f = n => +n.toFixed(3);
-  let content;
-  if (mod.type === 'highlight') content = '/GS gs ' + rgbOps + ' rg ' + boxes.map(b => `${f(b.l)} ${f(b.b)} ${f(b.r - b.l)} ${f(b.t - b.b)} re f`).join(' ');
-  else content = rgbOps + ' RG ' + f(sw) + ' w ' + boxes.map(b => { const y = mod.type === 'underline' ? b.b + sw / 2 : (b.t + b.b) / 2; return `${f(b.l)} ${f(y)} m ${f(b.r)} ${f(y)} l S`; }).join(' ');
+  let content = frame.identity ? '' : frame.m.join(' ') + ' cm ';
+  if (mod.type === 'highlight') content += '/GS gs ' + rgbOps + ' rg ' + boxes.map(b => `${f(b.l)} ${f(b.b)} ${f(b.r - b.l)} ${f(b.t - b.b)} re f`).join(' ');
+  else content += rgbOps + ' RG ' + f(sw) + ' w ' + boxes.map(b => { const y = mod.type === 'underline' ? b.b + sw / 2 : (b.t + b.b) / 2; return `${f(b.l)} ${f(y)} m ${f(b.r)} ${f(y)} l S`; }).join(' ');
   const resources = mod.type === 'highlight' ? { ExtGState: { GS: { Type: 'ExtGState', BM: 'Multiply', ca: HIGHLIGHT_OPACITY, CA: HIGHLIGHT_OPACITY, AIS: false } } } : {};
   const ap = ctx.register(ctx.flateStream(content, { Type: 'XObject', Subtype: 'Form', FormType: 1, BBox: rect, Resources: resources }));
   const dict = ctx.obj({
-    Type: 'Annot', Subtype: kind.Subtype, Rect: rect, QuadPoints: boxes.flatMap(b => [b.l, b.t, b.r, b.t, b.l, b.b, b.r, b.b]), C: color,
+    Type: 'Annot', Subtype: kind.Subtype, Rect: rect, QuadPoints: pts.flat(), C: color,
     CA: mod.type === 'highlight' ? HIGHLIGHT_OPACITY : 1, F: 4, AP: { N: ap }, ...annotStamp()
   });
   if (typeof mod.contents === 'string' && mod.contents.trim()) dict.set(PDFName.of('Contents'), PDFHexString.fromText(mod.contents.trim().slice(0, MAX_COMMENT_TEXT)));
@@ -3164,7 +3172,10 @@ ipcMain.handle('apply-modifications', async (event, { originalData, modification
       if (mod.pageIndex >= pages.length) continue;
 
       const page = pages[mod.pageIndex];
-      const { width, height } = page.getSize();
+      const frame = DRAWN_MODS.has(mod.type) || MARKUP_KINDS[mod.type] || mod.type === 'stickyNote' ? viewFrame(page) : null;
+      const { width, height } = frame || page.getSize();
+      const wrap = DRAWN_MODS.has(mod.type) && !frame.identity; // drawn in the viewer's frame, so a rotated or cropped page gets the edit where it was placed
+      if (wrap) page.pushOperators(pushGraphicsState(), concatTransformationMatrix(...frame.m));
 
       switch (mod.type) {
         case 'text':
@@ -3182,7 +3193,7 @@ ipcMain.handle('apply-modifications', async (event, { originalData, modification
         case 'highlight':
         case 'underline':
         case 'strikethrough':
-          addTextMarkup(pdfDoc, page, mod);
+          addTextMarkup(pdfDoc, page, mod, frame);
           break;
 
         case 'cover':
@@ -3315,7 +3326,7 @@ ipcMain.handle('apply-modifications', async (event, { originalData, modification
           break;
 
         case 'stickyNote':
-          if (typeof mod.text === 'string' && mod.text) addTextNote(pdfDoc, page, mod.x * width, height - mod.y * height, mod.text);
+          if (typeof mod.text === 'string' && mod.text) { const [ax, ay] = frame.toUser(mod.x * width, height - mod.y * height - 24), [bx, by] = frame.toUser(mod.x * width + 24, height - mod.y * height); addTextNote(pdfDoc, page, Math.min(ax, bx), Math.max(ay, by), mod.text); }
           break;
 
         case 'crop':
@@ -3427,6 +3438,7 @@ ipcMain.handle('apply-modifications', async (event, { originalData, modification
           }
           break;
       }
+      if (wrap) page.pushOperators(popGraphicsState());
     }
 
     // Handle page deletions (process in reverse order to maintain indices)
