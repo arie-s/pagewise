@@ -193,7 +193,7 @@ test('suggest-field-name finds the label of a box drawn on the underline just be
 });
 
 test('the Forms menu holds every form channel and Page holds none', () => {
-  const main = fs.readFileSync(path.join(root, 'src/main.js'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'src/main.js'), 'utf8').replace(/\r\n/g, '\n'); // Windows checkouts use CRLF
   const top = label => { // the text of one top-level menu: from its label to the next top-level label
     const start = main.indexOf(`\n    {\n      label: '${label}',`);
     assert.ok(start >= 0, label + ' menu exists');
