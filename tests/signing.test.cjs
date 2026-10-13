@@ -189,7 +189,7 @@ const NOW = new Date(2026, 9, 5);
 
 test('sign-places finds the signature place on the W-9, which has no field for it', async () => {
   const { context: m } = loadMainHandlers();
-  const pdfjs = await import(path.join(root, 'node_modules/pdfjs-dist/legacy/build/pdf.mjs'));
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const doc = await pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(path.join(root, 'tests/fixtures/forms/fw9.pdf'))) }).promise;
   const pg = await doc.getPage(1), vp = pg.getViewport({ scale: 150 / 72 });
   const { functions } = loadRendererFunctions(['pageWords'], { extra: { pdfjsLib: { Util: pdfjs.Util } } });
@@ -268,7 +268,7 @@ test('signature widgets are places, labelled by their tooltip; their other-perso
   const text = pdf.getForm().createTextField('Date'); text.addToPage(pg, { x: 320, y: 605, width: 80, height: 20 });
   pg.node.set(PDFName.of('Annots'), pdf.context.obj([...sigs, ...pg.node.Annots().asArray()]));
   pdf.getForm().acroForm.dict.set(PDFName.of('Fields'), pdf.context.obj([...sigs, ...pdf.getForm().acroForm.dict.lookup(PDFName.of('Fields')).asArray()]));
-  const pdfjs = await import(path.join(root, 'node_modules/pdfjs-dist/legacy/build/pdf.mjs'));
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const doc = await pdfjs.getDocument({ data: new Uint8Array(await pdf.save()) }).promise;
   const p = await doc.getPage(1), vp = p.getViewport({ scale: 150 / 72 });
   const widgets = (await p.getAnnotations()).filter(a => a.subtype === 'Widget'), box = a => { const [ax, ay, bx, by] = vp.convertToViewportRectangle(a.rect); return [Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)]; };
