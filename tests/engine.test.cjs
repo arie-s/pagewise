@@ -145,6 +145,20 @@ test('engine-install re-downloads a model whose size differs from the listing', 
   assert.ok(resolved[0].endsWith('/dots.ocr-Q8_0.gguf'));
 });
 
+test('a failed download has closed and deleted its file by the time it reports the error', async t => {
+  const { dir, handlers } = withEngine(t, { tree: TREE });
+  const model = path.join(dir, 'dots-ocr-text-Q8_0.gguf');
+  fs.writeFileSync(model, Buffer.alloc(7));
+  const realOpen = fs.open; // a slow disk: the file opens after the server has already said 404 (as on CI)
+  fs.open = (...a) => setTimeout(() => realOpen(...a), 30);
+  t.after(() => { fs.open = realOpen; });
+  const result = await handlers.get('engine-install')({}, {});
+  assert.match(result.error, /HTTP 404/);
+  assert.equal(fs.existsSync(model), false, 'deleted before the error is reported');
+  await new Promise(r => setTimeout(r, 100));
+  assert.equal(fs.existsSync(model), false, 'and not recreated afterwards by a late open');
+});
+
 test('engine-status needs device.txt, so an older CPU-only install counts as not installed', async t => {
   const old = withEngine(t, {}, { device: false });
   assert.equal((await old.handlers.get('engine-status')()).installed, false);

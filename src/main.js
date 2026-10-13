@@ -1164,15 +1164,19 @@ function clearEngineBinary(ep) {
 async function downloadTo(url, dest, phase, lastPctRef) {
   return new Promise((resolve, reject) => {
     const req = net.request(url);
-    let received = 0, total = 0;
+    let received = 0, total = 0, settled = false;
     const file = fs.createWriteStream(dest);
+    // Settle only once the file is closed (and a failed one deleted): otherwise its delayed open can recreate dest after the caller moved on
+    const closed = fn => { if (file.closed) fn(); else file.once('close', fn); };
+    const discard = then => { if (settled) return; settled = true; file.destroy(); closed(() => fs.unlink(dest, then)); };
+    const fail = e => discard(() => reject(e));
+    file.on('error', fail);
     req.setHeader('User-Agent', 'pagewise');
     req.on('response', res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        file.end(); fs.unlink(dest, () => {});
-        downloadTo(res.headers.location, dest, phase, lastPctRef).then(resolve, reject); return;
+        discard(() => downloadTo(res.headers.location, dest, phase, lastPctRef).then(resolve, reject)); return;
       }
-      if (res.statusCode !== 200) { file.end(); fs.unlink(dest, () => {}); reject(new Error('HTTP ' + res.statusCode + ' for ' + url)); return; }
+      if (res.statusCode !== 200) { fail(new Error('HTTP ' + res.statusCode + ' for ' + url)); return; }
       total = parseInt(res.headers['content-length'] || '0', 10);
       res.on('data', c => {
         received += c.length; file.write(c);
@@ -1186,10 +1190,10 @@ async function downloadTo(url, dest, phase, lastPctRef) {
         }
       });
       res.on('end', () => file.end());
-      file.on('finish', () => resolve());
-      res.on('error', e => { file.end(); reject(e); });
+      file.on('finish', () => { if (!settled) { settled = true; closed(resolve); } });
+      res.on('error', fail);
     });
-    req.on('error', e => { file.end(); reject(e); });
+    req.on('error', fail);
     req.end();
   });
 }
