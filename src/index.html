@@ -248,6 +248,18 @@
     .welcome-btn:hover { background: var(--bg-hover); transform: translateY(-1px); }
     .welcome-btn.primary { background: var(--primary); border-color: var(--primary-dark); color: white; }
     .welcome-btn svg { width: 20px; height: 20px; }
+    .aim-row { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; }
+    .aim-row.focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25); }
+    .aim-name { font-size: 14px; margin-bottom: 4px; } .aim-name span { color: var(--text-dim); font-size: 12px; }
+    .aim-what, .aim-note { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+    .aim-status { font-size: 12px; font-weight: 600; margin: 6px 0; }
+    .aim-phase { font-size: 11px; color: var(--text-dim); }
+    .aim-bar { display: none; background: var(--bg-hover); border-radius: 4px; height: 8px; overflow: hidden; margin: 4px 0; } .aim-bar > div { background: var(--primary); height: 100%; width: 0%; transition: width 0.2s; }
+    .aim-buttons { display: flex; gap: 8px; } .aim-buttons .modal-btn { padding: 5px 12px; font-size: 12px; } .aim-buttons .danger { margin-left: auto; color: var(--danger); }
+    .aim-buttons .modal-btn:disabled { opacity: 0.45; cursor: default; }
+    .aim-reason { background: rgba(255, 180, 0, 0.18); border-radius: 4px; padding: 8px 10px; margin-bottom: 10px; font-size: 13px; }
+    .aim-intro { font-size: 12px; color: var(--text-dim); margin-bottom: 10px; }
+    .aim-error { color: var(--danger); font-size: 12px; margin-top: 4px; }
     .modal-overlay {
       position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(43, 41, 37, 0.45);
       display: flex; align-items: center; justify-content: center; z-index: 1000;
@@ -475,7 +487,7 @@
         <button class="a-chip" data-scope="selection" data-tip="Ask about the text you selected">Selection</button>
         <button class="a-chip" data-scope="document" data-tip="Ask about the whole document">Whole document</button>
       </div>
-      <div class="assistant-vision hidden" id="assistantVision"><span id="assistantVisionText">Let answers see the page image: download the image reader (about 1 GB)</span> <button id="assistantVisionBtn">Download</button></div>
+      <div class="assistant-vision hidden" id="assistantVision"><span id="assistantVisionText">Let Ask see the page itself (needed for scanned pages): Page images for the assistant, about 1 GB.</span> <button id="assistantVisionBtn">Download</button></div>
       <div class="assistant-input-row"><textarea id="assistantInput" rows="2" maxlength="1000" placeholder="Type a question"></textarea><button class="primary" id="assistantSend">Send</button><button id="assistantStop" class="hidden">Stop</button></div>
       <div class="assistant-foot" id="assistantFoot"></div>
     </aside>
@@ -705,15 +717,8 @@
     async function runOcr(mode) {
       const ai = mode === 'ai';
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
-      if (ai) {
-        const st = await window.pdfAPI.engineStatus();
-        if (!st.installed) {
-          showNotification(st.hasFiles ? 'The AI reading model needs an update (small download)' : 'This needs the AI reading model (one-time ~4.5GB download)', 'warning');
-          showEngineSetup();
-          return;
-        }
-      }
-      if (!confirm(ai ? 'Like Recognize Text, but uses the AI reading model, which does better on poor scans, faxes and unusual layouts. Slower.\n\nAdds an invisible, searchable text layer using the AI reading model.\n\nBetter than standard OCR on hard scans (faxes, shadows, photos), but slower.\n\nProceed?' : 'For scanned pages: finds the words in the page image so you can search, select and copy them. The page looks the same.\n\nAdds an invisible, searchable text layer to this PDF.\n\nRuns offline on any computer — no GPU or download needed beyond a one-time 15MB language pack.\n\nBest for typed/printed pages. For scans with tables, columns, or handwriting, use "Read Tables & Handwriting with AI" instead.\n\nProceed?')) return;
+      if (ai && await needScanModel('Recognize Text with AI')) return;
+      if (!confirm(ai ? 'Recognize Text with AI does the same, but reads poor scans, faxes and unusual layouts better. It is slower, especially without a graphics card (about a minute per page).\n\nContinue?' : 'Recognize Text finds the words on scanned pages so you can search, select and copy them. The pages look the same.\n\nRuns on this computer with no setup (the first time, it downloads a 15 MB language file).\n\nBest for clean typed or printed pages. For poor scans, tables or handwriting, use Recognize Text with AI.\n\nContinue?')) return;
       setLoading(true, 'OCR: preparing...');
       let stagingDoc = null;
       try {
@@ -756,60 +761,81 @@
       finally { if (stagingDoc && stagingDoc.destroy) await stagingDoc.destroy(); setLoading(false); }
     }
 
-    // ---------- Advanced OCR engine (tier 2) ----------
-    function refreshStatus() {
-      return (async () => {
-        const st = await window.pdfAPI.engineStatus();
-        const box = document.getElementById('engineStatusText');
-        if (box) box.textContent = (st.running ? 'Running at ' + st.endpoint : st.installed ? 'Installed — not running' : 'Not installed') + (st.installed && st.device ? ' · uses ' + st.device : '');
-        const rm = document.getElementById('engineRemoveBtn'); if (rm) rm.style.display = st.hasFiles ? '' : 'none';
-        return st;
-      })();
+    // True (after opening the AI Models window at the Scan reading model) when the feature cannot run yet
+    async function needScanModel(feature) {
+      const st = await window.pdfAPI.engineStatus();
+      if (st.installed) return false;
+      showEngineSetup({ focus: 'scan', reason: st.hasFiles ? 'The Scan reading model needs a small update for this version of Pagewise.' : feature + ' needs the Scan reading model.' });
+      return true;
     }
-
-    function showEngineSetup() {
-      let m = document.createElement('div'); m.className = 'modal-overlay'; m.id = 'engineSetupModal';
-      m.innerHTML = '<div class="modal"><div class="modal-header"><span class="modal-title">Download AI Reading Model</span><button class="modal-close" data-close>&times;</button></div><div class="modal-body">' +
-        '<div style="margin-bottom:12px;">Downloads an AI model (about 4.5 GB, once) that runs on this computer. Nothing is sent online. It\'s needed for: Recognize Text with AI, Read Tables &amp; Handwriting, and Word export of scanned pages.</div>' +
-        '<div style="margin-bottom:12px;"><b>Read Tables &amp; Handwriting</b> uses an AI document model (dots.ocr) instead of the built-in OCR. It reads tables, multi-column layouts, formulas and handwriting in clean markdown.\n\nRuns entirely on this machine. One-time download of ~4.5GB; after that it works offline. On computers without a GPU it uses the CPU (slower — about a minute per page).</div>' +
-        '<div class="panel-row"><span class="panel-label" id="engineStatusText">Checking...</span></div>' +
-        '<div id="engineProgress" style="display:none;"><div class="form-section-title" id="enginePhase"></div><div style="background:var(--bg-hover);border-radius:4px;height:8px;overflow:hidden;"><div id="engineBar" style="background:var(--primary);height:100%;width:0%;transition:width 0.2s;"></div></div></div>' +
-        '<div id="engineError" style="color:var(--danger);font-size:12px;margin-top:8px;"></div>' +
-        '</div><div class="modal-footer"><button class="modal-btn" id="engineRemoveBtn" style="margin-right:auto;display:none;color:var(--danger);">Remove AI Model</button><button class="modal-btn" id="engineStopBtn">Stop Server</button><button class="modal-btn" id="engineInstallBtn">Download &amp; Install</button><button class="modal-btn primary" id="engineStartBtn">Test AI Model</button></div></div>';
-      $('modalContainer').appendChild(m);
-      m.querySelector('[data-close]').onclick = () => { m.remove(); progi && clearInterval(progi); };
-      let progi = null;
-      const err = (msg) => { const e = m.querySelector('#engineError'); if (msg) { e.textContent = msg; } e.style.display = msg ? 'block' : 'none'; };
-      window.pdfAPI.onEngineProgress(prog => {
-        m.querySelector('#engineProgress').style.display = 'block';
-        m.querySelector('#enginePhase').textContent = prog.phase;
-        m.querySelector('#engineBar').style.width = prog.pct + '%';
+    // ---------- AI Models: the three optional downloads, in one window ----------
+    const AI_MODELS = [
+      { id: 'scan', name: 'Scan reading model', size: 'about 4.5 GB', free: 'about 4.5 GB',
+        what: 'Reads difficult scans: poor copies, faxes, tables, columns and handwriting. Used by Recognize Text with AI, Read Tables & Handwriting with AI, and Word/Excel export of scanned pages. Clean typed scans don\'t need it: Recognize Text (fast, built-in) works without any download.',
+        note: 'Fast with a graphics card; without one it uses the processor, about a minute per page.',
+        loses: 'Recognize Text with AI, Read Tables & Handwriting with AI and Word/Excel export of scanned pages will stop working until you download it again.' },
+      { id: 'assistant', name: 'Assistant model', size: 'about 3.1 GB', free: 'about 4.1 GB',
+        what: 'Powers Ask (how-to questions and questions about your document) and AI suggestions when filling forms and creating profiles.',
+        note: 'Uses the processor; no graphics card needed.',
+        loses: 'Ask and AI suggestions will stop working until you download it again.' },
+      { id: 'images', name: 'Page images for the assistant', size: 'about 1 GB', free: 'about 1 GB',
+        what: 'Lets Ask look at the page itself, not just its text, so it can answer about scanned pages and layout such as checkboxes and stamps. Needs the assistant model.',
+        note: '',
+        loses: 'Ask will go back to reading only the text of a page.' }
+    ];
+    // How one model stands, from engine-status (st) and writer-status (ws)
+    function aiModelState(id, st, ws) {
+      if (id === 'scan') return st.installed ? { ready: true, text: 'Ready' + (!st.device ? '' : /^GPU/.test(st.device) ? ': uses the graphics card' : /^CPU \(/.test(st.device) ? ': uses the processor for now (the graphics card was busy)' : ': uses the processor, about a minute per page') } : st.hasFiles ? { update: true, text: 'Needs a small update for this version of Pagewise' } : { text: 'Not downloaded' };
+      if (id === 'assistant') return ws.installed ? { ready: true, text: 'Ready' } : { text: 'Not downloaded' };
+      return ws.vision && ws.installed ? { ready: true, text: 'Ready' } : { blocked: !ws.installed, text: ws.installed ? 'Not downloaded' : 'Download the assistant model first' };
+    }
+    function showEngineSetup(opts = {}) {
+      document.getElementById('engineSetupModal')?.remove();
+      const rows = {}, err = el('div', { className: 'aim-error' });
+      let busy = null;
+      const m = el('div', { className: 'modal-overlay', id: 'engineSetupModal' });
+      const body = el('div', { className: 'modal-body' });
+      if (opts.reason) body.append(el('div', { className: 'aim-reason', textContent: opts.reason }));
+      body.append(el('div', { className: 'aim-intro', textContent: 'Pagewise works without these. Each one adds features, runs entirely on this computer and is downloaded once. Nothing you open, fill or ask is sent online.' }));
+      for (const d of AI_MODELS) {
+        const bar = el('div', { className: 'aim-bar' }, el('div')), phase = el('div', { className: 'aim-phase' });
+        const r = rows[d.id] = { d, status: el('div', { className: 'aim-status' }), buttons: el('div', { className: 'aim-buttons' }), bar, phase };
+        r.node = el('div', { className: 'aim-row' + (opts.focus === d.id ? ' focus' : '') }, el('div', { className: 'aim-name' }, el('b', { textContent: d.name }), el('span', { textContent: ' (' + d.size + ')' })),
+          el('div', { className: 'aim-what', textContent: d.what }), ...(d.note ? [el('div', { className: 'aim-note', textContent: d.note })] : []), r.status, phase, bar, r.buttons);
+        body.append(r.node);
+      }
+      body.append(err);
+      const modal = el('div', { className: 'modal' }, el('div', { className: 'modal-header' }, el('span', { className: 'modal-title', textContent: 'AI Models' }), el('button', { className: 'modal-close', innerHTML: '&times;', onclick: () => m.remove() })), body);
+      m.append(modal); $('modalContainer').appendChild(m);
+      window.pdfAPI.onEngineProgress(pr => {
+        const r = busy && rows[busy]; if (!r || !m.isConnected) return;
+        r.bar.style.display = 'block'; r.bar.firstChild.style.width = Math.max(pr.pct, 0) + '%'; r.phase.textContent = pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : '');
       });
-      m.querySelector('#engineInstallBtn').onclick = async () => {
-        err(''); m.querySelector('#engineInstallBtn').disabled = true;
-        const r = await window.pdfAPI.engineInstall();
-        m.querySelector('#engineInstallBtn').disabled = false;
-        if (!r.success) err(r.error); else await refreshStatus();
+      const run = async (id, fn) => {
+        err.textContent = ''; busy = id; render();
+        const r = await fn(); busy = null;
+        if (!r.success) err.textContent = r.error;
+        else if (r.freedBytes != null) { const mb = r.freedBytes / 1048576; showNotification(rows[id].d.name + ' removed, ' + (mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB') + ' freed'); }
+        await render(); if (asst.open) refreshAssistantInfo();
       };
-      m.querySelector('#engineStartBtn').onclick = async () => {
-        err(''); m.querySelector('#engineStartBtn').textContent = 'Starting...';
-        if (!(await refreshStatus()).installed) { err('Not installed yet — download first.'); m.querySelector('#engineStartBtn').textContent = 'Test AI Model'; return; }
-        const r = await window.pdfAPI.engineStart();
-        m.querySelector('#engineStartBtn').textContent = 'Test AI Model';
-        if (!r.success) err(r.error); else { await refreshStatus(); showNotification('AI model running'); }
-      };
-      m.querySelector('#engineStopBtn').onclick = async () => { await window.pdfAPI.engineStop(); await refreshStatus(); };
-      m.querySelector('#engineRemoveBtn').onclick = async () => {
-        if (!confirm('Remove the AI reading model? This frees several GB. The AI features will need to download it again.')) return;
-        err(''); const r = await window.pdfAPI.engineRemove();
-        if (!r.success) err(r.error); else { const mb = r.freedBytes / 1048576; showNotification('AI reading model removed, ' + (mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB') + ' freed'); await refreshStatus(); }
-      };
-      (async () => { await refreshStatus(); progi = setInterval(refreshStatus, 3000);
-        const obs = new MutationObserver(() => { if (!document.getElementById('engineSetupModal')) { clearInterval(progi); obs.disconnect(); } });
-        obs.observe($('modalContainer'), { childList: true });
-      })();
+      const install = { scan: () => window.pdfAPI.engineInstall(), assistant: () => window.pdfAPI.writerInstall({ part: 'model' }), images: () => window.pdfAPI.writerInstall({ part: 'images' }) };
+      const remove = { scan: () => window.pdfAPI.engineRemove(), assistant: () => window.pdfAPI.writerRemove({ part: 'model' }), images: () => window.pdfAPI.writerRemove({ part: 'images' }) };
+      async function render() {
+        const [st, ws] = await Promise.all([window.pdfAPI.engineStatus(), window.pdfAPI.writerStatus()]);
+        if (!m.isConnected) return;
+        for (const [id, r] of Object.entries(rows)) {
+          const s = aiModelState(id, st, ws), working = busy === id;
+          r.status.textContent = working ? 'Working…' : s.text;
+          if (!working) { r.bar.style.display = 'none'; r.phase.textContent = ''; }
+          const btn = (label, cls, fn, disabled) => el('button', { className: 'modal-btn ' + cls, textContent: label, disabled: disabled || !!busy, onclick: fn });
+          r.buttons.replaceChildren(...(s.ready
+            ? [...(id === 'scan' ? [btn('Check it works', '', async () => { err.textContent = ''; r.status.textContent = 'Checking…'; const c = await window.pdfAPI.engineStart(); await window.pdfAPI.engineStop(); err.textContent = c.success ? '' : c.error; r.status.textContent = c.success ? 'Works' : s.text; })] : []),
+              btn('Remove', 'danger', () => { if (confirm('Remove the ' + r.d.name + '? ' + r.d.loses + ' This frees ' + r.d.free + '.')) run(id, remove[id]); })]
+            : [btn(s.update ? 'Update' : 'Download', 'primary', () => run(id, install[id]), s.blocked)]));
+        }
+      }
+      render();
     }
-
     async function showExtractResult(pages) {
       const text = pages.map(p => '## Page ' + p.page + '\n\n' + p.text).join('\n\n---\n\n');
       const tables = await window.pdfAPI.extractTables(pages);
@@ -848,12 +874,7 @@
     }
     async function runSmartExtract() {
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
-      const st = await window.pdfAPI.engineStatus();
-      if (!st.installed) {
-        showNotification(st.hasFiles ? 'The AI reading model needs an update (small download)' : 'This needs the AI reading model (one-time ~4.5GB download)', 'warning');
-        showEngineSetup();
-        return;
-      }
+      if (await needScanModel('Read Tables & Handwriting with AI')) return;
       showNotification('Reads the page into text you can copy or export, including tables (to CSV/Excel) and handwriting.');
       setLoading(true, 'Reading with AI: preparing...');
       try {
@@ -955,20 +976,14 @@
       if (r.cpuFallback) showNotification('GPU memory is full (other apps are using it); continuing on the CPU, which is slower', 'warning');
       return r.content || '';
     }
-    async function engineReady() {
-      const st = await window.pdfAPI.engineStatus();
-      if (st.installed) return true;
-      showNotification(st.hasFiles ? 'The AI reading model needs an update (small download)' : 'This needs the AI reading model (one-time ~4.5GB download)', 'warning');
-      showEngineSetup();
-      return false;
-    }
+    async function engineReady(feature) { return !(await needScanModel(feature)); }
     const savedName = r => r.paths[0].split(/[\\/]/).pop();
     async function showExportDocxDialog() {
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
       const total = state.pdfDoc.numPages, installed = (await window.pdfAPI.engineStatus()).installed;
       const content = '<div class="form-group"><label class="form-label">Pages (e.g. 1-3,5; leave empty for all ' + total + ')</label><input type="text" class="form-input" id="docxPages" placeholder="All"></div>' +
-        '<div class="form-group"><label class="form-label"><input type="checkbox" id="docxAi"' + (installed ? '' : ' disabled') + '> Use AI reading for every page (better tables and layout, slower)</label>' +
-        (installed ? '' : '<div class="form-label" style="margin-top:6px;opacity:0.7;">The AI reading model is not installed (Tools &rarr; Scanned Pages &rarr; Download AI Reading Model). Digital pages convert without it; scanned pages need it.</div>') + '</div>';
+        '<div class="form-group"><label class="form-label"><input type="checkbox" id="docxAi"' + (installed ? '' : ' disabled') + '> Use the Scan reading model for every page (better tables and layout, slower)</label>' +
+        (installed ? '' : '<div class="form-label" style="margin-top:6px;opacity:0.7;">The Scan reading model is not downloaded (Tools &rarr; AI Models). Digital pages convert without it; scanned pages need it.</div>') + '</div>';
       showModal('Export as Word Document', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Export', action: 'export', primary: true, handler: m => {
         const pages = parsePageRange(m.querySelector('#docxPages').value, total);
         if (!pages) { showNotification('Enter pages like 1-3,5 between 1 and ' + total, 'warning'); return 'keep-open'; }
@@ -987,7 +1002,7 @@
           let pageBlocks = null;
           if (!ai && tc.items.reduce((n, it) => n + it.str.replace(/\s/g, '').length, 0) >= 20) pageBlocks = blocksFromTextItems(tc.items, await pageFontStyles(page, tc));
           if (!pageBlocks) {
-            if (engineOk === null) { setLoading(false); engineOk = await engineReady(); setLoading(true, 'Word export: page ' + (k + 1) + ' of ' + pages.length + '...'); }
+            if (engineOk === null) { setLoading(false); engineOk = await engineReady('Word export of scanned pages'); setLoading(true, 'Word export: page ' + (k + 1) + ' of ' + pages.length + '...'); }
             if (!engineOk) { setLoading(false); return; }
             pageBlocks = await window.pdfAPI.markdownBlocks({ text: await aiReadPage(page, i) });
           }
@@ -1011,7 +1026,7 @@
       let pages = state.extractCache?.doc === state.pdfDoc ? state.extractCache.pages : null;
       try {
         if (!pages) {
-          if (!(await engineReady())) return;
+          if (!(await engineReady('Excel export of scanned pages'))) return;
           setLoading(true, 'Excel export: preparing engine...');
           pages = [];
           for (let i = 1; i <= state.pdfDoc.numPages; i++) {
@@ -2518,10 +2533,10 @@
         try {
           const st = await window.pdfAPI.writerStatus();
           if (!st.installed) {
-            if (!confirm('AI suggestions use a small language model that runs on your computer (CPU). This is a one-time download of about 4.1 GB. Nothing you type or fill leaves the computer.\n\nDownload it now?')) return;
+            if (!confirm('AI suggestions need the Assistant model, a one-time download of about 3.1 GB. It runs on this computer\'s processor, and nothing you type or fill is sent online. The same model also powers Ask. You can manage it later in Tools → AI Models.\n\nDownload it now?')) return;
             if (!progressBound) { progressBound = true; window.pdfAPI.onEngineProgress(pr => { if (installing) setLoading(true, pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : '')); }); }
-            installing = true; btn.disabled = true; setLoading(true, 'Downloading writing model...');
-            const ir = await window.pdfAPI.writerInstall();
+            installing = true; btn.disabled = true; setLoading(true, 'Downloading the assistant model...');
+            const ir = await window.pdfAPI.writerInstall({ part: 'model' });
             installing = false;
             if (!ir.success) { showNotification('Error: ' + ir.error, 'error'); btn.disabled = false; return; }
           }
@@ -2668,13 +2683,7 @@
           const page = await state.pdfDoc.getPage(i);
           let text = (await page.getTextContent()).items.map(it => it.str + (it.hasEOL ? '\n' : ' ')).join('');
           if (text.replace(/\s/g, '').length < 40) {
-            const st = await window.pdfAPI.engineStatus();
-            if (!st.installed) {
-              setLoading(false);
-              showNotification(st.hasFiles ? 'The AI reading model needs an update (small download)' : 'This needs the AI reading model (one-time ~4.5GB download)', 'warning');
-              showEngineSetup();
-              return;
-            }
+            if (await needScanModel('Reading a scanned page')) { setLoading(false); return; }
             $('loadingText').textContent = 'Reading page ' + i + ' of ' + n + ' with AI...';
             const vp = page.getViewport({ scale: await extractScale(page, pdfjsLib.OPS) });
             const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
@@ -2689,10 +2698,10 @@
         if (text.replace(/\s/g, '').length < 10) { showNotification('No text found in the document', 'warning'); return; }
         const st = await window.pdfAPI.writerStatus();
         if (!st.installed) {
-          if (!confirm('Reading details from a document uses a small language model that runs on your computer (CPU). This is a one-time download of about 4.1 GB. Nothing you type or fill leaves the computer.\n\nDownload it now?')) return;
+          if (!confirm('Reading details from a document needs the Assistant model, a one-time download of about 3.1 GB. It runs on this computer\'s processor, and nothing you type or fill is sent online. The same model also powers Ask. You can manage it later in Tools → AI Models.\n\nDownload it now?')) return;
           window.pdfAPI.onEngineProgress(pr => { if (installing) setLoading(true, pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : '')); });
-          installing = true; setLoading(true, 'Downloading writing model...');
-          const ir = await window.pdfAPI.writerInstall();
+          installing = true; setLoading(true, 'Downloading the assistant model...');
+          const ir = await window.pdfAPI.writerInstall({ part: 'model' });
           installing = false;
           if (!ir.success) throw new Error(ir.error);
         }
@@ -3535,7 +3544,7 @@
     const isLoopback = h => h === 'localhost' || h === '[::1]' || /^127\.\d+\.\d+\.\d+$/.test(h);
     function shortModel(n) { return !n ? 'none' : /built-in/i.test(n) ? 'Built-in' : n; }
     function assistantModelLabel(i) { return !i.help && !i.document ? 'No AI model set up' : 'How-to: ' + shortModel(i.help) + ' · Documents: ' + shortModel(i.document); }
-    // The image reader is offered only to someone with the built-in model for documents, who has the text model but not the image file, while asking about a page
+    // The page images are offered only to someone with the built-in model for documents, who has the text model but not the image file, while asking about a page
     function visionOfferVisible(info, scope) { return scope === 'page' && !!info && !!info.offerVision; }
     function updateVisionOffer() { $('assistantVision').classList.toggle('hidden', !visionOfferVisible(asst.info, asst.scope)); }
     async function refreshAssistantInfo() {
@@ -3565,7 +3574,7 @@
       set('document', true, state.pdfDoc ? 'Checking the length of the document' : 'Open a PDF first');
       if (state.pdfDoc && asst.info) {
         const seq = ++asst.seq, text = await assistantDocumentText();
-        if (seq === asst.seq) set('document', !text, text ? 'Ask about the whole document' : asst.info.docChars ? 'Too long for this model' : 'No AI model is set up for documents');
+        if (seq === asst.seq) set('document', !text, text ? 'Ask about the whole document' : asst.info.docChars ? 'Too long for this model' : 'No Assistant model is set up for documents');
       }
       const cur = document.querySelector('.a-chip[data-scope="' + asst.scope + '"]');
       if (cur && cur.disabled) setAssistantScope('help');
@@ -3666,7 +3675,7 @@
     function onAssistantEvent(kind, m) {
       const msg = asst.cur;
       if (!msg || m.id !== msg.id) return;
-      if (kind === 'status') { msg.label = m.phase === 'starting' ? 'Starting the AI model (first question takes longer)…' : m.phase === 'thinking' ? 'Thinking…' : msg.label; return; }
+      if (kind === 'status') { msg.label = m.phase === 'starting' ? 'Starting the Assistant model (first question takes longer)…' : m.phase === 'thinking' ? 'Thinking…' : msg.label; return; }
       if (kind === 'reasoning') { msg.reasoning.classList.remove('hidden'); msg.reasoningText.textContent += m.text; return; }
       if (kind === 'token') { stopAssistantProgress(msg); msg.text.textContent += m.text; msg.node.scrollIntoView({ block: 'end' }); return; }
       if (kind === 'error') { msg.text.textContent = m.error; msg.node.classList.add('note'); asst.history.push({ role: 'user', text: msg.question.slice(0, 2000) }, { role: 'assistant', text: m.error.slice(0, 2000) }); finishAssistant(msg); return; }
@@ -3683,17 +3692,17 @@
       finishAssistant(msg);
       msg.node.scrollIntoView({ block: 'end' });
     }
-    // The AI writing helper is not installed and no other model is set up: explain and offer both
+    // The Assistant model is not installed and no other model is set up: explain and offer both
     function showAssistantSetup() {
       const status = el('div', { className: 'a-status' });
-      const install = el('button', { className: 'a-action', textContent: 'Download the AI writing helper (about 4.1 GB)', onclick: async () => {
+      const install = el('button', { className: 'a-action', textContent: 'Download (about 4.1 GB)', onclick: async () => {
         install.disabled = true; status.textContent = 'Downloading…';
         window.pdfAPI.onEngineProgress(pr => { status.textContent = pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : ''); });
-        const r = await window.pdfAPI.writerInstall();
+        const r = await window.pdfAPI.writerInstall({ part: 'both' });
         if (!r.success) { status.textContent = 'Error: ' + r.error; install.disabled = false; return; }
         status.textContent = 'Installed. Ask your question again.'; await refreshAssistantInfo();
       } });
-      addAssistantNote('Ask answers questions with the AI writing helper: a small language model that runs on this computer (a one-time download of about 4.1 GB). Nothing you ask leaves the computer. You can also use a model of your own.', [el('div', { className: 'a-actions' }, install, el('button', { className: 'a-action', textContent: 'Use my own model…', onclick: showAssistantModelDialog }), status)]);
+      addAssistantNote('Ask needs the Assistant model: a one-time download of about 4.1 GB (3.1 GB for the model plus 1 GB so it can look at page images). It runs on this computer, and nothing you ask is sent online. It also powers AI suggestions in forms.', [el('div', { className: 'a-actions' }, install, el('button', { className: 'a-action', textContent: 'Use my own model…', onclick: showAssistantModelDialog }), status)]);
     }
     function showAssistantModelDialog() {
       const cur = (asst.info && asst.info.saved) || { url: 'http://127.0.0.1:8001', model: '', reasoning: 'server' };
@@ -3704,7 +3713,7 @@
         + '<div class="form-group"><button class="modal-btn" id="amTest">Test</button> <span id="amTestOut" style="font-size:12px"></span></div>'
         + '<div class="form-group hidden" id="amWarn" style="border-left:3px solid var(--warning);padding:8px 12px;font-size:12px"><b id="amWarnText"></b><br><label><input type="checkbox" id="amAck"> I understand</label></div></div>'
         + '<div id="amErr" style="color:var(--danger);font-size:12px"></div>';
-      const m = showModal('AI model for the assistant', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Save', action: 'save', primary: true, handler: modal => { saveAssistantModel(modal); return 'keep-open'; } }]);
+      const m = showModal('Model for Ask', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Save', action: 'save', primary: true, handler: modal => { saveAssistantModel(modal); return 'keep-open'; } }]);
       const q = id => m.querySelector('#' + id);
       q('amKind').value = asst.info && asst.info.custom ? 'custom' : 'builtin'; q('amUrl').value = cur.url; q('amModel').value = cur.model; q('amReason').checked = cur.reasoning !== 'off';
       const sync = () => {
@@ -3751,7 +3760,7 @@
       const btn = $('assistantVisionBtn'), text = $('assistantVisionText'), before = text.textContent;
       btn.disabled = true; text.textContent = 'Downloading…';
       window.pdfAPI.onEngineProgress(pr => { text.textContent = pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : ''); });
-      const r = await window.pdfAPI.writerInstall();
+      const r = await window.pdfAPI.writerInstall({ part: 'images' });
       btn.disabled = false; text.textContent = before;
       if (!r.success) { showNotification('Download failed: ' + r.error, 'error'); return; }
       await refreshAssistantInfo();

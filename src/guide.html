@@ -51,8 +51,8 @@
   <p><b>A form with no fields</b> (a flat PDF or a scan): <i>Forms → Detect Fields Automatically</i> finds the blank lines and boxes and makes them fillable, naming each after the text beside it. Right-click a field to remove it.</p>
   <p><b>Fix or add fields:</b> <i>Forms → Add Field</i> (Text Field, Checkbox or Dropdown), then drag on the page. <i>Forms → Move &amp; Resize Fields</i> lets you drag a field, drag its corner to resize it, or press Delete to remove it. Right-click a field and choose <i>Field Properties</i> to rename it or set multi-line, maximum length, font size, read-only, required and dropdown choices.</p>
   <p><b>Fill from Profile:</b> save your details once with <i>Forms → Manage Profiles...</i> (kept on this computer only). You can keep several, for example one for you and one for your spouse. <i>Forms → Fill from Profile</i> proposes a value for each matching field. Choose who you are filling as, and a spouse profile if the form has spouse fields, then review the list and untick anything you do not want. Social Security number and date of birth are never filled unless you tick them, and fields about other people (dependents, a requester) are left alone.</p>
-  <p><b>AI suggestions:</b> for fields your profile cannot fill, a <i>Suggest the rest with AI</i> button appears in that review window. It uses the optional AI writing helper (section 13) to guess answers or write short drafts from your profile. Suggestions are never ticked for you and are always yours to review; anything not found in your profile is flagged. The first use asks before downloading the helper.</p>
-  <p><b>Build a profile from what you have:</b> <i>Forms → Save Filled Answers to a Profile</i> turns the answers in a filled form into profile details. <i>Forms → Create Profile from This Document</i> reads an ID card, bill or letter (the first three pages; it needs the AI writing helper, and the AI reading model for scanned pages). Both end in a review window and save nothing until you click Save; Social Security number and date of birth start unticked.</p>
+  <p><b>AI suggestions:</b> for fields your profile cannot fill, a <i>Suggest the rest with AI</i> button appears in that review window. It uses the Assistant model (section 13) to guess answers or write short drafts from your profile. Suggestions are never ticked for you and are always yours to review; anything not found in your profile is flagged. The first use asks before downloading the model.</p>
+  <p><b>Build a profile from what you have:</b> <i>Forms → Save Filled Answers to a Profile</i> turns the answers in a filled form into profile details. <i>Forms → Create Profile from This Document</i> reads an ID card, bill or letter (the first three pages; it needs the Assistant model, and the Scan reading model for scanned pages). Both end in a review window and save nothing until you click Save; Social Security number and date of birth start unticked.</p>
   <p><b>Flatten:</b> <i>Forms → Flatten Form (make answers permanent)</i> turns the answers into ordinary page content. They can no longer be edited, and every PDF reader shows them the same way.</p>
 
   <h2>4. Signing</h2>
@@ -100,15 +100,15 @@
   <p>A scanned or photographed page is only a picture of text, so you cannot search or copy from it. The <i>Tools → Scanned Pages</i> menu fixes that. To make a scan searchable, use <i>Tools → Scanned Pages → Recognize Text (fast, built-in)</i>:</p>
   <table>
     <tr><th></th><th>Recognize Text (fast, built-in)</th><th>Recognize Text with AI (more accurate)</th><th>Read Tables &amp; Handwriting with AI</th></tr>
-    <tr><td><b>Result</b></td><td>Adds an invisible text layer. The page looks the same, but search and copy work.</td><td>Same invisible text layer, from the AI reading model.</td><td>Shows the page as text you can copy or save as Markdown, with tables you can copy or export to CSV / Excel. The PDF is not changed.</td></tr>
+    <tr><td><b>Result</b></td><td>Adds an invisible text layer. The page looks the same, but search and copy work.</td><td>Same invisible text layer, from the Scan reading model.</td><td>Shows the page as text you can copy or save as Markdown, with tables you can copy or export to CSV / Excel. The PDF is not changed.</td></tr>
     <tr><td><b>Best for</b></td><td>Clean typed or printed pages.</td><td>Poor scans, faxes, shadowed photos, unusual layouts. Slower.</td><td>Tables, columns, formulas and handwriting.</td></tr>
-    <tr><td><b>Needs</b></td><td>Nothing, apart from a one-time 15 MB language download.</td><td>The AI reading model (section 13).</td><td>The AI reading model (section 13).</td></tr>
+    <tr><td><b>Needs</b></td><td>Nothing, apart from a one-time 15 MB language download.</td><td>The Scan reading model (section 13).</td><td>The Scan reading model (section 13).</td></tr>
   </table>
   <p>If you are unsure, start with Recognize Text (fast). Use the AI versions when its result is poor or you need tables. A table that continues over several pages with the same header row is exported as one table. Cells that start like a spreadsheet formula (for example <code>=</code>) are saved with a leading <code>'</code> so opening the file cannot run them.</p>
 
   <h2>10. Converting and exporting</h2>
   <ul>
-    <li><i>File → Export → Word Document (.docx)...</i> and <i>Excel Workbook (.xlsx)...</i> convert the whole document or a page range. Digital pages convert directly; scanned pages (and every page, if you tick the AI option) use the AI reading model.</li>
+    <li><i>File → Export → Word Document (.docx)...</i> and <i>Excel Workbook (.xlsx)...</i> convert the whole document or a page range. Digital pages convert directly; scanned pages (and every page, if you tick the AI option) use the Scan reading model.</li>
     <li><i>File → Export → Export as Images (PNG)</i> / <i>(JPEG)</i> saves each page as a picture.</li>
     <li><i>File → Export → Export Selected Pages...</i> saves chosen pages as a new PDF.</li>
   </ul>
@@ -121,42 +121,42 @@
   <p><b>Redact:</b> use <i>Tools → Redact → Mark for Redaction</i>, drag over the content, then save. Applying redactions rebuilds the entire document from rendered images with opaque black masks, removing the original text, images and hidden objects. Text selection, forms, links, bookmarks and metadata are removed from the output. The app asks before applying this change; canceling Save keeps your pending edits.</p>
 
   <h2>13. Optional AI features</h2>
-  <p>The base app needs no downloads. Two optional AI models add extra abilities. Both run on this computer and nothing is sent online when you use them.</p>
+  <p>Pagewise works without these. Each one adds features, runs entirely on this computer and is downloaded once. Nothing you open, fill or ask is sent online. Manage all three in <i>Tools → AI Models...</i>.</p>
   <table>
-    <tr><th></th><th>AI reading model</th><th>AI writing helper</th></tr>
-    <tr><td><b>Size</b></td><td>about 4.5 GB</td><td>about 4.1 GB</td></tr>
-    <tr><td><b>Unlocks</b></td><td>Recognize Text with AI, Read Tables &amp; Handwriting with AI, Word / Excel export of scanned pages</td><td><i>Suggest the rest with AI</i> in Fill from Profile, and Create Profile from This Document</td></tr>
-    <tr><td><b>Hardware</b></td><td>Uses a graphics card when one can be found (Vulkan on Windows/Linux, Metal on Apple Silicon); otherwise the processor, which is much slower (about a minute per page). For Windows x64, Linux x64 and Macs.</td><td>Processor only; no graphics card needed.</td></tr>
-    <tr><td><b>Install</b></td><td><i>Tools → Scanned Pages → Download AI Reading Model...</i>, then <i>Download &amp; Install</i> and <i>Test AI Model</i>. The AI features also offer this when needed.</td><td>Offered the first time you use an AI suggestion; you can say no.</td></tr>
-    <tr><td><b>Remove</b></td><td>Same window, <i>Remove AI Model</i>.</td><td>The same <i>Remove AI Model</i> button deletes it too (both live in one folder). There is no separate button for it.</td></tr>
+    <tr><th></th><th>Scan reading model</th><th>Assistant model</th><th>Page images for the assistant</th></tr>
+    <tr><td><b>Size</b></td><td>about 4.5 GB</td><td>about 3.1 GB</td><td>about 1 GB (needs the assistant model)</td></tr>
+    <tr><td><b>Unlocks</b></td><td>Recognize Text with AI, Read Tables &amp; Handwriting with AI, Word / Excel export of scanned pages. It reads poor copies, faxes, tables, columns and handwriting.</td><td>Ask, and <i>Suggest the rest with AI</i> in Fill from Profile, and Create Profile from This Document.</td><td>Lets Ask look at the page itself, so it can answer about scanned pages and about checkboxes and stamps.</td></tr>
+    <tr><td><b>Hardware</b></td><td>Fast with a graphics card. Without one it uses the processor, about a minute per page.</td><td>Processor only; no graphics card needed.</td><td>Processor only.</td></tr>
+    <tr><td><b>Install</b></td><td><i>Tools → AI Models...</i>, then <i>Download</i>. Features that need it open this window for you.</td><td><i>Tools → AI Models...</i>, then <i>Download</i>. Ask and AI suggestions also offer it when needed.</td><td><i>Tools → AI Models...</i>, then <i>Download</i>. Ask also offers it on the This page scope.</td></tr>
+    <tr><td><b>Remove</b></td><td><i>Tools → AI Models...</i>, then <i>Remove</i>. This deletes only this model.</td><td><i>Tools → AI Models...</i>, then <i>Remove</i>. This also removes the page images.</td><td><i>Tools → AI Models...</i>, then <i>Remove</i>. The assistant model stays.</td></tr>
   </table>
-  <p>Each is downloaded once; after that it works offline. The writing helper also uses the program files that the reading model's installer fetches, so installing it first downloads those (a small extra).</p>
+  <p>Clean typed scans don't need any download: <i>Tools → Scanned Pages → Recognize Text (fast, built-in)</i> works on its own. The models share a small set of program files, which are removed when the last model is removed.</p>
 
-  <p><b>Ask the assistant:</b> <i>Help → Ask the Assistant...</i> (<kbd>Ctrl+Shift+A</kbd>) or the <i>Ask</i> button on the toolbar opens a chat. <i>How do I...</i> answers questions about the app from this guide and offers a button that opens the menu item it names; it uses the AI writing helper. <i>This page</i>, <i>Selection</i> and <i>Whole document</i> answer only from the text of your PDF and highlight the passages they quote; with the built-in model, <i>This page</i> also looks at the page picture, so scanned pages work too, though their answers cannot be checked against text. Answers can be wrong, so check important details. To use a larger model you run yourself, choose the pencil next to <i>Model</i> in the chat; questions about your documents are then sent to that server, so a server that is not on this computer asks you to confirm first.</p>
+  <p><b>Ask the assistant:</b> <i>Help → Ask the Assistant...</i> (<kbd>Ctrl+Shift+A</kbd>) or the <i>Ask</i> button on the toolbar opens a chat. <i>How do I...</i> answers questions about the app from this guide and offers a button that opens the menu item it names; it uses the Assistant model. <i>This page</i>, <i>Selection</i> and <i>Whole document</i> answer only from the text of your PDF and highlight the passages they quote; with the built-in model, <i>This page</i> also looks at the page picture, so scanned pages work too, though their answers cannot be checked against text. Answers can be wrong, so check important details. To use a larger model you run yourself, choose the pencil next to <i>Model</i> in the chat; questions about your documents are then sent to that server, so a server that is not on this computer asks you to confirm first.</p>
 
   <h2>14. Privacy, shortcuts, command line, troubleshooting</h2>
   <h3>Privacy</h3>
-  <p>Everything runs on your machine. There are no accounts, no telemetry, no cloud inference. Internet access is used only to download OCR language data and the optional AI models. The AI features use a local server bound to <code>127.0.0.1</code>. Profiles stay on this computer.</p>
+  <p>Everything runs on your machine. There are no accounts, no telemetry, no cloud inference. Internet access is used only to download OCR language data and the optional AI models (see section 13). The AI features use a local server bound to <code>127.0.0.1</code>. Profiles stay on this computer.</p>
 
   <h3>Keyboard shortcuts</h3>
   <p>Use <kbd>Cmd</kbd> instead of <kbd>Ctrl</kbd> on macOS. Full list: <i>Help → Keyboard Shortcuts</i> (<kbd>Ctrl+/</kbd>).</p>
   <p><kbd>Ctrl+O</kbd> open · <kbd>Ctrl+S</kbd> save · <kbd>Ctrl+F</kbd> find · <kbd>Ctrl+H</kbd> replace · <kbd>Ctrl+G</kbd> go to page · <kbd>V H T P E</kbd> select/hand/text/pen/eraser · <kbd>L A R C</kbd> line/arrow/rectangle/circle</p>
 
   <h3>Command line (for automation)</h3>
-  <p>Merge, split, encrypt, decrypt, document info and AI reading model commands are scriptable. Run <code>npm run cli -- ...</code> from the source folder, or the packaged binary followed by <code>cli</code>. Examples:</p>
+  <p>Merge, split, encrypt, decrypt, document info and Scan reading model commands are scriptable. Run <code>npm run cli -- ...</code> from the source folder, or the packaged binary followed by <code>cli</code>. Examples:</p>
   <p>
     <code>... cli merge out.pdf a.pdf b.pdf c.pdf</code><br>
     <code>... cli split doc.pdf --every 5</code> or <code>--ranges 1-3,5,7-10</code><br>
     <code>... cli encrypt doc.pdf --password secret</code><br>
     <code>... cli decrypt doc.pdf --password secret</code><br>
     <code>... cli info doc.pdf</code><br>
-    <code>... cli engine-extract page.png</code> (after the AI reading model is installed; add <code>--csv out.csv</code> to save tables)
+    <code>... cli engine-extract page.png</code> (after the Scan reading model is downloaded; add <code>--csv out.csv</code> to save tables)
   </p>
 
   <h3>Troubleshooting</h3>
   <ul>
     <li><b>Recognize Text says it needs language data</b> — allow internet once; it downloads about 15 MB and keeps it.</li>
-    <li><b>An AI feature says the AI reading model is not installed</b> — <i>Tools → Scanned Pages → Download AI Reading Model...</i> → <i>Download &amp; Install</i> (about 4.5 GB, once).</li>
+    <li><b>An AI feature says it needs a model</b> — the <i>AI Models</i> window opens for you. Choose <i>Download</i> on the highlighted model (once). You can also open it from <i>Tools → AI Models...</i>.</li>
     <li><b>AI reading is slow</b> — speed depends on the computer, the page and whether a graphics card is used. Processor-only reading can be much slower.</li>
     <li><b>Find or Replace finds nothing</b> — the page may be a scan; use Recognize Text first.</li>
     <li><b>Encrypted PDF won't open</b> — the editor needs the password; open it from <i>File → Open PDF</i> and enter it when asked.</li>

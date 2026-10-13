@@ -358,12 +358,11 @@ function buildMenuTemplate() {
               label: 'Read Tables && Handwriting with AI...',
               click: () => mainWindow.webContents.send('menu-smart-extract')
             },
-            { type: 'separator' },
-            {
-              label: 'Download AI Reading Model (4.5 GB)...',
-              click: () => mainWindow.webContents.send('menu-engine-setup')
-            }
           ]
+        },
+        {
+          label: 'AI Models...',
+          click: () => mainWindow.webContents.send('menu-engine-setup')
         },
         { type: 'separator' },
         {
@@ -1309,7 +1308,7 @@ async function startEngine() {
   if (engineAlive()) return { success: true, running: true, endpoint: `http://127.0.0.1:${ENGINE_PORT}` };
   engineProc = null; // a crashed engine counts as stopped
   const ep = enginePaths();
-  if (!engineInstalled()) return { success: false, error: 'Engine not installed' };
+  if (!engineInstalled()) return { success: false, error: 'The Scan reading model is not downloaded' };
   if (await engineHealthy()) return { success: true, running: true, endpoint: `http://127.0.0.1:${ENGINE_PORT}` };
   engineProc = require('child_process').spawn(ep.bin, [
     '-m', ep.model, '--mmproj', ep.mmproj,
@@ -1350,16 +1349,34 @@ function dirSize(dir) {
   return total;
 }
 
-// Deletes llama.cpp and the model; settings and OCR language data stay.
+// Deletes some model files. The llama-server program files are shared, so they go only when no model is left; settings and OCR language data stay.
+function removeModelFiles(files) {
+  const ep = enginePaths(), dir = ep.dir;
+  if (!fs.existsSync(dir)) return { success: true, freedBytes: 0 };
+  let freedBytes = 0;
+  // Retries cover a just-killed llama-server still holding files on Windows.
+  for (const f of files) { try { freedBytes += fs.lstatSync(f).size; } catch (e) { continue; } fs.rmSync(f, { force: true, maxRetries: 5, retryDelay: 500 }); }
+  if (![ep.model, ep.mmproj, writerPaths().model].some(f => fs.existsSync(f))) {
+    stopEngine(); stopWriter();
+    freedBytes += dirSize(dir);
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+  }
+  return { success: true, freedBytes };
+}
+// The Scan reading model
 function removeEngine() {
   try {
     stopEngine();
-    const dir = enginePaths().dir;
-    if (!fs.existsSync(dir)) return { success: true, freedBytes: 0 };
-    const freedBytes = dirSize(dir);
-    // Retries cover a just-killed llama-server still holding files on Windows.
-    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
-    return { success: true, freedBytes };
+    const ep = enginePaths();
+    return removeModelFiles([ep.model, ep.mmproj, ep.model + '.part', ep.mmproj + '.part']);
+  } catch (e) { return { success: false, error: e.message }; }
+}
+// The Assistant model (with the page images, which need it) or just the page images
+function removeWriter(part) {
+  try {
+    stopWriter();
+    const w = writerPaths(), v = visionPaths();
+    return removeModelFiles(part === 'images' ? [v.model, v.marker, v.part] : [w.model, w.marker, w.part, v.model, v.marker, v.part]);
   } catch (e) { return { success: false, error: e.message }; }
 }
 
@@ -1458,8 +1475,8 @@ function engineRequest(body) {
       res.setEncoding('utf8');
       res.on('data', c => out += c);
       res.on('end', () => {
-        try { const j = JSON.parse(out); if (j.error) reject(new Error('Engine error: ' + (j.error.message || JSON.stringify(j.error)))); else resolve({ success: true, content: (j.choices?.[0]?.message?.content || '').trim() }); }
-        catch (e) { reject(new Error('Bad engine response: ' + out.slice(0, 200))); }
+        try { const j = JSON.parse(out); if (j.error) reject(new Error('Scan reading model error: ' + (j.error.message || JSON.stringify(j.error)))); else resolve({ success: true, content: (j.choices?.[0]?.message?.content || '').trim() }); }
+        catch (e) { reject(new Error('Bad Scan reading model response: ' + out.slice(0, 200))); }
       });
     });
     req.on('error', reject);
@@ -1467,7 +1484,7 @@ function engineRequest(body) {
   });
 }
 
-ipcMain.handle('engine-status', () => ({ installed: engineInstalled(), hasFiles: fs.existsSync(enginePaths().dir), running: engineAlive(), device: engineCpuOnly ? 'CPU (GPU memory was full; stop the engine to retry the GPU)' : fs.existsSync(enginePaths().device) ? fs.readFileSync(enginePaths().device, 'utf8') : null, endpoint: `http://127.0.0.1:${ENGINE_PORT}` }));
+ipcMain.handle('engine-status', () => ({ installed: engineInstalled(), hasFiles: [enginePaths().model, enginePaths().mmproj].some(f => fs.existsSync(f)), running: engineAlive(), device: engineCpuOnly ? 'CPU (GPU memory was full; stop the engine to retry the GPU)' : fs.existsSync(enginePaths().device) ? fs.readFileSync(enginePaths().device, 'utf8') : null, endpoint: `http://127.0.0.1:${ENGINE_PORT}` }));
 ipcMain.handle('engine-install', async (event, opts) => { try { return await installEngine(opts || {}); } catch (e) { return { success: false, error: e.message }; } });
 ipcMain.handle('engine-start', async () => { try { return await startEngine(); } catch (e) { return { success: false, error: e.message }; } });
 ipcMain.handle('engine-stop', () => { engineCpuOnly = false; return stopEngine(); });
@@ -1506,16 +1523,19 @@ function sha256File(file) {
     fs.createReadStream(file).on('data', c => h.update(c)).on('end', () => resolve(h.digest('hex'))).on('error', reject);
   });
 }
-async function installWriter() {
+// part: 'model' (the Assistant model), 'images' (page images for the assistant; needs the model) or 'both'
+async function installWriter(part = 'both') {
+  if (!['model', 'images', 'both'].includes(part)) throw new Error('Unknown download');
   const ep = enginePaths(), wp = writerPaths();
+  if (part === 'images' && !writerInstalled()) throw new Error('Download the Assistant model first');
   if (!fs.existsSync(ep.dir)) fs.mkdirSync(ep.dir, { recursive: true });
-  if (!fs.existsSync(ep.bin)) await installEngine({ binaryOnly: true });
-  // Each file that is missing is fetched, checked and marked; an install that has only the model gets just the image file
-  for (const [spec, files, name, installed] of [[WRITER_MODEL, wp, 'writing model', writerInstalled], [WRITER_VISION, visionPaths(), 'image reader', visionInstalled]]) {
-    if (installed()) continue;
+  if (part !== 'images' && !fs.existsSync(ep.bin)) await installEngine({ binaryOnly: true });
+  // Each wanted file that is missing is fetched, checked and marked
+  for (const [spec, files, name, installed, wanted] of [[WRITER_MODEL, wp, 'assistant model', writerInstalled, part !== 'images'], [WRITER_VISION, visionPaths(), 'page images for the assistant', visionInstalled, part !== 'model']]) {
+    if (!wanted || installed()) continue;
     fs.rmSync(files.marker, { force: true });
     fs.rmSync(files.part, { force: true });
-    await downloadTo(spec.url, files.part, 'Downloading ' + name, { pct: -1 });
+    await downloadTo(spec.url, files.part, 'Downloading ' + (spec === WRITER_MODEL ? 'the ' : '') + name, { pct: -1 });
     let bad = null;
     if (fs.statSync(files.part).size !== spec.size) bad = `The downloaded ${name} has the wrong size`;
     else if (await sha256File(files.part) !== spec.sha256) bad = `The downloaded ${name} failed its checksum`;
@@ -1549,17 +1569,17 @@ function writerArgs(vision) {
 async function launchWriter(vision = false) {
   writerProc = null; // a crashed server counts as stopped
   const ep = enginePaths();
-  if (!fs.existsSync(ep.bin) || !writerInstalled()) return { success: false, error: 'The writing model is not installed' };
+  if (!fs.existsSync(ep.bin) || !writerInstalled()) return { success: false, error: 'The Assistant model is not installed' };
   if (await writerHealthy()) return { success: false, error: `Port ${WRITER_PORT} is already used by another program` };
   const proc = require('child_process').spawn(ep.bin, writerArgs(vision), { stdio: 'ignore' });
   writerProc = proc; writerVision = vision;
   for (let i = 0; i < 120; i++) {
-    if (proc.exitCode !== null) { writerProc = null; return { success: false, error: 'The writing model server exited immediately' }; }
+    if (proc.exitCode !== null) { writerProc = null; return { success: false, error: 'The Assistant model server exited immediately' }; }
     if (await writerHealthy()) return { success: true };
     await new Promise(r => setTimeout(r, 1000));
   }
   stopWriter();
-  return { success: false, error: 'The writing model server did not become healthy in 120s' };
+  return { success: false, error: 'The Assistant model server did not become healthy in 120s' };
 }
 function stopWriter() {
   if (writerProc) { try { writerProc.kill(); } catch (e) { /* already gone */ } writerProc = null; }
@@ -1573,8 +1593,8 @@ function writerRequest(body) {
       res.setEncoding('utf8');
       res.on('data', c => out += c);
       res.on('end', () => {
-        try { const j = JSON.parse(out); if (j.error) reject(new Error('Writing model error: ' + (j.error.message || JSON.stringify(j.error)))); else resolve(String(j.choices?.[0]?.message?.content || '').trim()); }
-        catch (e) { reject(new Error('Bad writing model response: ' + out.slice(0, 200))); }
+        try { const j = JSON.parse(out); if (j.error) reject(new Error('Assistant model error: ' + (j.error.message || JSON.stringify(j.error)))); else resolve(String(j.choices?.[0]?.message?.content || '').trim()); }
+        catch (e) { reject(new Error('Bad Assistant model response: ' + out.slice(0, 200))); }
       });
     });
     req.on('error', reject);
@@ -1597,15 +1617,8 @@ async function writerChat(body) {
   }
 }
 ipcMain.handle('writer-status', () => ({ installed: writerInstalled(), binary: fs.existsSync(enginePaths().bin), vision: visionInstalled() }));
-ipcMain.handle('writer-install', async () => { try { return await installWriter(); } catch (e) { return { success: false, error: e.message }; } });
-ipcMain.handle('writer-remove', () => {
-  try {
-    stopWriter();
-    const wp = writerPaths(), vp = visionPaths();
-    for (const f of [wp.model, wp.marker, wp.part, vp.model, vp.marker, vp.part]) fs.rmSync(f, { force: true, maxRetries: 5, retryDelay: 500 });
-    return { success: true };
-  } catch (e) { return { success: false, error: e.message }; }
-});
+ipcMain.handle('writer-install', async (event, r) => { try { return await installWriter(r && r.part ? r.part : 'both'); } catch (e) { return { success: false, error: e.message }; } });
+ipcMain.handle('writer-remove', (event, r) => removeWriter(r && r.part === 'images' ? 'images' : 'model'));
 
 // ---------- Assistant: answers "how do I...?" from the user guide, and questions about the page, selection or document ----------
 // Help answers come from retrieved guide excerpts (the built-in writing model when installed); document answers come from the text only, with quotes that are verified against it.
@@ -2148,7 +2161,7 @@ async function runAssistant(req, send, ctl) {
   if (!cfg) {
     // Nothing to ask the model, but the empty-page hint needs none
     if (page) { const plan = pagePlan({ ...req, image: null }, { kind: 'builtin' }, assistantBudget(8192), table); if (plan.early && plan.early.found === false && plan.early.actions) return plan.early; }
-    throw new Error('No AI model is available. Install the AI writing helper or set up your own model.');
+    throw new Error('No AI model is available. Download the Assistant model (Tools → AI Models...) or set up your own model.');
   }
   const bud = await budgetFor(cfg), plan = page ? pagePlan(req, cfg, bud, table) : helpPlan(req, cfg, bud);
   if (plan.early) return plan.early;
@@ -3371,7 +3384,7 @@ ipcMain.handle('ai-text-layer', async (event, { pngBase64 }) => {
     const tessWords = [];
     (data.blocks || []).forEach(b => b.paragraphs.forEach(pa => pa.lines.forEach(l => l.words.forEach(w => tessWords.push({ text: w.text, x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1 })))));
     const blocks = parseLayout((await smartExtract(pngBase64, LAYOUT_PROMPT)).content);
-    if (!blocks.length) return { success: false, error: 'The AI reading model returned no layout for this page' };
+    if (!blocks.length) return { success: false, error: 'The Scan reading model returned no layout for this page' };
     const img = nativeImage.createFromBuffer(buf);
     const merged = mergeLayout({ blocks, tessWords, gray: bgraToGray(img.getSize(), img.toBitmap()) });
     const count = s => merged.filter(w => w.source === s).length;

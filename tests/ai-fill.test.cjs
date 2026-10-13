@@ -168,14 +168,14 @@ test('writer-install keeps a verified model, writes the marker and reports insta
   assert.deepEqual(plain(await t.handlers.get('writer-status')()), { installed: false, binary: true, vision: false });
   const r = await t.handlers.get('writer-install')();
   assert.equal(r.success, true, r.error);
-  assert.deepEqual(plain(t.calls), [['https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/gemma-4-E2B-it-Q4_K_M.gguf', 'gemma-4-E2B-it-Q4_K_M.gguf.part', 'Downloading writing model'], ['https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/mmproj-F16.gguf', 'gemma-4-E2B-it-mmproj-F16.gguf.part', 'Downloading image reader']]);
+  assert.deepEqual(plain(t.calls), [['https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/gemma-4-E2B-it-Q4_K_M.gguf', 'gemma-4-E2B-it-Q4_K_M.gguf.part', 'Downloading the assistant model'], ['https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/mmproj-F16.gguf', 'gemma-4-E2B-it-mmproj-F16.gguf.part', 'Downloading page images for the assistant']]);
   assert.ok(fs.existsSync(t.model) && fs.existsSync(t.model + '.sha256-ok') && !fs.existsSync(t.model + '.part'));
   assert.deepEqual(plain(await t.handlers.get('writer-status')()), { installed: true, binary: true, vision: true });
   assert.equal((await t.handlers.get('writer-install')()).success, true);
   assert.equal(t.calls.length, 2, 'no second download');
   assert.equal((await t.handlers.get('writer-remove')()).success, true);
-  assert.deepEqual(plain(await t.handlers.get('writer-status')()), { installed: false, binary: true, vision: false });
-  assert.deepEqual(fs.readdirSync(t.dir).filter(f => f.includes('gemma')), []);
+  assert.deepEqual(plain(await t.handlers.get('writer-status')()), { installed: false, binary: false, vision: false }, 'no model left: the shared llama-server files go too');
+  assert.deepEqual((fs.existsSync(t.dir) ? fs.readdirSync(t.dir) : []).filter(f => f.includes('gemma')), []);
 });
 
 test('writer-install deletes a download whose checksum differs and fails', async () => {

@@ -302,6 +302,7 @@ test('runSmartExtract goes straight to extraction when the engine is installed b
   let setup = 0, extracted = 0;
   const page = { getViewport: ({ scale }) => ({ width: scale, height: scale }), render: () => ({ promise: Promise.resolve() }) };
   const { functions } = loadRendererFunctions(['runSmartExtract'], {
+    helperNames: ['needScanModel'],
     state: { pdfDoc: { numPages: 1, getPage: async () => page } },
     api: { engineStatus: async () => ({ installed: true, running: false }), smartExtract: async () => { extracted++; return { success: false, error: 'x' }; } },
     extra: {
@@ -315,15 +316,17 @@ test('runSmartExtract goes straight to extraction when the engine is installed b
 });
 
 test('runSmartExtract asks for an engine update when files exist but the install is outdated', async () => {
-  let setup = 0; const notes = [];
+  const setups = [];
   const { functions } = loadRendererFunctions(['runSmartExtract'], {
+    helperNames: ['needScanModel'],
     state: { pdfDoc: { numPages: 1 } },
     api: { engineStatus: async () => ({ installed: false, hasFiles: true }) },
-    extra: { setLoading: () => {}, showNotification: m => notes.push(m), showEngineSetup: () => { setup++; } }
+    extra: { setLoading: () => {}, showNotification: () => {}, showEngineSetup: o => setups.push(o) }
   });
   await functions.runSmartExtract();
-  assert.equal(setup, 1);
-  assert.match(notes[0], /AI reading model needs an update \(small download\)/);
+  assert.equal(setups.length, 1);
+  assert.equal(setups[0].focus, 'scan');
+  assert.match(setups[0].reason, /Scan reading model needs a small update/);
 });
 
 function extractResultHarness(tables, over = {}) {

@@ -728,7 +728,7 @@ test('installing fetches only the missing file; an existing install gets just th
   assert.equal((await t.handlers.get('writer-install')()).success, true);
   assert.equal(t.calls.length, 1, 'nothing more to fetch');
   assert.equal((await t.handlers.get('writer-remove')()).success, true);
-  assert.deepEqual(fs.readdirSync(t.dir).filter(f => f.includes('gemma')), [], 'remove deletes both files');
+  assert.deepEqual((fs.existsSync(t.dir) ? fs.readdirSync(t.dir) : []).filter(f => f.includes('gemma')), [], 'remove deletes both files');
 });
 
 test('a running server that already has the image reader is left alone', async () => {
@@ -747,13 +747,13 @@ test('an image reader download with the wrong checksum or size is deleted and re
   assert.equal(t.serve['gemma-4-E2B-it-mmproj-F16.gguf.part'].length, t.data.length);
   const r = await t.handlers.get('writer-install')();
   assert.equal(r.success, false);
-  assert.match(r.error, /image reader.*checksum/);
+  assert.match(r.error, /page images for the assistant.*checksum/);
   assert.deepEqual(fs.readdirSync(t.dir).filter(f => f.includes('mmproj')), []);
   assert.equal(t.m.visionInstalled(), false);
   assert.equal(t.m.writerInstalled(), true, 'the text model is untouched');
   t.serve['gemma-4-E2B-it-mmproj-F16.gguf.part'] = Buffer.from('short');
   const s = await t.handlers.get('writer-install')();
-  assert.match(s.error, /image reader.*size/);
+  assert.match(s.error, /page images for the assistant.*size/);
   assert.deepEqual(fs.readdirSync(t.dir).filter(f => f.includes('mmproj')), []);
 });
 
@@ -802,4 +802,138 @@ test('the drawer header says when no AI model is set up', () => {
   assert.equal(label({ help: null, document: null }), 'No AI model set up');
   assert.equal(label({ help: 'Gemma 4 E2B (built-in)', document: 'big' }), 'How-to: Built-in · Documents: big');
   assert.equal(label({ help: null, document: 'big' }), 'How-to: none · Documents: big');
+});
+
+// ---------- AI Models: downloads and removal, one model at a time ----------
+const IMAGES_FILE = 'gemma-4-E2B-it-mmproj-F16.gguf', MODEL_FILE = 'gemma-4-E2B-it-Q4_K_M.gguf';
+function modelsBoot({ assistant = true, images = false, scan = true } = {}) {
+  const t = visionBoot({ model: assistant });
+  const sha = crypto.createHash('sha256').update(t.data).digest('hex'), put = (name, data = t.data) => fs.writeFileSync(path.join(t.dir, name), data);
+  if (images) { put(IMAGES_FILE); put(IMAGES_FILE + '.sha256-ok', sha); }
+  if (scan) { put('dots-ocr-text-Q8_0.gguf', Buffer.alloc(30)); put('dots-ocr-mmproj.gguf', Buffer.alloc(20)); put('device.txt', 'CPU'); }
+  t.has = name => fs.existsSync(path.join(t.dir, name));
+  t.bin = process.platform === 'win32' ? 'llama-server.exe' : 'llama-server';
+  return t;
+}
+
+test('writer-install downloads only the part asked for, and page images need the assistant model first', async () => {
+  const install = (t, part) => t.handlers.get('writer-install')(null, part ? { part } : undefined);
+  let t = modelsBoot({ assistant: false, scan: false });
+  assert.equal((await install(t, 'model')).success, true);
+  assert.deepEqual(t.calls, [MODEL_FILE + '.part'], 'only the model');
+  assert.equal(t.m.visionInstalled(), false);
+  t = modelsBoot({ assistant: false, scan: false });
+  const r = await install(t, 'images');
+  assert.equal(r.success, false);
+  assert.match(r.error, /Assistant model first/);
+  assert.deepEqual(t.calls, [], 'nothing was downloaded');
+  t = modelsBoot({ scan: false });
+  assert.equal((await install(t, 'images')).success, true);
+  assert.deepEqual(t.calls, [IMAGES_FILE + '.part'], 'only the images');
+  t = modelsBoot({ assistant: false, scan: false });
+  assert.equal((await install(t)).success, true);
+  assert.deepEqual(t.calls, [MODEL_FILE + '.part', IMAGES_FILE + '.part'], 'both is the default');
+  t = modelsBoot({ scan: false });
+  assert.equal((await install(t, 'both')).success, true);
+  assert.deepEqual(t.calls, [IMAGES_FILE + '.part'], 'both fetches what is missing');
+  assert.equal((await install(modelsBoot({ scan: false }), 'everything')).success, false);
+});
+
+test('removing the Assistant model leaves the Scan reading model and the program files', async () => {
+  const t = modelsBoot({ images: true });
+  vm.runInContext('writerProc = { exitCode: null, signalCode: null, kill() {} }', t.m);
+  const r = plain(await t.handlers.get('writer-remove')(null, { part: 'model' }));
+  assert.equal(r.success, true);
+  assert.ok(r.freedBytes >= 2 * t.data.length && r.freedBytes < 2 * t.data.length + 200, 'the model and the page images (and their markers)');
+  assert.ok(!t.has(MODEL_FILE) && !t.has(MODEL_FILE + '.sha256-ok') && !t.has(IMAGES_FILE) && !t.has(IMAGES_FILE + '.sha256-ok'));
+  assert.ok(t.has('dots-ocr-text-Q8_0.gguf') && t.has('dots-ocr-mmproj.gguf') && t.has('device.txt') && t.has(t.bin), 'the scan model and llama-server stay');
+  assert.equal(vm.runInContext('writerProc', t.m), null, 'its server was stopped');
+  assert.equal(plain(await t.handlers.get('engine-status')()).installed, true);
+});
+
+test('removing the Scan reading model leaves the Assistant model and the program files', async () => {
+  const t = modelsBoot({ images: true });
+  const r = plain(await t.handlers.get('engine-remove')());
+  assert.deepEqual([r.success, r.freedBytes], [true, 50]);
+  assert.ok(!t.has('dots-ocr-text-Q8_0.gguf') && !t.has('dots-ocr-mmproj.gguf'));
+  assert.ok(t.has(MODEL_FILE) && t.has(IMAGES_FILE) && t.has(t.bin), 'the assistant model, its page images and llama-server stay');
+  assert.equal(plain(await t.handlers.get('writer-status')()).installed, true);
+  assert.ok(t.has('device.txt'), 'device.txt belongs to the program files and stays');
+  assert.equal(plain(await t.handlers.get('engine-status')()).hasFiles, false, 'so the row says Not downloaded, not Needs an update');
+});
+
+test('the program files go when the last model is removed, in either order', async () => {
+  let t = modelsBoot();
+  await t.handlers.get('writer-remove')(null, { part: 'model' });
+  assert.ok(t.has(t.bin));
+  await t.handlers.get('engine-remove')();
+  assert.equal(fs.existsSync(t.dir), false, 'scan model last');
+  t = modelsBoot();
+  await t.handlers.get('engine-remove')();
+  assert.ok(t.has(t.bin));
+  const r = plain(await t.handlers.get('writer-remove')(null, { part: 'model' }));
+  assert.equal(fs.existsSync(t.dir), false, 'assistant model last');
+  assert.ok(r.freedBytes >= t.data.length, 'the space counted includes the program files');
+  t = modelsBoot({ scan: false });
+  await t.handlers.get('writer-remove')(null, { part: 'model' });
+  assert.equal(fs.existsSync(t.dir), false, 'the only model');
+});
+
+test('removing the page images leaves the Assistant model', async () => {
+  const t = modelsBoot({ images: true, scan: false });
+  const r = plain(await t.handlers.get('writer-remove')(null, { part: 'images' }));
+  assert.equal(r.success, true);
+  assert.ok(r.freedBytes >= t.data.length && r.freedBytes < t.data.length + 100, 'only the page images');
+  assert.ok(!t.has(IMAGES_FILE) && !t.has(IMAGES_FILE + '.sha256-ok'));
+  assert.ok(t.has(MODEL_FILE) && t.has(t.bin));
+  assert.deepEqual(plain(await t.handlers.get('writer-status')()), { installed: true, binary: true, vision: false });
+});
+
+test('the Scan reading model counts as "needs an update" only when its own files are there', async () => {
+  const t = modelsBoot({ scan: false });
+  fs.writeFileSync(path.join(t.dir, 'device.txt'), 'CPU'); // the assistant install fetches the program files, which writes this
+  assert.equal(plain(await t.handlers.get('engine-status')()).hasFiles, false, 'llama-server and device.txt alone are not an old scan model');
+  const { functions } = loadRendererFunctions(['aiModelState']);
+  const s = functions.aiModelState;
+  assert.deepEqual(plain(s('scan', { installed: false, hasFiles: false }, {})), { text: 'Not downloaded' });
+  assert.equal(plain(s('scan', { installed: false, hasFiles: true }, {})).update, true);
+  assert.equal(plain(s('scan', { installed: true, device: 'GPU (AMD Ryzen 7 9800X3D 8-Core Processor, NVIDIA GeForce RTX 5060 Ti)' }, {})).text, 'Ready: uses the graphics card', 'no raw device names');
+  assert.equal(plain(s('scan', { installed: true, device: 'CPU' }, {})).text, 'Ready: uses the processor, about a minute per page');
+  assert.equal(plain(s('scan', { installed: true, device: 'CPU (GPU memory was full; stop the engine to retry the GPU)' }, {})).text, 'Ready: uses the processor for now (the graphics card was busy)');
+  assert.equal(plain(s('assistant', {}, { installed: true })).ready, true);
+  assert.equal(plain(s('images', {}, { installed: false })).blocked, true, 'page images wait for the assistant model');
+  assert.equal(plain(s('images', {}, { installed: true, vision: false })).blocked, false);
+  assert.equal(plain(s('images', {}, { installed: true, vision: true })).ready, true);
+});
+
+test('a feature that needs the Scan reading model opens the AI Models window at that row, with the reason', async () => {
+  const run = async st => {
+    const shown = [], { functions } = loadRendererFunctions(['needScanModel'], { api: { engineStatus: async () => st }, extra: { showEngineSetup: o => shown.push(plain(o)) } });
+    return { needed: await functions.needScanModel('Recognize Text with AI'), shown };
+  };
+  assert.deepEqual(await run({ installed: false, hasFiles: false }), { needed: true, shown: [{ focus: 'scan', reason: 'Recognize Text with AI needs the Scan reading model.' }] });
+  assert.deepEqual(await run({ installed: false, hasFiles: true }), { needed: true, shown: [{ focus: 'scan', reason: 'The Scan reading model needs a small update for this version of Pagewise.' }] });
+  assert.deepEqual(await run({ installed: true }), { needed: false, shown: [] });
+});
+
+test('AI Models is a Tools menu item, and the old download item is gone', () => {
+  const { handlers, m } = boot();
+  const paths = plain(m.buildMenuTable()).map(e => e.path);
+  assert.ok(paths.includes('Tools → AI Models...'));
+  assert.ok(!paths.some(p => /Download AI Reading Model/.test(p)));
+  const sent = [];
+  m.mainWindow = { webContents: { send: (...a) => sent.push(a) } };
+  vm.runInContext('mainWindow = this.mainWindow', m);
+  assert.deepEqual(plain(handlers.get('assistant-run-menu')(null, { path: 'Tools → AI Models...' })), { success: true });
+  assert.deepEqual(sent, [['menu-engine-setup']]);
+});
+
+test('AI suggestions and Create Profile download only the Assistant model; Ask setup gets both and the page images offer only the images', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/index.html'), 'utf8');
+  const calls = [...html.matchAll(/writerInstall\(([^)]*)\)/g)].map(c => c[1].replace(/\s+/g, ' '));
+  assert.equal(calls.filter(c => c === "{ part: 'model' }").length, 3, 'two prompts and the window row');
+  assert.equal(calls.filter(c => c === "{ part: 'both' }").length, 1, 'the Ask setup note');
+  assert.equal(calls.filter(c => c === "{ part: 'images' }").length, 2, 'the window row and the Ask offer');
+  assert.equal(calls.length, 6, 'every call names its part');
+  assert.ok(!/AI reading model|AI writing helper|image reader/i.test(html), 'the old names are gone from the app');
 });

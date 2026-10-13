@@ -10,7 +10,7 @@
     {"q": "remove a page", "expectPath": "Page → Delete Page", "expectPassage": "Page → Delete Page", "expectAny": ["delete page"]},
     {"q": "how do I reply to a comment", "expectPath": null, "expectPassage": "Comments panel", "expectAny": ["reply"]},
     {"q": "what does flatten mean", "expectPath": "Forms → Flatten Form (make answers permanent)", "expectPassage": "Forms → Flatten Form (make answers permanent)", "expectAny": ["permanent", "ordinary page content"]},
-    {"q": "where do I download the AI thing", "expectPath": "Tools → Scanned Pages → Download AI Reading Model (4.5 GB)...", "expectPassage": "Download AI Reading Model", "expectAny": ["download"]},
+    {"q": "where do I download the AI thing", "expectPath": "Tools → AI Models...", "expectPassage": "Tools → AI Models...", "expectAny": ["download"]},
     {"q": "split a pdf into separate files every 5 pages", "expectPath": "File → Split PDF...", "expectPassage": "File → Split PDF...", "expectAny": ["split pdf"]},
     {"q": "change a word inside the pdf itself", "expectPath": "Edit → Find & Replace...", "expectPassage": "Edit → Find & Replace...", "expectAny": ["replace"]},
     {"q": "how can i search for a word", "expectPath": "Edit → Find", "expectPassage": "Edit → Find", "expectAny": ["find"]},
