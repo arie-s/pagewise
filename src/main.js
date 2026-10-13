@@ -1523,7 +1523,6 @@ async function installWriter() {
     fs.renameSync(files.part, files.model);
     fs.writeFileSync(files.marker, spec.sha256);
   }
-  if (writerAlive() && !writerVision && visionInstalled()) stopWriter(); // the next request starts it with the image reader
   if (mainWindow) mainWindow.webContents.send('engine-progress', { phase: 'Done', pct: 100 });
   return { success: true };
 }
@@ -1535,22 +1534,25 @@ function writerHealthy() {
     req.end();
   });
 }
-function startWriter() {
-  if (writerAlive() && !writerStarting) return Promise.resolve({ success: true });
-  if (!writerStarting) writerStarting = launchWriter().finally(() => { writerStarting = null; });
+// The image reader costs ~1 GB of RAM, so it is loaded only once a request needs it (a ~2 s restart); after that the server keeps it
+function startWriter(vision = false) {
+  const want = vision && visionInstalled();
+  if (writerStarting) return writerStarting.then(r => r.success === false || !want || writerVision ? r : startWriter(vision));
+  if (writerAlive()) { if (!want || writerVision) return Promise.resolve({ success: true }); stopWriter(); }
+  writerStarting = launchWriter(want).finally(() => { writerStarting = null; });
   return writerStarting;
 }
-function writerArgs() {
-  return ['-m', writerPaths().model, ...(visionInstalled() ? ['--mmproj', visionPaths().model] : []), '--host', '127.0.0.1', '--port', String(WRITER_PORT),
+function writerArgs(vision) {
+  return ['-m', writerPaths().model, ...(vision ? ['--mmproj', visionPaths().model] : []), '--host', '127.0.0.1', '--port', String(WRITER_PORT),
     '-ngl', '0', '--device', 'none', '-c', '8192', '-np', '1', '--jinja', '--no-webui'];
 }
-async function launchWriter() {
+async function launchWriter(vision = false) {
   writerProc = null; // a crashed server counts as stopped
   const ep = enginePaths();
   if (!fs.existsSync(ep.bin) || !writerInstalled()) return { success: false, error: 'The writing model is not installed' };
   if (await writerHealthy()) return { success: false, error: `Port ${WRITER_PORT} is already used by another program` };
-  const proc = require('child_process').spawn(ep.bin, writerArgs(), { stdio: 'ignore' });
-  writerProc = proc; writerVision = visionInstalled();
+  const proc = require('child_process').spawn(ep.bin, writerArgs(vision), { stdio: 'ignore' });
+  writerProc = proc; writerVision = vision;
   for (let i = 0; i < 120; i++) {
     if (proc.exitCode !== null) { writerProc = null; return { success: false, error: 'The writing model server exited immediately' }; }
     if (await writerHealthy()) return { success: true };
@@ -1942,8 +1944,9 @@ function makeCtl() { const ctl = { aborted: false, req: null, abort() { ctl.abor
 async function assistantStream(cfg, body, onEvent, ctl, send) {
   if (cfg.kind === 'builtin') {
     const full = modelBody(cfg, body), url = `http://127.0.0.1:${WRITER_PORT}/v1/chat/completions`;
-    if (!writerAlive()) send('assistant-status', { phase: 'starting' });
-    const s = await startWriter();
+    const vision = body.messages.some(m => Array.isArray(m.content) && m.content.some(p => p.type === 'image_url'));
+    if (!writerAlive() || (vision && !writerVision)) send('assistant-status', { phase: 'starting' });
+    const s = await startWriter(vision);
     if (s.success === false) throw new Error(s.error);
     if (ctl.aborted) throw stoppedError();
     let got = false;
@@ -1953,7 +1956,7 @@ async function assistantStream(cfg, body, onEvent, ctl, send) {
       // Restart once if the server died mid-request
       if (got || ctl.aborted || !writerProc || !(writerProc.exitCode !== null || /ERR_CONNECTION|ERR_EMPTY_RESPONSE/i.test(e.message))) throw e;
       stopWriter();
-      const r = await startWriter();
+      const r = await startWriter(vision);
       if (r.success === false) throw new Error(r.error);
       return await streamRequest(url, full, on, ctl);
     }

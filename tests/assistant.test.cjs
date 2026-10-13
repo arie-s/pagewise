@@ -658,17 +658,47 @@ test('the image counts about 1000 tokens, not its base64 length, in the room lef
   assert.equal(get(m, 'BUILTIN_IMAGE_TOKENS'), 1000);
 });
 
-test('the server is launched with the image reader only when it is installed', () => {
+test('the server is launched with the image reader only when asked for it', () => {
   const { m } = boot();
-  m.visionInstalled = () => false;
-  const none = plain(m.writerArgs());
+  const none = plain(m.writerArgs(false));
   assert.ok(!none.includes('--mmproj'));
   assert.equal(none[0], '-m');
-  m.visionInstalled = () => true;
-  const args = plain(m.writerArgs());
+  const args = plain(m.writerArgs(true));
   assert.equal(args[args.indexOf('--mmproj') + 1], plain(m.visionPaths()).model);
   assert.match(args[args.indexOf('--mmproj') + 1], /gemma-4-E2B-it-mmproj-F16\.gguf$/);
   assert.notEqual(plain(m.visionPaths()).model, plain(m.enginePaths()).mmproj, 'it does not collide with the reading model\'s projector');
+});
+
+test('the image reader is loaded only when a request needs it, and kept after that', async () => {
+  const { m } = boot();
+  const launches = [];
+  vm.runInContext('writerProc = null; writerVision = false', m);
+  m.launchWriter = async v => { launches.push(v); vm.runInContext(`writerProc = { exitCode: null, signalCode: null, kill() {} }; writerVision = ${v}`, m); return { success: true }; };
+  m.visionInstalled = () => true;
+  await m.startWriter();
+  assert.deepEqual(launches, [false], 'text requests (help, form suggestions) start without it');
+  await m.startWriter();
+  assert.deepEqual(launches, [false], 'a running server is reused');
+  await m.startWriter(true);
+  assert.deepEqual(launches, [false, true], 'the first image request restarts it with the image reader');
+  await m.startWriter();
+  await m.startWriter(true);
+  assert.deepEqual(launches, [false, true], 'after that both kinds of request use it');
+  vm.runInContext('writerProc = null; writerVision = false', m);
+  m.visionInstalled = () => false;
+  await m.startWriter(true);
+  assert.deepEqual(launches, [false, true, false], 'not installed: an image request starts it without');
+});
+test('a page question with the image asks the server for the image reader; text questions do not', async () => {
+  const { m } = boot();
+  const wanted = [];
+  m.startWriter = async v => { wanted.push(!!v); return { success: true }; };
+  m.streamRequest = async () => '';
+  vm.runInContext('writerProc = { exitCode: null, signalCode: null, kill() {} }; writerVision = false', m);
+  const ctl = m.makeCtl();
+  await m.assistantStream({ kind: 'builtin' }, { messages: [{ role: 'user', content: 'hi' }] }, () => {}, ctl, () => {});
+  await m.assistantStream({ kind: 'builtin' }, { messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }, { type: 'text', text: 'q' }] }] }, () => {}, ctl, () => {});
+  assert.deepEqual(wanted, [false, true]);
 });
 
 function visionBoot({ model = true } = {}) {
@@ -684,7 +714,7 @@ function visionBoot({ model = true } = {}) {
   return t;
 }
 
-test('installing fetches only the missing file; an existing install gets just the image reader, and a running server restarts to use it', async () => {
+test('installing fetches only the missing file; an existing install gets just the image reader, and a running server is left alone', async () => {
   const t = visionBoot();
   assert.equal(t.m.writerInstalled(), true);
   assert.equal(t.m.visionInstalled(), false);
@@ -693,7 +723,7 @@ test('installing fetches only the missing file; an existing install gets just th
   assert.deepEqual(t.calls, ['gemma-4-E2B-it-mmproj-F16.gguf.part']);
   assert.equal(t.m.visionInstalled(), true);
   assert.ok(fs.existsSync(path.join(t.dir, 'gemma-4-E2B-it-mmproj-F16.gguf.sha256-ok')));
-  assert.equal(vm.runInContext('writerProc', t.m), null, 'the server without the image reader was stopped');
+  assert.notEqual(vm.runInContext('writerProc', t.m), null, 'the running server keeps going; the next question with an image restarts it with the image reader');
   assert.equal(t.m.writerInstalled(), true, 'the text model alone still counts as installed');
   assert.equal((await t.handlers.get('writer-install')()).success, true);
   assert.equal(t.calls.length, 1, 'nothing more to fetch');
