@@ -469,6 +469,10 @@ function createWindow() {
           click: () => mainWindow.webContents.send('menu-autofill')
         },
         {
+          label: 'Sign Document...',
+          click: () => mainWindow.webContents.send('menu-sign-document')
+        },
+        {
           label: 'Save Answers to Profile',
           click: () => mainWindow.webContents.send('menu-save-answers')
         },
@@ -837,6 +841,12 @@ function jpegOrientation(buf) {
     }
   } catch (e) {}
   return 1;
+}
+// PNG or JPEG by magic bytes, whatever the caller says the data is
+async function embedImage(doc, buffer) {
+  if (buffer.length > 4 && buffer.readUInt32BE(0) === 0x89504E47) return doc.embedPng(buffer);
+  if (buffer.length > 3 && buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) return doc.embedJpg(buffer);
+  throw new Error('Unsupported image: only PNG and JPEG can be placed');
 }
 async function imagesToPdf(images) {
   const doc = await PDFDocument.create();
@@ -2004,6 +2014,24 @@ function cleanDetails(raw) {
   }
   return out;
 }
+const MAX_SIGNATURES = 10, MAX_SIGNATURE_BYTES = 2 * 1024 * 1024, MAX_SIGNATURE_DIM = 2000;
+// Throws on anything that is not a PNG within the limits; returns the decoded size
+function checkSignaturePng(png) {
+  if (typeof png !== 'string' || png.length > Math.ceil(MAX_SIGNATURE_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(png)) throw new Error('The signature image is not valid PNG data of at most 2 MB');
+  const buf = Buffer.from(png, 'base64');
+  if (buf.length < 33 || buf.length > MAX_SIGNATURE_BYTES || buf.readUInt32BE(0) !== 0x89504E47 || buf.readUInt32BE(4) !== 0x0D0A1A0A || buf.toString('latin1', 12, 16) !== 'IHDR') throw new Error('The signature image must be a PNG of at most 2 MB');
+  const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
+  if (w < 1 || h < 1 || w > MAX_SIGNATURE_DIM || h > MAX_SIGNATURE_DIM) throw new Error(`The signature image can be at most ${MAX_SIGNATURE_DIM} pixels wide or tall`);
+  return { w, h };
+}
+// null when invalid: a saved signature that fails the checks is dropped rather than making the whole store unreadable
+function cleanSignature(s) {
+  try {
+    if (!s || typeof s !== 'object' || !['signature', 'initials'].includes(s.kind)) return null;
+    const { w, h } = checkSignaturePng(s.png);
+    return { id: typeof s.id === 'string' && s.id.length > 0 && s.id.length <= 100 ? s.id : require('crypto').randomUUID(), kind: s.kind, png: s.png, w, h, created: Number.isFinite(s.created) ? s.created : Date.now() };
+  } catch (e) { return null; }
+}
 // Throws on anything invalid; unknown ids in lastSelf/lastSpouse become null
 function cleanStore(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
@@ -2022,7 +2050,12 @@ function cleanStore(raw) {
     profiles.push({ id, name, details: cleanDetails(p.details) });
   }
   const known = v => (typeof v === 'string' && ids.has(v) ? v : null);
-  return { profiles, lastSelf: known(src.lastSelf), lastSpouse: known(src.lastSpouse) };
+  const signatures = [], sigIds = new Set();
+  for (const sig of Array.isArray(src.signatures) ? src.signatures : []) {
+    const c = cleanSignature(sig);
+    if (c && !sigIds.has(c.id) && signatures.length < MAX_SIGNATURES) { sigIds.add(c.id); signatures.push(c); }
+  }
+  return { profiles, lastSelf: known(src.lastSelf), lastSpouse: known(src.lastSpouse), signatures };
 }
 function writeStore(store) {
   const encrypted = canEncrypt();
@@ -2031,7 +2064,7 @@ function writeStore(store) {
   fs.writeFileSync(profilesPath(), JSON.stringify(file), { mode: 0o600 });
   return encrypted;
 }
-const emptyStore = () => ({ profiles: [], lastSelf: null, lastSpouse: null });
+const emptyStore = () => ({ profiles: [], lastSelf: null, lastSpouse: null, signatures: [] });
 // Reads the v1 single-record file; null when it is missing or unreadable
 function readOldDetails() {
   try {
@@ -2064,11 +2097,11 @@ function loadStore() {
   }
 }
 function saveStore(raw) {
-  const store = cleanStore(raw);
+  const store = cleanStore(raw.signatures === undefined ? { ...raw, signatures: loadStore().signatures } : raw); // callers that only touch profiles keep the saved signatures
   return { store, encrypted: writeStore(store) };
 }
 ipcMain.handle('profiles-get', async () => {
-  try { return { success: true, ...loadStore() }; } catch (error) { return { success: false, error: error.message }; }
+  try { const { signatures, ...store } = loadStore(); return { success: true, ...store }; } catch (error) { return { success: false, error: error.message }; }
 });
 ipcMain.handle('profiles-set', async (event, { profiles, lastSelf, lastSpouse } = {}) => {
   try { const { encrypted } = saveStore({ profiles, lastSelf, lastSpouse }); return { success: true, encrypted }; } catch (error) { return { success: false, error: error.message }; }
@@ -2076,9 +2109,33 @@ ipcMain.handle('profiles-set', async (event, { profiles, lastSelf, lastSpouse } 
 // Remember the last chosen profiles without touching profile data
 ipcMain.handle('profiles-remember', async (event, { lastSelf, lastSpouse } = {}) => {
   try {
-    const { profiles, warning } = loadStore();
+    const { profiles, signatures, warning } = loadStore();
     if (warning) throw new Error(warning);
-    saveStore({ profiles, lastSelf, lastSpouse });
+    saveStore({ profiles, signatures, lastSelf, lastSpouse });
+    return { success: true };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+// Saved signatures and initials live in the same (encrypted when possible) store as the profiles
+ipcMain.handle('signatures-get', async () => {
+  try { const { signatures, warning } = loadStore(); return { success: true, signatures, warning }; } catch (error) { return { success: false, error: error.message }; }
+});
+ipcMain.handle('signatures-add', async (event, { kind, png } = {}) => {
+  try {
+    const sig = cleanSignature({ kind, png });
+    if (!sig) { checkSignaturePng(png); throw new Error('Choose signature or initials'); }
+    const store = loadStore();
+    if (store.warning) throw new Error(store.warning);
+    if (store.signatures.length >= MAX_SIGNATURES) throw new Error(`At most ${MAX_SIGNATURES} signatures can be saved. Remove one first.`);
+    saveStore({ ...store, signatures: [...store.signatures, sig] });
+    return { success: true, signature: sig };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+ipcMain.handle('signatures-remove', async (event, { id } = {}) => {
+  try {
+    const store = loadStore();
+    if (store.warning) throw new Error(store.warning);
+    saveStore({ ...store, signatures: store.signatures.filter(s => s.id !== id) });
     return { success: true };
   } catch (error) { return { success: false, error: error.message }; }
 });
@@ -2230,6 +2287,57 @@ ipcMain.handle('autofill-plan', async (event, { pages, selfId, spouseId, skipIds
     if (spouseId && !spouse) throw new Error('The spouse profile no longer exists');
     const skip = new Set(Array.isArray(skipIds) ? skipIds : []);
     return { success: true, plan: planAutofill({ fields, self: self.details, spouse: spouse ? spouse.details : null, now: new Date() }), encrypted, aiCount: aiCandidates(fields, self.details, skip).length };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// ---------- Sign Document: where a signature goes, and the date field next to it ----------
+const SIGN_LABEL = /signature|sign here|signed/i;
+// pages as for autofill-plan, plus height, scale (px per point), sigFields (AcroForm /Sig widgets, same shape as fields) and detected ([{ box, label, lineLeft }]: blanks found on a flat page, boxes in the same pixels).
+// Returns [{ kind: 'sigfield' | 'field' | 'detected', page, id, label, box, x, y, width, height (fractions of the page), date: { id, label, value } | null }]
+function findSignPlaces({ pages, self = null, now = new Date(), skipIds = [] }) {
+  const skip = new Set(skipIds), today = derivedValues(cleanDetails(self), now).today;
+  const texts = autofillFields(pages), sigs = autofillFields(pages.map(p => ({ ...p, fields: p.sigFields || [] })));
+  const theirs = f => mentionsOtherPerson(labelParts(f.label).full) || sharesLineWithOther(f);
+  const places = [];
+  for (const f of sigs) if (!theirs(f)) places.push({ kind: 'sigfield', ...f });
+  for (const f of texts) if (SIGN_LABEL.test(f.label) && !/\bdate\b/i.test(f.label) && !theirs(f)) places.push({ kind: 'field', ...f });
+  const overlaps = (a, b) => Math.min(a[2], b[2]) - Math.max(a[0], b[0]) > 0 && Math.min(a[3], b[3]) - Math.max(a[1], b[1]) > 0.3 * Math.min(a[3] - a[1], b[3] - b[1]);
+  // A blank line found on the page image, unless a field already covers it. Its caption may sit on lines above and below the rule ("Signature of" / "U.S. person"), so the whole printed line to its left counts
+  for (const p of pages) for (const d of p.detected || []) {
+    const text = SIGN_LABEL.test(d.label) ? d.label : d.lineLeft || '', hits = [...text.matchAll(new RegExp(SIGN_LABEL.source, 'gi'))];
+    if (!hits.length || /\bdate\b/i.test(d.label) || mentionsOtherPerson(labelParts(text).full) || (p.fields || []).concat(p.sigFields || []).some(f => overlaps(f.box, d.box))) continue;
+    places.push({ kind: 'detected', page: p.page, id: null, label: cleanFieldLabel(text.slice(hits[hits.length - 1].index)) || 'Signature', box: d.box });
+  }
+  const taken = new Set(places.map(p => p.id));
+  const dates = texts.filter(f => !taken.has(f.id) && !skip.has(f.id) && /^date\b/i.test(f.label) && !theirs(f)).filter(f => { const c = classifyLabel(f.label); return c && c.who === 'self' && c.key === 'today'; });
+  const out = [];
+  for (const pl of places) {
+    const pg = pages.find(p => p.page === pl.page), inch = 72 * (pg.scale || 150 / 72), [x0, y0, x1, y1] = pl.box;
+    let best = null, bestD = Infinity;
+    for (const d of dates) {
+      if (d.page !== pl.page) continue;
+      const [dx0, dy0, dx1, dy1] = d.box, sameLine = Math.min(y1, dy1) - Math.max(y0, dy0) >= 0.5 * Math.min(y1 - y0, dy1 - dy0);
+      const right = sameLine && dx0 >= x1 - 4 && dx0 - x1 <= 3 * inch, below = dx0 < x1 && dx1 > x0 && dy0 >= y1 - 4 && dy0 - y1 <= 0.5 * inch;
+      const dist = right ? dx0 - x1 : below ? dy0 - y1 : Infinity;
+      if (dist < bestD) { best = d; bestD = dist; }
+    }
+    out.push({ ...pl, x: x0 / pg.width, y: y0 / pg.height, width: (x1 - x0) / pg.width, height: (y1 - y0) / pg.height, date: best ? { id: best.id, label: best.label, value: today } : null });
+  }
+  return out.sort((a, b) => a.page - b.page || a.box[1] - b.box[1] || a.box[0] - b.box[0]);
+}
+// pages as for autofill-plan; pages with pngBase64 (flat pages) also get their blank lines detected, as in Make Fillable
+ipcMain.handle('sign-places', async (event, { pages, selfId, skipIds } = {}) => {
+  try {
+    const { profiles } = loadStore(), self = profiles.find(p => p.id === selfId);
+    for (const p of pages) {
+      if (!p.pngBase64) continue;
+      const img = nativeImage.createFromBuffer(Buffer.from(p.pngBase64, 'base64')), size = img.getSize(), u = size.width / 1275;
+      p.detected = detectFormFields(bgraToGray(size, img.toBitmap())).filter(f => f.kind === 'text').map(f => { const out = {}; return { box: f.box, label: labelFor(f, p.words || [], u, 1, out), lineLeft: out.lineLeft }; });
+      delete p.pngBase64;
+    }
+    return { success: true, places: findSignPlaces({ pages, self: self ? self.details : null, skipIds: Array.isArray(skipIds) ? skipIds : [] }) };
   } catch (error) {
     return { success: false, error: error.message };
   }
@@ -3137,12 +3245,7 @@ ipcMain.handle('apply-modifications', async (event, { originalData, modification
 
         case 'image':
           if (mod.imageData) {
-            let image;
-            if (mod.imageType === 'png') {
-              image = await pdfDoc.embedPng(Buffer.from(mod.imageData, 'base64'));
-            } else {
-              image = await pdfDoc.embedJpg(Buffer.from(mod.imageData, 'base64'));
-            }
+            const image = await embedImage(pdfDoc, Buffer.from(mod.imageData, 'base64'));
 
             page.drawImage(image, {
               x: mod.x * width,
@@ -3162,7 +3265,7 @@ ipcMain.handle('apply-modifications', async (event, { originalData, modification
             if (imageData.startsWith('data:')) {
               imageData = imageData.split(',')[1];
             }
-            const sigImage = await pdfDoc.embedPng(Buffer.from(imageData, 'base64'));
+            const sigImage = await embedImage(pdfDoc, Buffer.from(imageData, 'base64'));
             page.drawImage(sigImage, {
               x: mod.x * width,
               y: height - (mod.y * height) - (mod.height * height),
@@ -3170,6 +3273,15 @@ ipcMain.handle('apply-modifications', async (event, { originalData, modification
               height: mod.height * height,
               opacity: 1
             });
+            // Signed over a form field: hide its widget, whose background would otherwise cover the signature
+            const fm = /^(\d+)R(\d*)$/.exec(String(mod.field || ''));
+            if (fm) {
+              const wref = PDFRef.of(parseInt(fm[1]), fm[2] ? parseInt(fm[2]) : 0), widget = pdfDoc.context.lookup(wref), annots = page.node.Annots();
+              if (widget instanceof PDFDict && widget.get(PDFName.of('Subtype')) === PDFName.of('Widget') && annots && annots.asArray().some(r => r instanceof PDFRef && r.tag === wref.tag)) {
+                const f = widget.get(PDFName.of('F'));
+                widget.set(PDFName.of('F'), PDFNumber.of((f instanceof PDFNumber ? f.asNumber() : 0) | 2));
+              }
+            }
           }
           break;
 

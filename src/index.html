@@ -233,10 +233,27 @@
     .signature-tab { flex: 1; padding: 10px; background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 13px; }
     .signature-tab:hover { color: var(--text); }
     .signature-tab.active { color: var(--primary); border-bottom: 2px solid var(--primary); }
-    .signature-pad { width: 100%; height: 150px; border: 1px solid var(--border); border-radius: 4px; background: white; cursor: crosshair; }
+    .signature-pad { width: 100%; height: 150px; border: 1px solid var(--border); border-radius: 4px; background: white; cursor: crosshair; touch-action: none; }
     .signature-preview { width: 100%; height: 80px; border: 1px dashed var(--border); border-radius: 4px; display: flex; align-items: center; justify-content: center; margin-top: 12px; background: #fafafa; }
     .signature-preview img { max-height: 70px; max-width: 100%; }
     .signature-type-input { width: 100%; padding: 12px; font-size: 24px; font-family: 'Brush Script MT', cursive; border: 1px solid var(--border); border-radius: 4px; text-align: center; }
+    .sig-saved { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+    .sig-saved-item { position: relative; border: 1px solid var(--border); border-radius: 4px; background: white; padding: 4px; cursor: pointer; }
+    .sig-saved-item img { display: block; max-width: 120px; max-height: 40px; }
+    .sig-saved-x { position: absolute; top: -7px; right: -7px; width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid var(--border); background: var(--bg-light); color: var(--text); font-size: 11px; line-height: 1; cursor: pointer; }
+    .sig-check { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+    .sig-hit { position: absolute; cursor: move; pointer-events: auto; }
+    .sig-hit.sel { outline: 1.5px solid var(--primary); }
+    .sig-handle { position: absolute; right: -6px; bottom: -6px; width: 10px; height: 10px; background: var(--primary); border: 1px solid white; cursor: nwse-resize; }
+    .annotation-layer.active .sig-hit { pointer-events: none; }
+    .sign-place { position: absolute; border: 2px dashed var(--primary); background: rgba(37, 99, 235, 0.08); cursor: pointer; pointer-events: auto; box-sizing: border-box; }
+    .sign-panel { position: fixed; right: 16px; top: 80px; width: 270px; max-height: 70vh; overflow: auto; background: var(--bg-light); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.2); padding: 10px; z-index: 600; }
+    .sign-panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .sign-panel-choice { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12px; color: var(--text-dim); }
+    .sign-panel-choice img { max-width: 130px; max-height: 40px; background: white; border: 1px solid var(--border); border-radius: 4px; }
+    .sign-row { display: block; width: 100%; text-align: left; padding: 6px 8px; margin-bottom: 4px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--text); cursor: pointer; font-size: 12px; }
+    .sign-row:hover:not(:disabled) { background: var(--bg-hover); }
+    .sign-row:disabled { color: var(--text-dim); text-decoration: line-through; cursor: default; }
     .signature-actions { display: flex; gap: 8px; margin-top: 12px; }
     .signature-actions button { flex: 1; }
     .context-menu {
@@ -1054,7 +1071,7 @@
         state.pdfDoc = pdfDoc;
         state.annotations = {}; state.redactionMarks = {}; state.undoStack = []; state.redoStack = []; setUnsavedChanges(false); state.textEdits = {};
         state.currentPage = 1; state.isDrawing = false; state.currentPath = [];
-        state.pendingStamp = null; state.pendingImage = null; state.pendingSignature = null;
+        state.pendingStamp = null; state.pendingImage = null; state.pendingSignature = null; state.sigSel = null; state.signPlaces = null;
         if (oldDoc) await oldDoc.destroy();
         updateUIState(true); await renderThumbnails(); await renderAllPages();
         $('pageCount').textContent = state.pdfDoc.numPages;
@@ -1243,6 +1260,7 @@
           pageDiv.appendChild(formLayer);
           await new pdfjsLib.AnnotationLayer({ div: formLayer, page, viewport: vp.clone({ dontFlip: true }), accessibilityManager: null, annotationCanvasMap: null, annotationEditorUIManager: null, structTreeLayer: null })
             .render({ annotations: annots, viewport: vp.clone({ dontFlip: true }), linkService: formLinkService, renderForms: true, annotationStorage: state.pdfDoc.annotationStorage, enableScripting: false, imageResourcesPath: '' });
+          for (const a of state.annotations[i] || []) if (a.field) formLayer.querySelectorAll(`[data-annotation-id="${CSS.escape(a.field)}"]`).forEach(s => { s.style.visibility = 'hidden'; }); // signed over: the field would cover the signature
         }
         // Annotation layer
         const annLayer = document.createElement('div'); annLayer.className = 'annotation-layer' + (state.currentTool !== 'select' ? ' active' : ''); annLayer.dataset.page = i;
@@ -1256,6 +1274,7 @@
         renderAnnotations(i);
       }
       buildFieldEditLayers();
+      refreshSignPanel();
       const storage = state.pdfDoc.annotationStorage;
       if (storage.onSetModified !== markFormsDirty) { storage.resetModified(); storage.onSetModified = markFormsDirty; state.formsDirty = false; }
     }
@@ -1407,7 +1426,6 @@
       if (state.currentTool === 'note') { e.preventDefault(); addNote(pageNum, x, y, canvas); return; }
       if (state.currentTool === 'stamp' && state.pendingStamp) { addStamp(pageNum, x, y, canvas); return; }
       if (state.currentTool === 'image' && state.pendingImage) { addImage(pageNum, x, y, canvas); return; }
-      if (state.currentTool === 'signature' && state.pendingSignature) { addSignature(pageNum, x, y, canvas); return; }
       state.isDrawing = true; state.currentPath = [{ x, y }];
     }
     function handleMouseMove(e, canvas, pageNum) {
@@ -1421,6 +1439,12 @@
     function handleMouseUp(e, canvas, pageNum) {
       if (!state.isDrawing) return;
       state.isDrawing = false;
+      if (state.currentTool === 'signature') {
+        const r = canvas.getBoundingClientRect(), p0 = state.currentPath[0];
+        state.currentPath = [];
+        if (p0) addSignature(pageNum, p0, { x: (e.clientX - r.left) / state.scale, y: (e.clientY - r.top) / state.scale }, canvas); else renderAnnotations(pageNum);
+        return;
+      }
       if (FIELD_TOOL_LABELS[state.currentTool]) {
         const r = canvas.getBoundingClientRect(), p0 = state.currentPath[0], p1 = { x: (e.clientX - r.left) / state.scale, y: (e.clientY - r.top) / state.scale };
         state.currentPath = []; renderAnnotations(pageNum);
@@ -1464,9 +1488,17 @@
       else if (tool === 'rectangle') ctx.strokeRect(p0.x, p0.y, pn.x - p0.x, pn.y - p0.y);
       else if (tool === 'circle') { ctx.beginPath(); ctx.ellipse((p0.x + pn.x) / 2, (p0.y + pn.y) / 2, Math.abs(pn.x - p0.x) / 2, Math.abs(pn.y - p0.y) / 2, 0, 0, 2 * Math.PI); ctx.stroke(); }
       else if (tool === 'line' || tool === 'arrow') { ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(pn.x, pn.y); ctx.stroke(); if (tool === 'arrow') { const a = Math.atan2(pn.y - p0.y, pn.x - p0.x), s = 10; ctx.beginPath(); ctx.moveTo(pn.x, pn.y); ctx.lineTo(pn.x - s * Math.cos(a - Math.PI / 6), pn.y - s * Math.sin(a - Math.PI / 6)); ctx.moveTo(pn.x, pn.y); ctx.lineTo(pn.x - s * Math.cos(a + Math.PI / 6), pn.y - s * Math.sin(a + Math.PI / 6)); ctx.stroke(); } }
-      else if (tool === 'redact' || tool === 'crop' || tool === 'fieldText' || tool === 'fieldCheck' || tool === 'fieldDropdown') { ctx.fillStyle = 'rgba(255,0,0,0.3)'; ctx.strokeStyle = '#f00'; const minX = Math.min(...state.currentPath.map(p => p.x)), maxX = Math.max(...state.currentPath.map(p => p.x)), minY = Math.min(...state.currentPath.map(p => p.y)), maxY = Math.max(...state.currentPath.map(p => p.y)); ctx.fillRect(minX, minY, maxX - minX, maxY - minY); ctx.strokeRect(minX, minY, maxX - minX, maxY - minY); }
+      else if (tool === 'redact' || tool === 'crop' || tool === 'signature' || tool === 'fieldText' || tool === 'fieldCheck' || tool === 'fieldDropdown') { ctx.fillStyle = 'rgba(255,0,0,0.3)'; ctx.strokeStyle = '#f00'; const minX = Math.min(...state.currentPath.map(p => p.x)), maxX = Math.max(...state.currentPath.map(p => p.x)), minY = Math.min(...state.currentPath.map(p => p.y)), maxY = Math.max(...state.currentPath.map(p => p.y)); ctx.fillRect(minX, minY, maxX - minX, maxY - minY); ctx.strokeRect(minX, minY, maxX - minX, maxY - minY); }
       else { ctx.beginPath(); ctx.moveTo(state.currentPath[0].x, state.currentPath[0].y); for (let i = 1; i < state.currentPath.length; i++) ctx.lineTo(state.currentPath[i].x, state.currentPath[i].y); ctx.stroke(); }
       ctx.restore();
+    }
+    const annImages = new Map();
+    const annImageSrc = a => a.type === 'image' ? 'data:image/' + (a.imageType === 'png' ? 'png' : 'jpeg') + ';base64,' + a.imageData : a.imageData;
+    function drawAnnImage(ctx, src, a, w, h, pageNum) { // images are kept once decoded so a drag redraws at once
+      let img = annImages.get(src);
+      if (!img) { img = new Image(); img.src = src; annImages.set(src, img); if (annImages.size > 40) annImages.delete(annImages.keys().next().value); }
+      if (!img.complete) img.addEventListener('load', () => renderAnnotations(pageNum), { once: true });
+      else if (img.naturalWidth) ctx.drawImage(img, a.x * w, a.y * h, a.width * w, a.height * h);
     }
     function renderAnnotations(pageNum) {
       const canvas = document.querySelector('#page-' + pageNum + ' .annotation-layer canvas'); if (!canvas) return;
@@ -1487,28 +1519,28 @@
         else if (a.type === 'cover') { ctx.fillStyle = `rgb(${a.color.r * 255},${a.color.g * 255},${a.color.b * 255})`; ctx.fillRect(a.x * w, a.y * h, a.width * w, a.height * h); }
         else if (a.type === 'stamp') { ctx.fillStyle = `rgba(${a.color.r * 255},${a.color.g * 255},${a.color.b * 255},0.7)`; ctx.font = 'bold ' + a.fontSize + 'px sans-serif'; ctx.save(); ctx.translate(a.x * w, a.y * h); ctx.rotate((a.rotation || -15) * Math.PI / 180); ctx.fillText(a.text, 0, 0); ctx.restore(); }
         else if (a.type === 'stickyNote') { ctx.fillStyle = '#ffd94d'; ctx.strokeStyle = '#b8860b'; ctx.lineWidth = 1; ctx.fillRect(a.x * w, a.y * h, 24, 24); ctx.strokeRect(a.x * w, a.y * h, 24, 24); ctx.beginPath(); for (const dy of [7, 12, 17]) { ctx.moveTo(a.x * w + 5, a.y * h + dy); ctx.lineTo(a.x * w + 19, a.y * h + dy); } ctx.stroke(); }
-        else if (a.type === 'signature' && a.imageData) {
-          const img = new Image();
-          img.onload = () => { ctx.save(); ctx.scale(state.scale, state.scale); ctx.drawImage(img, a.x * w, a.y * h, a.width * w, a.height * h); ctx.restore(); };
-          img.src = a.imageData;
-        }
-        else if (a.type === 'image' && a.imageData) {
-          const img = new Image();
-          img.onload = () => { ctx.save(); ctx.scale(state.scale, state.scale); ctx.drawImage(img, a.x * w, a.y * h, a.width * w, a.height * h); ctx.restore(); };
-          img.src = 'data:image/' + (a.imageType === 'png' ? 'png' : 'jpeg') + ';base64,' + a.imageData;
-        }
+        else if ((a.type === 'signature' || a.type === 'image') && a.imageData) drawAnnImage(ctx, annImageSrc(a), a, w, h, pageNum);
       }
       const redacts = state.redactionMarks[pageNum] || [];
       for (const m of redacts) { ctx.fillStyle = 'rgba(255,0,0,0.3)'; ctx.strokeStyle = '#f00'; ctx.lineWidth = 2; ctx.fillRect(m.x * w, m.y * h, m.width * w, m.height * h); ctx.strokeRect(m.x * w, m.y * h, m.width * w, m.height * h); }
       ctx.restore();
       const layer = canvas.parentElement;
       if (layer && layer.querySelectorAll) {
-        layer.querySelectorAll('.note-hit').forEach(el => el.remove());
+        layer.querySelectorAll('.note-hit, .sig-hit').forEach(el => el.remove());
         anns.forEach((a, i) => {
           if (a.type !== 'stickyNote') return;
           const hit = document.createElement('div'); hit.className = 'note-hit'; hit.title = a.text;
           hit.style.left = a.x * w * state.scale + 'px'; hit.style.top = a.y * h * state.scale + 'px'; hit.style.width = hit.style.height = 24 * state.scale + 'px';
           hit.onclick = () => showNote(pageNum, i);
+          layer.appendChild(hit);
+        });
+        anns.forEach((a, i) => { // placed signatures and images can be selected, moved and resized
+          if ((a.type !== 'signature' && a.type !== 'image') || !a.imageData) return;
+          const sel = !!state.sigSel && state.sigSel.pageNum === pageNum && state.sigSel.index === i;
+          const hit = document.createElement('div'); hit.className = 'sig-hit' + (sel ? ' sel' : '');
+          hit.style.left = a.x * w * state.scale + 'px'; hit.style.top = a.y * h * state.scale + 'px'; hit.style.width = a.width * w * state.scale + 'px'; hit.style.height = a.height * h * state.scale + 'px';
+          hit.onmousedown = e => dragAnnotation(e, pageNum, i, canvas, false);
+          if (sel) { const grip = document.createElement('div'); grip.className = 'sig-handle'; grip.onmousedown = e => dragAnnotation(e, pageNum, i, canvas, true); hit.appendChild(grip); }
           layer.appendChild(hit);
         });
       }
@@ -1678,12 +1710,21 @@
       state.annotations[pageNum].push({ type: 'stamp', text: stamp.text, x: x / w, y: y / h, fontSize: 24, color: stamp.color, rotation: -15, opacity: 0.7 });
       renderAnnotations(pageNum); updateAnnotationCount(); state.pendingStamp = null; selectTool('select');
     }
-    function addImage(pageNum, x, y, canvas) {
-      if (!state.pendingImage || !state.annotations[pageNum]) state.annotations[pageNum] = [];
-      saveState();
-      const w = canvas.width / state.scale, h = canvas.height / state.scale;
-      state.annotations[pageNum].push({ type: 'image', x: x / w, y: y / h, width: 0.2, height: 0.2, imageData: state.pendingImage.data, imageType: state.pendingImage.type });
-      renderAnnotations(pageNum); updateAnnotationCount(); state.pendingImage = null; selectTool('select');
+    function addImage(pageNum, x, y, canvas) { // placed at its own proportions, at most 30% of the page wide
+      const pending = state.pendingImage; if (!pending) return;
+      state.pendingImage = null;
+      const img = new Image();
+      img.onload = () => {
+        const w = canvas.width / state.scale, h = canvas.height / state.scale;
+        let wPt = Math.min(0.3 * w, w), hPt = wPt * img.naturalHeight / img.naturalWidth;
+        if (hPt > 0.9 * h) { hPt = 0.9 * h; wPt = hPt * img.naturalWidth / img.naturalHeight; }
+        if (!state.annotations[pageNum]) state.annotations[pageNum] = [];
+        saveState();
+        state.annotations[pageNum].push({ type: 'image', x: Math.max(0, Math.min(x, w - wPt)) / w, y: Math.max(0, Math.min(y, h - hPt)) / h, width: wPt / w, height: hPt / h, imageData: pending.data, imageType: pending.type });
+        renderAnnotations(pageNum); updateAnnotationCount();
+      };
+      img.src = 'data:image/' + (pending.type === 'png' ? 'png' : 'jpeg') + ';base64,' + pending.data;
+      selectTool('select');
     }
     function eraseAtPoint(pageNum, x, y) {
       if (!state.annotations[pageNum]) return;
@@ -2355,101 +2396,321 @@
       $('modalContainer').appendChild(m); return m;
     }
 
-    function showSignatureDialog() {
+    // ---------- Signatures ----------
+    const SIG_PAD = 8, SIG_MAX_W = 1200, SIG_MAX_H = 2000;
+    function trimCanvasData(img) { // bounding box { x, y, w, h } of the visible pixels, or null when there are none
+      const { width, height, data } = img;
+      let x0 = width, y0 = height, x1 = -1, y1 = -1;
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) if (data[(y * width + x) * 4 + 3] > 8) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      return x1 < 0 ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+    }
+    function whiteToAlpha(data, width = 0, height = 0) { // RGBA in place: paper goes transparent, softly between 67% and 78% of its brightness; with a size, the paper's brightness is measured locally so shading in a photo goes too
+      const lum = i => 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      let paper = () => 255;
+      if (width > 0 && height > 0) {
+        const B = Math.max(16, Math.round(Math.max(width, height) / 24)), bw = Math.ceil(width / B), bh = Math.ceil(height / B), p90 = new Float32Array(bw * bh);
+        for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++) { // the 90th percentile of each block: the paper, as ink is sparse
+          const hist = new Uint32Array(256); let n = 0;
+          for (let y = by * B; y < Math.min(height, by * B + B); y++) for (let x = bx * B; x < Math.min(width, bx * B + B); x++) { hist[Math.round(lum((y * width + x) * 4))]++; n++; }
+          let k = 0, c = 0; while (k < 255 && (c += hist[k]) < 0.9 * n) k++;
+          p90[by * bw + bx] = k;
+        }
+        const bg = new Float32Array(bw * bh); // the brightest neighbour, for blocks the ink fills
+        for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++) { let m = 0; for (let y = Math.max(0, by - 1); y <= Math.min(bh - 1, by + 1); y++) for (let x = Math.max(0, bx - 1); x <= Math.min(bw - 1, bx + 1); x++) m = Math.max(m, p90[y * bw + x]); bg[by * bw + bx] = Math.max(1, m); }
+        paper = (x, y) => { // bilinear between block centres
+          const fx = Math.max(0, Math.min(bw - 1, x / B - 0.5)), fy = Math.max(0, Math.min(bh - 1, y / B - 0.5)), x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = Math.min(bw - 1, x0 + 1), y1 = Math.min(bh - 1, y0 + 1), tx = fx - x0, ty = fy - y0;
+          return (bg[y0 * bw + x0] * (1 - tx) + bg[y0 * bw + x1] * tx) * (1 - ty) + (bg[y1 * bw + x0] * (1 - tx) + bg[y1 * bw + x1] * tx) * ty;
+        };
+      }
+      for (let i = 0; i < data.length; i += 4) {
+        const px = i / 4, b = paper(width ? px % width : 0, width ? Math.floor(px / width) : 0), hi = b * 200 / 255, lo = b * 170 / 255, l = lum(i);
+        if (l > hi) data[i + 3] = 0; else if (l > lo) data[i + 3] = Math.round(data[i + 3] * (hi - l) / (hi - lo));
+      }
+      return data;
+    }
+    function fitContain(box, w, h, centre = false) { // the largest w:h rectangle inside box, vertically centred, at the left or centred
+      const k = Math.min(box.width / w, box.height / h), width = w * k, height = h * k;
+      return { x: centre ? box.x + (box.width - width) / 2 : box.x, y: box.y + (box.height - height) / 2, width, height };
+    }
+    function signatureBox(pageW, pageH, sw, sh, kind, cx, cy) { // box (fractions of the page) for a click at (cx, cy) points: 1.8 in wide (initials 0.6 in), aspect kept
+      const wPt = Math.min(kind === 'initials' ? 43.2 : 130, pageW), hPt = wPt * sh / sw;
+      const x = Math.max(0, Math.min(cx - wPt / 2, pageW - wPt)), y = Math.max(0, Math.min(cy - hPt / 2, pageH - hPt));
+      return { x: x / pageW, y: y / pageH, width: wPt / pageW, height: hPt / pageH };
+    }
+    function trimmedPng(canvas) { // the visible part of a canvas plus a margin, at most 1200 x 2000, as { dataUrl, width, height }; null when blank
+      const box = trimCanvasData(canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height));
+      if (!box) return null;
+      const sx = Math.max(0, box.x - SIG_PAD), sy = Math.max(0, box.y - SIG_PAD), sw = Math.min(canvas.width, box.x + box.w + SIG_PAD) - sx, sh = Math.min(canvas.height, box.y + box.h + SIG_PAD) - sy;
+      const k = Math.min(1, SIG_MAX_W / sw, SIG_MAX_H / sh), out = document.createElement('canvas');
+      out.width = Math.max(1, Math.round(sw * k)); out.height = Math.max(1, Math.round(sh * k));
+      out.getContext('2d').drawImage(canvas, sx, sy, sw, sh, 0, 0, out.width, out.height);
+      return { dataUrl: out.toDataURL('image/png'), width: out.width, height: out.height };
+    }
+    function typedSignatureCanvas(text, family) { // sized to the text at 64 px with 16 px around it
+      const c = document.createElement('canvas'), font = '64px ' + family, m = c.getContext('2d');
+      m.font = font;
+      c.width = Math.ceil(m.measureText(text).width) + 32; c.height = Math.ceil(64 * 1.8) + 32;
+      const ctx = c.getContext('2d');
+      ctx.font = font; ctx.fillStyle = '#000';
+      ctx.fillText(text, 16, 16 + 64 * 1.2);
+      return c;
+    }
+    function uploadedSignatureCanvas(img, removeWhite) { // at most 1200 px wide; near-white optionally made transparent
+      const k = Math.min(1, SIG_MAX_W / img.naturalWidth, SIG_MAX_H / img.naturalHeight), c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      if (removeWhite) { const d = ctx.getImageData(0, 0, c.width, c.height); whiteToAlpha(d.data, c.width, c.height); ctx.putImageData(d, 0, 0); }
+      return c;
+    }
+    function useSignature(sig) { state.pendingSignature = sig; selectTool('signature'); showNotification('Click where it goes, or drag a box to fit it in', 'info'); }
+    function showSignatureDialog(onDone) {
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      const custom = typeof onDone === 'function', done = custom ? onDone : useSignature;
       const modal = document.createElement('div');
       modal.className = 'modal-overlay';
-      modal.innerHTML = `<div class="modal signature-modal"><div class="modal-header"><span class="modal-title">Add Signature</span><button class="modal-close">&times;</button></div><div class="modal-body">
-        <div class="signature-tabs"><button class="signature-tab active" data-tab="draw">Draw</button><button class="signature-tab" data-tab="type">Type</button><button class="signature-tab" data-tab="upload">Upload</button></div>
+      modal.innerHTML = `<div class="modal signature-modal"><div class="modal-header"><span class="modal-title" id="sigTitle">Add Signature</span><button class="modal-close">&times;</button></div><div class="modal-body">
+        <div class="signature-tabs" id="sigKind"><button class="signature-tab active" data-kind="signature">Signature</button><button class="signature-tab" data-kind="initials">Initials</button></div>
+        <div class="sig-saved hidden" id="sigSaved"></div>
+        <div class="signature-tabs" id="sigModes"><button class="signature-tab active" data-tab="draw">Draw</button><button class="signature-tab" data-tab="type">Type</button><button class="signature-tab" data-tab="upload">Upload</button></div>
         <div id="sigDrawPanel"><canvas class="signature-pad" id="signaturePad"></canvas><div class="signature-actions"><button class="modal-btn" id="sigClear">Clear</button></div></div>
         <div id="sigTypePanel" class="hidden"><input type="text" class="signature-type-input" id="sigTypeInput" placeholder="Type your name"><select class="form-select" id="sigFont" style="margin-top:8px;"><option value="'Brush Script MT', cursive">Script</option><option value="'Georgia', serif">Formal</option><option value="'Comic Sans MS', cursive">Casual</option></select></div>
-        <div id="sigUploadPanel" class="hidden"><input type="file" id="sigFileInput" accept="image/*" style="margin-bottom:12px;"><div class="signature-preview" id="sigPreview">No image selected</div></div>
-        </div><div class="modal-footer"><button class="modal-btn" id="sigCancel">Cancel</button><button class="modal-btn primary" id="sigApply">Add Signature</button></div></div>`;
+        <div id="sigUploadPanel" class="hidden"><input type="file" id="sigFileInput" accept="image/*" style="margin-bottom:8px;"><label class="sig-check"><input type="checkbox" id="sigWhite"> Remove white background</label><div class="signature-preview" id="sigPreview">No image selected</div></div>
+        <label class="sig-check" style="margin-top:12px;"><input type="checkbox" id="sigSave" checked> Save for next time</label>
+        </div><div class="modal-footer"><button class="modal-btn hidden" id="sigSign" style="margin-right:auto;">Sign Document...</button><button class="modal-btn" id="sigCancel">Cancel</button><button class="modal-btn primary" id="sigApply">Add Signature</button></div></div>`;
       $('modalContainer').appendChild(modal);
-      const pad = modal.querySelector('#signaturePad');
-      const ctx = pad.getContext('2d');
+      const q = s => modal.querySelector(s);
+      let kind = 'signature', mode = 'draw', upload = null;
+      const pad = q('#signaturePad'), ctx = pad.getContext('2d');
       pad.width = 466; pad.height = 150;
-      pad.style.background = 'white';
-      ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.lineCap = 'round';
-      let drawing = false, lastX = 0, lastY = 0;
-      pad.onmousedown = e => { drawing = true; lastX = e.offsetX; lastY = e.offsetY; };
-      pad.onmousemove = e => { if (!drawing) return; ctx.beginPath(); ctx.moveTo(lastX, lastY); ctx.lineTo(e.offsetX, e.offsetY); ctx.stroke(); lastX = e.offsetX; lastY = e.offsetY; };
-      pad.onmouseup = () => drawing = false;
-      pad.onmouseleave = () => drawing = false;
-      modal.querySelector('#sigClear').onclick = () => { ctx.clearRect(0, 0, pad.width, pad.height); };
-      let currentTab = 'draw', uploadedImage = null;
-      modal.querySelectorAll('.signature-tab').forEach(tab => {
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      let last = null, mid = null;
+      const at = e => { const r = pad.getBoundingClientRect(); return { x: (e.clientX - r.left) * pad.width / r.width, y: (e.clientY - r.top) * pad.height / r.height }; };
+      pad.onpointerdown = e => { e.preventDefault(); pad.setPointerCapture(e.pointerId); last = mid = at(e); ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(last.x + 0.01, last.y); ctx.stroke(); };
+      pad.onpointermove = e => { // quadratic curves through the midpoints smooth the stroke
+        if (!last) return;
+        const p = at(e), m = { x: (last.x + p.x) / 2, y: (last.y + p.y) / 2 };
+        ctx.beginPath(); ctx.moveTo(mid.x, mid.y); ctx.quadraticCurveTo(last.x, last.y, m.x, m.y); ctx.stroke();
+        last = p; mid = m;
+      };
+      pad.onpointerup = pad.onpointercancel = () => { last = null; };
+      q('#sigClear').onclick = () => { ctx.clearRect(0, 0, pad.width, pad.height); };
+      const finish = (sig, save) => {
+        if (save) window.pdfAPI.signaturesAdd({ kind: sig.kind, png: sig.dataUrl.split(',')[1], w: sig.width, h: sig.height }).then(r => { if (!r.success) showNotification('Not saved for next time: ' + r.error, 'warning'); });
+        modal.remove(); done(sig);
+      };
+      const renderSaved = async () => {
+        const r = await window.pdfAPI.signaturesGet(), box = q('#sigSaved'), list = r.success ? r.signatures.filter(s => s.kind === kind) : [];
+        box.replaceChildren(...list.map(s => el('div', { className: 'sig-saved-item' },
+          el('img', { src: 'data:image/png;base64,' + s.png, title: 'Use this ' + kind, onclick: () => finish({ dataUrl: 'data:image/png;base64,' + s.png, width: s.w, height: s.h, kind: s.kind }, false) }),
+          el('button', { className: 'sig-saved-x', textContent: '×', title: 'Remove', onclick: async () => {
+            if (!confirm('Remove this saved ' + kind + '?')) return;
+            const d = await window.pdfAPI.signaturesRemove({ id: s.id });
+            if (!d.success) showNotification('Error: ' + d.error, 'error');
+            renderSaved();
+          } }))));
+        box.classList.toggle('hidden', !list.length);
+      };
+      renderSaved();
+      q('#sigKind').querySelectorAll('.signature-tab').forEach(tab => {
         tab.onclick = () => {
-          modal.querySelectorAll('.signature-tab').forEach(t => t.classList.remove('active'));
-          tab.classList.add('active');
-          currentTab = tab.dataset.tab;
-          modal.querySelector('#sigDrawPanel').classList.toggle('hidden', currentTab !== 'draw');
-          modal.querySelector('#sigTypePanel').classList.toggle('hidden', currentTab !== 'type');
-          modal.querySelector('#sigUploadPanel').classList.toggle('hidden', currentTab !== 'upload');
+          q('#sigKind').querySelectorAll('.signature-tab').forEach(t => t.classList.toggle('active', t === tab));
+          kind = tab.dataset.kind;
+          q('#sigTitle').textContent = kind === 'initials' ? 'Add Initials' : 'Add Signature';
+          q('#sigApply').textContent = kind === 'initials' ? 'Add Initials' : 'Add Signature';
+          q('#sigTypeInput').placeholder = kind === 'initials' ? 'Type your initials' : 'Type your name';
+          renderSaved();
         };
       });
-      modal.querySelector('#sigTypeInput').oninput = function() { this.style.fontFamily = modal.querySelector('#sigFont').value; };
-      modal.querySelector('#sigFont').onchange = function() { modal.querySelector('#sigTypeInput').style.fontFamily = this.value; };
-      modal.querySelector('#sigFileInput').onchange = function() {
+      const refreshUpload = () => {
+        const r = upload && trimmedPng(uploadedSignatureCanvas(upload, q('#sigWhite').checked));
+        q('#sigPreview').replaceChildren(r ? el('img', { src: r.dataUrl }) : document.createTextNode(upload ? 'Nothing visible in this image' : 'No image selected'));
+      };
+      q('#sigModes').querySelectorAll('.signature-tab').forEach(tab => {
+        tab.onclick = () => {
+          q('#sigModes').querySelectorAll('.signature-tab').forEach(t => t.classList.toggle('active', t === tab));
+          mode = tab.dataset.tab;
+          q('#sigDrawPanel').classList.toggle('hidden', mode !== 'draw');
+          q('#sigTypePanel').classList.toggle('hidden', mode !== 'type');
+          q('#sigUploadPanel').classList.toggle('hidden', mode !== 'upload');
+        };
+      });
+      q('#sigTypeInput').oninput = function() { this.style.fontFamily = q('#sigFont').value; };
+      q('#sigFont').onchange = function() { q('#sigTypeInput').style.fontFamily = this.value; };
+      q('#sigWhite').onchange = refreshUpload;
+      q('#sigFileInput').onchange = function() {
         const file = this.files[0]; if (!file) return;
         const reader = new FileReader();
-        reader.onload = e => { uploadedImage = e.target.result; modal.querySelector('#sigPreview').innerHTML = '<img src="' + uploadedImage + '">'; };
+        reader.onload = e => {
+          const img = new Image();
+          img.onload = () => { upload = img; q('#sigWhite').checked = file.type === 'image/jpeg'; refreshUpload(); };
+          img.onerror = () => showNotification('That file is not an image this app can read', 'warning');
+          img.src = e.target.result;
+        };
         reader.readAsDataURL(file);
       };
-      modal.querySelector('.modal-close').onclick = () => modal.remove();
-      modal.querySelector('#sigCancel').onclick = () => modal.remove();
-      modal.querySelector('#sigApply').onclick = () => {
-        let sigData = null;
-        if (currentTab === 'draw') {
-          sigData = pad.toDataURL('image/png');
-        } else if (currentTab === 'type') {
-          const text = modal.querySelector('#sigTypeInput').value.trim();
-          if (!text) { showNotification('Enter your name', 'warning'); return; }
-          const tempCanvas = document.createElement('canvas');
-          tempCanvas.width = 300; tempCanvas.height = 80;
-          const tctx = tempCanvas.getContext('2d');
-          tctx.fillStyle = '#000';
-          tctx.font = '32px ' + modal.querySelector('#sigFont').value;
-          tctx.fillText(text, 10, 50);
-          sigData = tempCanvas.toDataURL('image/png');
-        } else if (currentTab === 'upload') {
-          if (!uploadedImage) { showNotification('Select an image', 'warning'); return; }
-          sigData = uploadedImage;
+      q('.modal-close').onclick = () => modal.remove();
+      q('#sigCancel').onclick = () => modal.remove();
+      if (!custom) hasSignCandidates().then(yes => { if (yes && modal.isConnected) { q('#sigSign').classList.remove('hidden'); q('#sigSign').onclick = () => { modal.remove(); showSignDocument(); }; } });
+      q('#sigApply').onclick = () => {
+        let res = null;
+        if (mode === 'draw') res = trimmedPng(pad);
+        else if (mode === 'type') {
+          const text = q('#sigTypeInput').value.trim();
+          if (!text) { showNotification(kind === 'initials' ? 'Enter your initials' : 'Enter your name', 'warning'); return; }
+          res = trimmedPng(typedSignatureCanvas(text, q('#sigFont').value));
+        } else {
+          if (!upload) { showNotification('Select an image', 'warning'); return; }
+          res = trimmedPng(uploadedSignatureCanvas(upload, q('#sigWhite').checked));
         }
-        if (sigData) {
-          state.pendingSignature = sigData;
-          selectTool('signature');
-          showNotification('Click to place signature', 'info');
-        }
-        modal.remove();
+        if (!res) { showNotification(mode === 'draw' ? 'Draw your ' + kind + ' first' : 'Nothing visible to use', 'warning'); return; }
+        finish({ ...res, kind }, q('#sigSave').checked);
       };
     }
-    function addSignature(pageNum, x, y, canvas) {
-      if (!state.pendingSignature) return;
+    // A click places the pending signature at its natural proportions; a drag draws a box and it is fitted inside, centred. p0 and p1 are page points
+    function addSignature(pageNum, p0, p1, canvas) {
+      const sig = state.pendingSignature;
+      if (!sig) return;
+      const w = canvas.width / state.scale, h = canvas.height / state.scale;
+      let box;
+      if (Math.hypot(p1.x - p0.x, p1.y - p0.y) < 10) box = signatureBox(w, h, sig.width, sig.height, sig.kind, p0.x, p0.y);
+      else {
+        const f = fitContain({ x: Math.min(p0.x, p1.x), y: Math.min(p0.y, p1.y), width: Math.abs(p1.x - p0.x), height: Math.abs(p1.y - p0.y) }, sig.width, sig.height, true);
+        box = { x: f.x / w, y: f.y / h, width: f.width / w, height: f.height / h };
+      }
       saveState();
       if (!state.annotations[pageNum]) state.annotations[pageNum] = [];
-      const w = canvas.width / state.scale, h = canvas.height / state.scale;
-      state.annotations[pageNum].push({ type: 'signature', x: x / w, y: y / h, width: 0.2, height: 0.08, imageData: state.pendingSignature });
+      state.annotations[pageNum].push({ type: 'signature', ...box, imageData: sig.dataUrl });
+      setSigSel({ pageNum, index: state.annotations[pageNum].length - 1 });
       renderAnnotations(pageNum);
       updateAnnotationCount();
       setUnsavedChanges(true);
       state.pendingSignature = null;
       selectTool('select');
-      showNotification('Signature added');
+      showNotification('Signature added. Drag to move it, drag the corner to resize, Delete removes it.');
     }
-    // Direct click handler for signature placement on the viewer
-    function setupSignatureClickHandler() {
-      $('viewerScroll').addEventListener('click', e => {
-        if (state.currentTool !== 'signature' || !state.pendingSignature) return;
-        const pageContainer = e.target.closest('.page-container');
-        if (!pageContainer) return;
-        const pageNum = parseInt(pageContainer.dataset.page);
-        const canvas = pageContainer.querySelector('.page-canvas');
-        const rect = canvas.getBoundingClientRect();
-        const x = (e.clientX - rect.left) / state.scale;
-        const y = (e.clientY - rect.top) / state.scale;
-        addSignature(pageNum, x, y, canvas);
-      });
+    // Move or resize (keeping proportions) a placed signature or image; one undo step per gesture
+    function setSigSel(sel) { const prev = state.sigSel; state.sigSel = sel; if (prev && (!sel || prev.pageNum !== sel.pageNum)) renderAnnotations(prev.pageNum); }
+    function dragAnnotation(e, pageNum, index, canvas, resize) {
+      e.preventDefault(); e.stopPropagation();
+      const a = state.annotations[pageNum] && state.annotations[pageNum][index];
+      if (!a) return;
+      const w = canvas.width / state.scale, h = canvas.height / state.scale, o = { x: a.x, y: a.y, width: a.width, height: a.height }, sx = e.clientX, sy = e.clientY, ratio = (a.height * h) / (a.width * w);
+      let moved = false;
+      setSigSel({ pageNum, index }); renderAnnotations(pageNum);
+      const move = ev => {
+        if (!moved) { if (Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) < 3) return; moved = true; saveState(); }
+        const dx = (ev.clientX - sx) / state.scale / w, dy = (ev.clientY - sy) / state.scale / h;
+        if (resize) { a.width = Math.max(0.02, Math.min(o.width + dx, 1 - o.x)); a.height = a.width * w * ratio / h; }
+        else { a.x = Math.max(0, Math.min(o.x + dx, 1 - o.width)); a.y = Math.max(0, Math.min(o.y + dy, 1 - o.height)); }
+        renderAnnotations(pageNum);
+      };
+      const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+      document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+    }
+    function deleteSelectedAnnotation() {
+      const sel = state.sigSel, list = sel && state.annotations[sel.pageNum];
+      if (!list || !list[sel.index]) return;
+      saveState(); list.splice(sel.index, 1); state.sigSel = null;
+      renderAnnotations(sel.pageNum); updateAnnotationCount();
+    }
+    // ---------- Sign Document: find where a signature goes and drop the chosen one in ----------
+    const signCandidateCache = new WeakMap(), SIGN_WORD = /\bsign(ature|ed)?\b/i;
+    async function hasSignCandidates() { // any signature field, or "sign" in the text
+      const doc = state.pdfDoc;
+      if (!signCandidateCache.has(doc)) {
+        signCandidateCache.set(doc, (async () => {
+          try {
+            for (let i = 1; i <= Math.min(doc.numPages, 50); i++) {
+              const page = await doc.getPage(i);
+              if ((await page.getAnnotations()).some(a => a.subtype === 'Widget' && a.fieldType === 'Sig')) return true;
+              if ((await page.getTextContent()).items.some(it => SIGN_WORD.test(it.str))) return true;
+            }
+          } catch (e) { /* no candidates */ }
+          return false;
+        })());
+      }
+      return signCandidateCache.get(doc);
+    }
+    async function showSignDocument() {
+      if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      setLoading(true, 'Looking for places to sign...');
+      try {
+        const doc = state.pdfDoc, storage = doc.annotationStorage, pages = [], skipIds = [];
+        let pngs = 0;
+        for (let i = 1; i <= doc.numPages; i++) {
+          const page = await doc.getPage(i), p1 = page.getViewport({ scale: 1 });
+          const scale = Math.min(150 / 72, Math.sqrt(4e6 / (p1.width * p1.height))), vp = page.getViewport({ scale });
+          const widgets = (await page.getAnnotations()).filter(a => a.subtype === 'Widget' && !a.readOnly);
+          const field = a => { const [ax, ay, bx, by] = vp.convertToViewportRectangle(a.rect); return { id: a.id, name: a.fieldName, alt: a.alternativeText, maxLen: a.maxLen || 0, comb: !!a.comb, box: [Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)] }; };
+          const texts = widgets.filter(a => a.fieldType === 'Tx');
+          for (const a of texts) if ((storage.getRawValue(a.id)?.value ?? a.fieldValue)) skipIds.push(a.id);
+          const words = pageWords((await page.getTextContent()).items, vp), entry = { page: i, width: vp.width, height: vp.height, scale, fields: texts.map(field), sigFields: widgets.filter(a => a.fieldType === 'Sig').map(field), words };
+          if (pngs < 12 && words.some(w => SIGN_WORD.test(w.text))) { // a printed line with no field of its own (the W-9 has fields, but not for the signature): find the blank lines as Make Fillable does
+            pngs++;
+            const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
+            await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+            entry.pngBase64 = canvas.toDataURL('image/png').split(',')[1];
+          }
+          pages.push(entry);
+        }
+        const g = await window.pdfAPI.profilesGet(), ids = g.success ? g.profiles.map(p => p.id) : [];
+        const r = await window.pdfAPI.signPlaces({ pages, selfId: ids.includes(g.lastSelf) ? g.lastSelf : ids[0] || null, skipIds });
+        if (!r.success) throw new Error(r.error);
+        if (!r.places.length) { showNotification('No place to sign was found. Use Add Signature and click where it goes.', 'warning'); return; }
+        state.signPlaces = r.places; state.signChoice = null;
+        openSignPanel();
+        showSignatureDialog(sig => { state.signChoice = sig; refreshSignPanel(); });
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      finally { setLoading(false); }
+    }
+    const placeSigned = p => (state.annotations[p.page] || []).some(a => a.type === 'signature' && a.x + a.width / 2 >= p.x && a.x + a.width / 2 <= p.x + p.width && a.y + a.height / 2 >= p.y - 0.05 && a.y + a.height / 2 <= p.y + p.height);
+    const placeName = p => (p.kind === 'sigfield' && /^Field \d+$/.test(p.label) ? 'Signature' : p.label);
+    function closeSignPanel() {
+      state.signPlaces = null; state.signChoice = null;
+      const panel = document.getElementById('signPanel'); if (panel) panel.remove();
+      document.querySelectorAll('.sign-place').forEach(d => d.remove());
+    }
+    function openSignPanel() {
+      const old = document.getElementById('signPanel'); if (old) old.remove();
+      const panel = el('div', { id: 'signPanel', className: 'sign-panel' },
+        el('div', { className: 'sign-panel-head' }, el('b', { textContent: 'Sign Document' }), el('button', { className: 'modal-close', innerHTML: '&times;', onclick: closeSignPanel })),
+        el('div', { className: 'sign-panel-choice', id: 'signChoice' }),
+        el('div', { id: 'signList' }));
+      document.body.appendChild(panel);
+      refreshSignPanel();
+    }
+    function refreshSignPanel() { // the list, the dashed outlines on the pages, and the chosen signature
+      const panel = document.getElementById('signPanel');
+      if (panel && !state.signPlaces) { closeSignPanel(); return; }
+      if (!panel) return;
+      const choice = $('signChoice'), sig = state.signChoice;
+      choice.replaceChildren(sig ? el('img', { src: sig.dataUrl }) : el('span', { textContent: 'Choose a signature first' }), el('button', { className: 'modal-btn', textContent: sig ? 'Change' : 'Choose', onclick: () => showSignatureDialog(s => { state.signChoice = s; refreshSignPanel(); }) }));
+      document.querySelectorAll('.sign-place').forEach(d => d.remove());
+      $('signList').replaceChildren(...state.signPlaces.map(p => {
+        const signed = placeSigned(p);
+        if (!signed) {
+          const pageDiv = $('page-' + p.page);
+          if (pageDiv) pageDiv.appendChild(el('div', { className: 'sign-place', title: placeName(p) + ': click to sign here', style: `left:${p.x * 100}%;top:${p.y * 100}%;width:${p.width * 100}%;height:${p.height * 100}%;`, onclick: () => placeSignatureAt(p) }));
+        }
+        return el('button', { className: 'sign-row', disabled: signed, textContent: 'Page ' + p.page + ' — ' + placeName(p) + (signed ? ' (signed)' : p.date ? ' (and date)' : ''), onclick: () => { goToPage(p.page); placeSignatureAt(p); } });
+      }));
+    }
+    async function placeSignatureAt(p) {
+      const sig = state.signChoice;
+      if (!sig) { showNotification('Choose a signature first', 'warning'); return; }
+      const canvas = document.querySelector('#page-' + p.page + ' .page-canvas'); if (!canvas) return;
+      const pw = canvas.width / state.scale, ph = canvas.height / state.scale;
+      const box = { x: p.x * pw, y: p.y * ph, width: p.width * pw, height: p.height * ph };
+      if (box.height < 36) { box.y = Math.max(0, box.y - (36 - box.height)); box.height = 36; } // a thin line: let the signature rise above it
+      const f = fitContain(box, sig.width, sig.height);
+      saveState(); // one Ctrl+Z takes back the signature and the date
+      if (!state.annotations[p.page]) state.annotations[p.page] = [];
+      state.annotations[p.page].push({ type: 'signature', x: f.x / pw, y: f.y / ph, width: f.width / pw, height: f.height / ph, imageData: sig.dataUrl, ...(p.id ? { field: p.id } : {}) });
+      if (p.date) { state.pdfDoc.annotationStorage.setValue(p.date.id, { value: p.date.value }); markFormsDirty(); }
+      updateAnnotationCount(); setUnsavedChanges(true);
+      await renderAllPages();
+      showNotification(p.date ? 'Signed and dated' : 'Signed');
     }
     // Text selection editing - like Acrobat Pro
     function setupTextSelectionEditing() {
@@ -2687,7 +2948,7 @@
         { label: 'Select All', icon: 'selectall', action: () => document.execCommand('selectAll') },
         { type: 'separator' },
         { label: 'Add Text', icon: 'text', action: () => selectTool('text'), disabled: !hasDoc },
-        { label: 'Add Signature', icon: 'signature', action: showSignatureDialog, disabled: !hasDoc },
+        { label: 'Add Signature', icon: 'signature', action: () => showSignatureDialog(), disabled: !hasDoc },
         { label: 'Add Highlight', icon: 'highlight', action: () => selectTool('highlight'), disabled: !hasDoc },
         { type: 'separator' },
         { label: 'Rotate Page', icon: 'rotate', action: () => rotatePage(90), disabled: !hasDoc },
@@ -2746,10 +3007,12 @@
     $('addWatermarkBtn').onclick = showWatermarkDialog; $('propertiesBtn').onclick = showDocumentProperties;
     $('searchBtn').onclick = showSearch; $('searchClose').onclick = hideSearch; $('searchInput').onkeydown = e => { if (e.key === 'Enter') performSearch(); if (e.key === 'Escape') hideSearch(); };
     $('imageBtn').onclick = async () => { const img = await window.pdfAPI.selectImage(); if (img) { state.pendingImage = img; selectTool('image'); showNotification('Click to place image', 'info'); } };
-    $('signatureBtn').onclick = showSignatureDialog;
+    $('signatureBtn').onclick = () => showSignatureDialog();
+    document.addEventListener('mousedown', e => { if (state.sigSel && !e.target.closest('.sig-hit')) setSigSel(null); });
     document.querySelectorAll('.sidebar-tab').forEach(tab => { tab.onclick = () => { document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active')); tab.classList.add('active'); $('thumbnailContainer').classList.toggle('hidden', tab.dataset.tab !== 'thumbnails'); $('bookmarksContainer').classList.toggle('hidden', tab.dataset.tab !== 'bookmarks'); }; });
     document.addEventListener('keydown', e => {
       if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && state.sigSel && state.currentTool === 'select' && !document.querySelector('.modal-overlay')) { e.preventDefault(); deleteSelectedAnnotation(); return; }
       if (FIELD_TOOL_LABELS[state.currentTool] && !document.querySelector('.modal-overlay')) {
         if (e.key === 'Escape') { state.isDrawing = false; state.currentPath = []; document.querySelectorAll('.annotation-layer').forEach(l => { const pg = l.dataset.page; if (pg) renderAnnotations(+pg); }); selectTool('select'); return; }
         if ((e.key === 'Delete' || e.key === 'Backspace') && state.currentTool === 'editFields' && state.fieldSel) { e.preventDefault(); const { pageNum, ref } = state.fieldSel; removeFormField(pageNum, ref); return; }
@@ -2794,13 +3057,12 @@
     window.pdfAPI.onMenuUndo(undo); window.pdfAPI.onMenuRedo(redo); window.pdfAPI.onMenuFind(showSearch);
     window.pdfAPI.onMenuZoomIn(() => setZoom(state.scale + 0.25)); window.pdfAPI.onMenuZoomOut(() => setZoom(state.scale - 0.25)); window.pdfAPI.onMenuZoomReset(() => setZoom(1));
     window.pdfAPI.onMenuTool(t => selectTool(t === 'editFields' && state.currentTool === 'editFields' ? 'select' : t)); window.pdfAPI.onMenuRotate(rotatePage); window.pdfAPI.onMenuRotateAll(rotateAllPages); window.pdfAPI.onMenuDeletePage(deletePage); window.pdfAPI.onMenuInsertPage(insertBlankPage);
-    window.pdfAPI.onMenuAddWatermark(showWatermarkDialog); window.pdfAPI.onMenuFlattenForm(flattenForm); window.pdfAPI.onMenuMakeFillable(makeFillable); window.pdfAPI.onMenuProfiles(() => showProfiles()); window.pdfAPI.onMenuAutofill(fillFromProfile); window.pdfAPI.onMenuSaveAnswers(saveAnswersToProfile); window.pdfAPI.onMenuProfileFromDoc(profileFromDocument);
+    window.pdfAPI.onMenuAddWatermark(showWatermarkDialog); window.pdfAPI.onMenuFlattenForm(flattenForm); window.pdfAPI.onMenuMakeFillable(makeFillable); window.pdfAPI.onMenuProfiles(() => showProfiles()); window.pdfAPI.onMenuAutofill(fillFromProfile); window.pdfAPI.onMenuSignDocument(showSignDocument); window.pdfAPI.onMenuSaveAnswers(saveAnswersToProfile); window.pdfAPI.onMenuProfileFromDoc(profileFromDocument);
     window.pdfAPI.onMenuStamp(s => { state.pendingStamp = s; selectTool('stamp'); showNotification('Click to place stamp', 'info'); });
     window.pdfAPI.onMenuAddImage(async () => { const img = await window.pdfAPI.selectImage(); if (img) { state.pendingImage = img; selectTool('image'); showNotification('Click to place image', 'info'); } });
     window.pdfAPI.onMenuGoto(d => { if (d === 'first') goToPage(1); else if (d === 'last') goToPage(state.pdfDoc.numPages); else if (d === 'prev' && state.currentPage > 1) goToPage(state.currentPage - 1); else if (d === 'next' && state.currentPage < state.pdfDoc.numPages) goToPage(state.currentPage + 1); });
 
     initPdfJs();
-    setupSignatureClickHandler();
     setupTextSelectionEditing();
 
     // restore saved theme

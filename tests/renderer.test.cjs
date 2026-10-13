@@ -498,3 +498,117 @@ test('a note can be deleted from its modal and the deletion is undoable', () => 
   assert.deepEqual(plain(state.annotations[1].map(n => n.text)), ['a']);
   assert.deepEqual(plain(calls), ['save']);
 });
+
+// ---------- signatures: image helpers, aspect-correct placement, move and resize ----------
+test('trimCanvasData returns the box of visible pixels, or null for a blank image', () => {
+  const { functions } = loadRendererFunctions(['trimCanvasData']);
+  const img = { width: 6, height: 4, data: new Uint8Array(6 * 4 * 4) };
+  assert.equal(functions.trimCanvasData(img), null);
+  for (const [x, y] of [[2, 1], [3, 2]]) img.data[(y * 6 + x) * 4 + 3] = 255;
+  assert.deepEqual(plain(functions.trimCanvasData(img)), { x: 2, y: 1, w: 2, h: 2 });
+});
+test('whiteToAlpha clears white, keeps ink, and fades the grey edge', () => {
+  const { functions } = loadRendererFunctions(['whiteToAlpha']);
+  const px = [[255, 255, 255, 255], [0, 0, 0, 255], [185, 185, 185, 255], [172, 172, 172, 255], [250, 250, 250, 0]];
+  const data = Uint8Array.from(px.flat());
+  functions.whiteToAlpha(data);
+  const alpha = Array.from(data).filter((v, i) => i % 4 === 3);
+  assert.equal(alpha[0], 0, 'white');
+  assert.equal(alpha[1], 255, 'ink');
+  assert.ok(alpha[2] > 100 && alpha[2] < 155, 'mid grey is half transparent: ' + alpha[2]);
+  assert.ok(alpha[3] > 230 && alpha[3] < 255, 'near the ink side of the ramp: ' + alpha[3]);
+  assert.equal(alpha[4], 0);
+});
+test('whiteToAlpha with the image size clears shaded paper from a photo and keeps the ink', () => {
+  const { functions } = loadRendererFunctions(['whiteToAlpha']);
+  const w = 200, h = 60, data = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { // paper fading from 245 to 150 left to right, a dark stroke along the middle
+    const i = (y * w + x) * 4, ink = Math.abs(y - 30) < 2, v = ink ? 40 : Math.round(245 - 95 * x / (w - 1));
+    data[i] = data[i + 1] = data[i + 2] = v; data[i + 3] = 255;
+  }
+  functions.whiteToAlpha(data, w, h);
+  let paper = 0, inkKept = 0, inkN = 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const a = data[(y * w + x) * 4 + 3]; if (Math.abs(y - 30) < 2) { inkN++; if (a === 255) inkKept++; } else if (a > 0) paper++; }
+  assert.equal(paper, 0, 'shaded paper left visible');
+  assert.equal(inkKept, inkN, 'ink stays opaque');
+});
+test('fitContain keeps the proportions, left aligned or centred, and centres vertically', () => {
+  const { functions } = loadRendererFunctions(['fitContain']);
+  const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} vs ${b}`);
+  let r = functions.fitContain({ x: 10, y: 20, width: 200, height: 50 }, 300, 100);
+  [r.x, r.y, r.width, r.height].forEach((v, i) => near(v, [10, 20, 150, 50][i]));
+  r = functions.fitContain({ x: 10, y: 20, width: 200, height: 50 }, 300, 100, true);
+  near(r.x, 10 + 25);
+  r = functions.fitContain({ x: 0, y: 0, width: 100, height: 100 }, 200, 50);
+  [r.x, r.y, r.width, r.height].forEach((v, i) => near(v, [0, 37.5, 100, 25][i]));
+  r = functions.fitContain({ x: 5, y: 5, width: 100, height: 100 }, 50, 200);
+  [r.x, r.width, r.height].forEach((v, i) => near(v, [5, 25, 100][i]));
+});
+function signatureHarness(pending) {
+  const state = { scale: 1, annotations: {}, pendingSignature: pending }, calls = [];
+  const { functions } = loadRendererFunctions(['addSignature'], { state, helperNames: ['signatureBox', 'fitContain'], extra: {
+    saveState: () => calls.push('save'), setSigSel: sel => { state.sigSel = sel; }, renderAnnotations: () => {}, updateAnnotationCount: () => {}, setUnsavedChanges: () => {},
+    selectTool: t => calls.push('tool:' + t), showNotification: () => {}
+  } });
+  return { state, calls, add: functions.addSignature };
+}
+test('a clicked signature keeps its own proportions on the page, whatever the zoom', () => {
+  for (const scale of [1, 1.5]) {
+    const { state, add, calls } = signatureHarness({ dataUrl: 'data:image/png;base64,AA', width: 300, height: 100, kind: 'signature' });
+    state.scale = scale;
+    const canvas = { width: 612 * scale, height: 792 * scale }, p = { x: 300, y: 400 };
+    add(1, p, p, canvas);
+    const [a] = state.annotations[1];
+    assert.equal(a.type, 'signature');
+    assert.ok(Math.abs(a.width * 612 - 130) < 1e-6, 'about 1.8 in wide: ' + a.width * 612);
+    assert.ok(Math.abs((a.width * 612) / (a.height * 792) - 3) < 1e-6, 'the 3:1 picture stays 3:1 on the page');
+    assert.ok(Math.abs((a.x + a.width / 2) * 612 - 300) < 1e-6, 'centred on the click');
+    assert.deepEqual(plain(calls), ['save', 'tool:select']);
+    assert.equal(state.pendingSignature, null);
+  }
+});
+test('initials are 0.6 in wide, and a click near the edge stays on the page', () => {
+  const { state, add } = signatureHarness({ dataUrl: 'x', width: 100, height: 100, kind: 'initials' });
+  add(2, { x: 611, y: 5 }, { x: 611, y: 5 }, { width: 612, height: 792 });
+  const [a] = state.annotations[2];
+  assert.ok(Math.abs(a.width * 612 - 43.2) < 1e-6);
+  assert.ok(a.x >= 0 && a.x + a.width <= 1 + 1e-9 && a.y >= 0);
+});
+test('dragging a box fits the signature inside it, centred', () => {
+  const { state, add } = signatureHarness({ dataUrl: 'x', width: 200, height: 100, kind: 'signature' });
+  add(1, { x: 400, y: 100 }, { x: 100, y: 200 }, { width: 612, height: 792 }); // dragged right to left
+  const [a] = state.annotations[1], pt = [a.x * 612, a.y * 792, a.width * 612, a.height * 792];
+  [150, 100, 200, 100].forEach((v, i) => assert.ok(Math.abs(pt[i] - v) < 1e-6, `${pt}`));
+});
+test('a placed signature moves, resizes keeping its proportions, and deletes; each gesture is one undo step', () => {
+  const listeners = {}, calls = [];
+  const sig = () => ({ type: 'signature', x: 0.1, y: 0.1, width: 0.2, height: 0.05, imageData: 'x' });
+  const state = { scale: 1, annotations: { 1: [sig()] }, sigSel: null };
+  const { functions } = loadRendererFunctions(['dragAnnotation', 'deleteSelectedAnnotation'], { state, extra: {
+    document: { addEventListener: (t, f) => { listeners[t] = f; }, removeEventListener: t => { delete listeners[t]; } },
+    saveState: () => calls.push('save'), setSigSel: sel => { state.sigSel = sel; }, renderAnnotations: () => {}, updateAnnotationCount: () => {}
+  } });
+  const canvas = { width: 612, height: 792 }, ev = (x, y) => ({ clientX: x, clientY: y, preventDefault() {}, stopPropagation() {} });
+  const aspect = a => (a.width * 612) / (a.height * 792), before = aspect(state.annotations[1][0]);
+  functions.dragAnnotation(ev(0, 0), 1, 0, canvas, true);
+  listeners.mousemove(ev(30, 0)); listeners.mousemove(ev(61.2, 3)); listeners.mouseup();
+  const a = state.annotations[1][0];
+  assert.ok(Math.abs(a.width - 0.3) < 1e-9, 'grew by the drag: ' + a.width);
+  assert.ok(Math.abs(aspect(a) - before) < 1e-9, 'proportions kept');
+  assert.deepEqual(plain(calls), ['save'], 'one undo step');
+  assert.deepEqual([a.x, a.y], [0.1, 0.1]);
+  functions.dragAnnotation(ev(100, 100), 1, 0, canvas, false);
+  listeners.mousemove(ev(100 + 61.2, 100 + 79.2)); listeners.mouseup();
+  assert.ok(Math.abs(a.x - 0.2) < 1e-9 && Math.abs(a.y - 0.2) < 1e-9);
+  assert.deepEqual(plain(calls), ['save', 'save']);
+  functions.dragAnnotation(ev(0, 0), 1, 0, canvas, false);
+  listeners.mousemove(ev(5000, -5000)); listeners.mouseup();
+  assert.ok(a.x + a.width <= 1 + 1e-9 && a.y === 0, 'stays on the page');
+  functions.dragAnnotation(ev(0, 0), 1, 0, canvas, false); listeners.mouseup(); // a plain click selects without an undo step
+  assert.equal(calls.length, 3);
+  functions.deleteSelectedAnnotation();
+  assert.deepEqual(plain(state.annotations[1]), []);
+  assert.equal(calls.length, 4);
+  functions.deleteSelectedAnnotation();
+  assert.equal(calls.length, 4);
+});
