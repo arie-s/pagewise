@@ -156,7 +156,7 @@ function writerBoot({ binary = true } = {}) {
   fs.mkdirSync(t.dir, { recursive: true });
   if (binary) fs.writeFileSync(path.join(t.dir, process.platform === 'win32' ? 'llama-server.exe' : 'llama-server'), 'x');
   const data = Buffer.from('pretend model bytes');
-  vm.runInContext(`WRITER_MODEL.size = ${data.length}; WRITER_MODEL.sha256 = '${crypto.createHash('sha256').update(data).digest('hex')}'`, t.m);
+  vm.runInContext(`WRITER_MODEL.size = WRITER_VISION.size = ${data.length}; WRITER_MODEL.sha256 = WRITER_VISION.sha256 = '${crypto.createHash('sha256').update(data).digest('hex')}'`, t.m);
   const calls = [];
   t.m.downloadTo = async (url, dest, phase) => { calls.push([url, path.basename(dest), phase]); fs.writeFileSync(dest, t.serve || data); };
   t.calls = calls; t.data = data; t.model = path.join(t.dir, 'gemma-4-E2B-it-Q4_K_M.gguf');
@@ -165,16 +165,16 @@ function writerBoot({ binary = true } = {}) {
 
 test('writer-install keeps a verified model, writes the marker and reports installed', async () => {
   const t = writerBoot();
-  assert.deepEqual(plain(await t.handlers.get('writer-status')()), { installed: false, binary: true });
+  assert.deepEqual(plain(await t.handlers.get('writer-status')()), { installed: false, binary: true, vision: false });
   const r = await t.handlers.get('writer-install')();
   assert.equal(r.success, true, r.error);
-  assert.deepEqual(plain(t.calls), [['https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/gemma-4-E2B-it-Q4_K_M.gguf', 'gemma-4-E2B-it-Q4_K_M.gguf.part', 'Downloading writing model']]);
+  assert.deepEqual(plain(t.calls), [['https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/gemma-4-E2B-it-Q4_K_M.gguf', 'gemma-4-E2B-it-Q4_K_M.gguf.part', 'Downloading writing model'], ['https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/mmproj-F16.gguf', 'gemma-4-E2B-it-mmproj-F16.gguf.part', 'Downloading image reader']]);
   assert.ok(fs.existsSync(t.model) && fs.existsSync(t.model + '.sha256-ok') && !fs.existsSync(t.model + '.part'));
-  assert.deepEqual(plain(await t.handlers.get('writer-status')()), { installed: true, binary: true });
+  assert.deepEqual(plain(await t.handlers.get('writer-status')()), { installed: true, binary: true, vision: true });
   assert.equal((await t.handlers.get('writer-install')()).success, true);
-  assert.equal(t.calls.length, 1, 'no second download');
+  assert.equal(t.calls.length, 2, 'no second download');
   assert.equal((await t.handlers.get('writer-remove')()).success, true);
-  assert.deepEqual(plain(await t.handlers.get('writer-status')()), { installed: false, binary: true });
+  assert.deepEqual(plain(await t.handlers.get('writer-status')()), { installed: false, binary: true, vision: false });
   assert.deepEqual(fs.readdirSync(t.dir).filter(f => f.includes('gemma')), []);
 });
 

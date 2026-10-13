@@ -57,6 +57,14 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   writerStatus: () => ipcRenderer.invoke('writer-status'),
   writerInstall: () => ipcRenderer.invoke('writer-install'),
   writerRemove: () => ipcRenderer.invoke('writer-remove'),
+  assistantAsk: (options) => ipcRenderer.invoke('assistant-ask', options),
+  assistantCancel: (options) => ipcRenderer.invoke('assistant-cancel', options),
+  assistantRunMenu: (options) => ipcRenderer.invoke('assistant-run-menu', options),
+  assistantModelGet: () => ipcRenderer.invoke('assistant-model-get'),
+  assistantModelSet: (options) => ipcRenderer.invoke('assistant-model-set', options),
+  assistantModelList: (options) => ipcRenderer.invoke('assistant-model-list', options),
+  assistantModelTest: (options) => ipcRenderer.invoke('assistant-model-test', options),
+  onAssistantEvent: (callback) => { for (const ch of ['status', 'token', 'reasoning', 'done', 'error']) ipcRenderer.on('assistant-' + ch, (ev, m) => callback(ch, m)); },
   setDocumentInfo: (options) => ipcRenderer.invoke('set-document-info', options),
 
   // OCR
@@ -190,6 +198,7 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   onMenuGenerateBookmarks: (callback) => ipcRenderer.on('menu-generate-bookmarks', callback),
 
   // Menu event listeners - Help
+  onMenuAssistant: (callback) => ipcRenderer.on('menu-assistant', callback),
   onMenuShortcuts: (callback) => ipcRenderer.on('menu-shortcuts', callback),
   onMenuCheckUpdates: (callback) => ipcRenderer.on('menu-check-updates', callback)
 });

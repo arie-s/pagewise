@@ -58,6 +58,39 @@
     .color-picker::-webkit-color-swatch { border: none; border-radius: 2px; }
     .zoom-display { min-width: 50px; text-align: center; font-size: 12px; font-weight: 500; }
     .main-container { display: flex; flex: 1; overflow: hidden; }
+    .main-container { position: relative; }
+    .ask-btn { width: auto; padding: 0 10px; font-size: 13px; font-weight: 600; gap: 4px; }
+    .assistant-drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 260px; z-index: 60; background: var(--bg-light); border-left: 1px solid var(--border); box-shadow: -4px 0 16px rgba(43, 41, 37, 0.12); display: flex; flex-direction: column; user-select: text; }
+    .assistant-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border); font-weight: 600; }
+    .assistant-head button, .assistant-model button { background: none; border: none; cursor: pointer; color: var(--text-dim); font-size: 16px; }
+    .assistant-model { padding: 4px 12px; font-size: 11px; color: var(--text-dim); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .assistant-model button { font-size: 13px; flex-shrink: 0; }
+    .assistant-log { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+    .a-msg { padding: 7px 9px; border-radius: 8px; font-size: 12.5px; line-height: 1.45; max-width: 100%; overflow-wrap: anywhere; }
+    .a-msg.user { background: var(--primary); color: #fff; align-self: flex-end; white-space: pre-wrap; }
+    .a-msg.assistant, .a-msg.note { background: var(--bg-lighter); align-self: stretch; }
+    .a-text { white-space: pre-wrap; }
+    .a-status, .a-by { font-size: 11px; color: var(--text-dim); }
+    .a-by { margin-top: 4px; }
+    .a-warn { font-size: 11.5px; color: var(--warning); margin-top: 4px; }
+    .a-reasoning summary { font-size: 11px; color: var(--text-dim); cursor: pointer; }
+    .a-reasoning pre { white-space: pre-wrap; font: 11px/1.4 ui-monospace, Consolas, monospace; max-height: 140px; overflow-y: auto; color: var(--text-dim); margin-top: 4px; }
+    .a-actions, .a-quotes { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+    .a-action { text-align: left; padding: 5px 8px; border-radius: 4px; border: 1px solid var(--primary); background: transparent; color: var(--primary); font-size: 12px; cursor: pointer; }
+    .a-action:hover { background: var(--primary); color: #fff; }
+    .a-quote { text-align: left; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); border-left: 3px solid rgba(255, 180, 0, 0.9); background: var(--bg-light); color: var(--text); font-size: 11px; cursor: pointer; }
+    .a-quote:hover { background: var(--bg-hover); }
+    .assistant-scopes { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 10px 0; }
+    .a-chip { padding: 3px 8px; border-radius: 12px; border: 1px solid var(--border); background: transparent; color: var(--text); font-size: 11px; cursor: pointer; }
+    .a-chip.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+    .a-chip:disabled { opacity: 0.4; cursor: not-allowed; }
+    .assistant-input-row { display: flex; gap: 6px; padding: 6px 10px; align-items: flex-end; }
+    .assistant-input-row textarea { flex: 1; resize: none; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; font-size: 12.5px; }
+    .assistant-input-row button { padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-lighter); color: var(--text); cursor: pointer; font-size: 12px; }
+    .assistant-input-row button.primary { background: var(--primary); border-color: var(--primary-dark); color: #fff; }
+    .assistant-vision { padding: 4px 12px 0; font-size: 10.5px; color: var(--text-dim); }
+    .assistant-vision button { font-size: 10.5px; padding: 1px 6px; cursor: pointer; }
+    .assistant-foot { padding: 4px 12px 8px; font-size: 10.5px; color: var(--text-dim); }
     .sidebar {
       width: 200px; background: var(--bg-light); border-right: 1px solid var(--border);
       display: flex; flex-direction: column; flex-shrink: 0;
@@ -365,6 +398,7 @@
     </div>
     <div class="toolbar-group" style="margin-left: auto;">
       <button class="tool-btn" id="searchBtn" data-tip="Find"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+      <button class="tool-btn ask-btn" id="askBtn" data-tip="Ask how to do something, or about this page">&#10022; Ask</button>
     </div>
   </div>
 
@@ -430,6 +464,20 @@
         </div>
       </div>
     </div>
+    <aside class="assistant-drawer hidden" id="assistantDrawer" aria-label="Ask">
+      <div class="assistant-head"><span>&#10022; Ask</span><button id="assistantClose" data-tip="Close (Esc)">&times;</button></div>
+      <div class="assistant-model"><span id="assistantModelText"></span><button id="assistantModelBtn" data-tip="Choose the AI model">&#9998;</button></div>
+      <div class="assistant-log" id="assistantLog"></div>
+      <div class="assistant-scopes" id="assistantScopes">
+        <button class="a-chip active" data-scope="help" data-tip="Ask how to do something in Pagewise">How do I&hellip;</button>
+        <button class="a-chip" data-scope="page" data-tip="Ask about the page you are on">This page</button>
+        <button class="a-chip" data-scope="selection" data-tip="Ask about the text you selected">Selection</button>
+        <button class="a-chip" data-scope="document" data-tip="Ask about the whole document">Whole document</button>
+      </div>
+      <div class="assistant-vision hidden" id="assistantVision"><span id="assistantVisionText">Let answers see the page image: download the image reader (about 1 GB)</span> <button id="assistantVisionBtn">Download</button></div>
+      <div class="assistant-input-row"><textarea id="assistantInput" rows="2" maxlength="1000" placeholder="Type a question"></textarea><button class="primary" id="assistantSend">Send</button><button id="assistantStop" class="hidden">Stop</button></div>
+      <div class="assistant-foot" id="assistantFoot"></div>
+    </aside>
   </div>
 
   <div class="status-bar"><div><span id="statusText">Ready</span></div><div class="status-separator"></div><div>Tool: <span id="currentToolDisplay">Select</span></div><div style="margin-left: auto;"><span id="filePath">No file loaded</span></div></div>
@@ -2469,7 +2517,7 @@
         try {
           const st = await window.pdfAPI.writerStatus();
           if (!st.installed) {
-            if (!confirm('AI suggestions use a small language model that runs on your computer (CPU). This is a one-time download of about 3.1 GB. Nothing you type or fill leaves the computer.\n\nDownload it now?')) return;
+            if (!confirm('AI suggestions use a small language model that runs on your computer (CPU). This is a one-time download of about 4.1 GB. Nothing you type or fill leaves the computer.\n\nDownload it now?')) return;
             if (!progressBound) { progressBound = true; window.pdfAPI.onEngineProgress(pr => { if (installing) setLoading(true, pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : '')); }); }
             installing = true; btn.disabled = true; setLoading(true, 'Downloading writing model...');
             const ir = await window.pdfAPI.writerInstall();
@@ -2640,7 +2688,7 @@
         if (text.replace(/\s/g, '').length < 10) { showNotification('No text found in the document', 'warning'); return; }
         const st = await window.pdfAPI.writerStatus();
         if (!st.installed) {
-          if (!confirm('Reading details from a document uses a small language model that runs on your computer (CPU). This is a one-time download of about 3.1 GB. Nothing you type or fill leaves the computer.\n\nDownload it now?')) return;
+          if (!confirm('Reading details from a document uses a small language model that runs on your computer (CPU). This is a one-time download of about 4.1 GB. Nothing you type or fill leaves the computer.\n\nDownload it now?')) return;
           window.pdfAPI.onEngineProgress(pr => { if (installing) setLoading(true, pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : '')); });
           installing = true; setLoading(true, 'Downloading writing model...');
           const ir = await window.pdfAPI.writerInstall();
@@ -3479,6 +3527,239 @@
         if (active && active.closest && active.closest('#searchBar')) active.blur(); // so Ctrl+Z reaches the document
       }
     }
+
+    // ---------- Ask: the assistant drawer ----------
+    const asst = { open: false, scope: 'help', info: null, history: [], busy: false, cur: null, sel: null, docText: null, seq: 0 };
+    const hostOf = u => { try { return new URL(u).hostname; } catch (e) { return ''; } };
+    const isLoopback = h => h === 'localhost' || h === '[::1]' || /^127\.\d+\.\d+\.\d+$/.test(h);
+    function shortModel(n) { return !n ? 'none' : /built-in/i.test(n) ? 'Built-in' : n; }
+    function assistantModelLabel(i) { return !i.help && !i.document ? 'No AI model set up' : 'How-to: ' + shortModel(i.help) + ' · Documents: ' + shortModel(i.document); }
+    // The image reader is offered only to someone with the built-in model for documents, who has the text model but not the image file, while asking about a page
+    function visionOfferVisible(info, scope) { return scope === 'page' && !!info && !!info.offerVision; }
+    function updateVisionOffer() { $('assistantVision').classList.toggle('hidden', !visionOfferVisible(asst.info, asst.scope)); }
+    async function refreshAssistantInfo() {
+      asst.info = await window.pdfAPI.assistantModelGet();
+      const i = asst.info;
+      $('assistantModelText').textContent = assistantModelLabel(i);
+      const remote = i.custom && !i.custom.loopback;
+      $('assistantFoot').textContent = (remote ? 'Document questions are sent to ' + i.custom.host + '. ' : 'Runs on this computer. ') + 'Answers can be wrong; check important details.';
+      await updateScopeChips(); updateVisionOffer();
+    }
+    async function assistantDocumentText() {
+      const doc = state.pdfDoc, limit = asst.info ? asst.info.docChars : 0;
+      if (!doc || !limit) return null;
+      if (asst.docText && asst.docText.doc === doc && asst.docText.limit === limit) return asst.docText.text;
+      let out = '';
+      for (let n = 1; n <= doc.numPages; n++) {
+        out += (out ? '\n\n' : '') + '[Page ' + n + ']\n' + pageSearchText(await pageItems(n)).text.trim();
+        if (out.length > limit) { out = null; break; }
+      }
+      asst.docText = { doc, limit, text: out };
+      return out;
+    }
+    async function updateScopeChips() {
+      const set = (scope, disabled, tip) => { const b = document.querySelector('.a-chip[data-scope="' + scope + '"]'); b.disabled = disabled; if (tip) b.dataset.tip = tip; };
+      set('page', !state.pdfDoc, state.pdfDoc ? 'Ask about the page you are on' : 'Open a PDF first');
+      set('selection', !asst.sel, asst.sel ? 'Ask about the text you selected' : 'Select some text on the page first');
+      set('document', true, state.pdfDoc ? 'Checking the length of the document' : 'Open a PDF first');
+      if (state.pdfDoc && asst.info) {
+        const seq = ++asst.seq, text = await assistantDocumentText();
+        if (seq === asst.seq) set('document', !text, text ? 'Ask about the whole document' : asst.info.docChars ? 'Too long for this model' : 'No AI model is set up for documents');
+      }
+      const cur = document.querySelector('.a-chip[data-scope="' + asst.scope + '"]');
+      if (cur && cur.disabled) setAssistantScope('help');
+    }
+    function setAssistantScope(scope) {
+      asst.scope = scope; updateVisionOffer();
+      document.querySelectorAll('.a-chip').forEach(b => b.classList.toggle('active', b.dataset.scope === scope));
+      $('assistantInput').placeholder = scope === 'help' ? 'How do I… (for example: sign this)' : scope === 'selection' ? 'Ask about the selected text' : scope === 'document' ? 'Ask about the whole document' : 'Ask about this page';
+    }
+    function addAssistantNote(text, buttons = []) {
+      const m = el('div', { className: 'a-msg note' }, el('div', { className: 'a-text', textContent: text }), ...buttons);
+      $('assistantLog').append(m); m.scrollIntoView({ block: 'end' });
+      return m;
+    }
+    async function openAssistant() {
+      asst.open = true; $('assistantDrawer').classList.remove('hidden');
+      const hadSelection = !!asst.sel;
+      await refreshAssistantInfo();
+      if (hadSelection && asst.sel) setAssistantScope('selection'); else if (asst.scope === 'selection' && !asst.sel) setAssistantScope('help'); else setAssistantScope(asst.scope);
+      $('assistantInput').focus();
+    }
+    function clearAssistantHighlights() {
+      if (state.find && state.find.key === 'assistant') { state.find = null; document.querySelectorAll('.find-layer').forEach(l => l.remove()); updateFindCounter(); }
+    }
+    function closeAssistant() {
+      if (asst.cur) stopAssistant();
+      asst.open = false; $('assistantDrawer').classList.add('hidden'); clearAssistantHighlights();
+    }
+    function toggleAssistant() { if (asst.open && document.activeElement && document.activeElement.closest('#assistantDrawer')) closeAssistant(); else openAssistant(); }
+    function setAssistantBusy(busy) { asst.busy = busy; $('assistantSend').classList.toggle('hidden', busy); $('assistantStop').classList.toggle('hidden', !busy); $('assistantInput').disabled = busy; if (!busy) $('assistantInput').focus(); }
+    // Highlights a quote with the Find layer and goes to it: on its page first, else wherever it is
+    async function highlightQuote(q) {
+      const doc = state.pdfDoc;
+      if (!doc || !q.text) return;
+      const find = state.find = { key: 'assistant', query: q.text, matchCase: false, wholeWord: false, doc, matches: [], index: -1 };
+      const first = q.page && q.page <= doc.numPages ? q.page : state.currentPage, order = [first, ...Array.from({ length: doc.numPages }, (_, i) => i + 1).filter(n => n !== first)];
+      for (const n of order) {
+        for (const m of findPageMatches(await pageItems(n), q.text, false, false)) find.matches.push({ page: n, parts: m.parts });
+        if (find.matches.length) break;
+      }
+      if (!find.matches.length) { state.find = null; showNotification('Could not find that text on the page', 'warning'); return; }
+      find.index = 0;
+      await drawHighlights(); updateFindCounter(); scrollToMatch();
+    }
+    function startAssistantProgress(msg) {
+      const t0 = Date.now(), status = el('div', { className: 'a-status' }), tick = () => { status.textContent = (msg.label || '') + ' ' + Math.round((Date.now() - t0) / 1000) + ' s'; };
+      tick(); msg.timer = setInterval(tick, 1000); msg.status = status; msg.node.prepend(status);
+    }
+    function stopAssistantProgress(msg) { clearInterval(msg.timer); if (msg.status) { msg.status.remove(); msg.status = null; } }
+    function finishAssistant(msg) { stopAssistantProgress(msg); asst.cur = null; setAssistantBusy(false); }
+    function buildAssistantReply() {
+      const text = el('div', { className: 'a-text' }), reasoning = el('details', { className: 'a-reasoning hidden' }, el('summary', { textContent: 'Show reasoning' }), el('pre'));
+      const node = el('div', { className: 'a-msg assistant' }, reasoning, text);
+      $('assistantLog').append(node);
+      return { node, text, reasoning, reasoningText: reasoning.querySelector('pre'), label: '' };
+    }
+    // The current page as a PNG (longest side at most 1600 px) for the built-in model to look at; null if it cannot be drawn
+    async function assistantPageImage() {
+      try {
+        const page = await state.pdfDoc.getPage(state.currentPage), vp1 = page.getViewport({ scale: 1 });
+        const vp = page.getViewport({ scale: Math.min(2, 1600 / Math.max(vp1.width, vp1.height)) });
+        const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.floor(vp.width)); canvas.height = Math.max(1, Math.floor(vp.height));
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+        return canvas.toDataURL('image/png').split(',')[1];
+      } catch (e) { return null; }
+    }
+    async function askAssistant() {
+      const question = $('assistantInput').value.trim();
+      if (!question || asst.busy) return;
+      const info = asst.info || await window.pdfAPI.assistantModelGet(), scope = asst.scope;
+      $('assistantInput').value = '';
+      $('assistantLog').append(el('div', { className: 'a-msg user', textContent: question }));
+      if (!info.builtinInstalled && !info.custom) { showAssistantSetup(); return; }
+      let req = { id: 'a' + Date.now() + '-' + (++asst.seq), mode: 'help', question, history: asst.history.slice(-4) };
+      if (scope !== 'help') {
+        let text, page = state.currentPage;
+        if (scope === 'selection') { text = asst.sel ? asst.sel.text : ''; page = asst.sel ? asst.sel.page : page; }
+        else if (scope === 'document') text = (await assistantDocumentText()) || '';
+        else text = pageSearchText(await pageItems(state.currentPage)).text;
+        req = { ...req, mode: 'page', scope, text: text.slice(0, 400000), page, history: [] };
+        if (scope === 'page' && info.vision) { const image = await assistantPageImage(); if (image) req.image = image; }
+      }
+      const msg = asst.cur = buildAssistantReply();
+      msg.id = req.id; msg.scope = scope; msg.question = question;
+      msg.label = scope === 'help' ? 'Looking in the guide…' : scope === 'selection' ? 'Reading the selection…' : scope === 'document' ? 'Reading the document…' : 'Reading the page…';
+      startAssistantProgress(msg);
+      setAssistantBusy(true);
+      const r = await window.pdfAPI.assistantAsk(req);
+      if (!r.success) { msg.text.textContent = r.error; finishAssistant(msg); }
+      $('assistantLog').lastElementChild.scrollIntoView({ block: 'end' });
+    }
+    function stopAssistant() {
+      const msg = asst.cur; if (!msg) return;
+      window.pdfAPI.assistantCancel({ id: msg.id });
+      if (!msg.text.textContent) msg.text.textContent = 'Stopped.'; else msg.text.append(' (stopped)');
+      finishAssistant(msg);
+    }
+    function onAssistantEvent(kind, m) {
+      const msg = asst.cur;
+      if (!msg || m.id !== msg.id) return;
+      if (kind === 'status') { msg.label = m.phase === 'starting' ? 'Starting the AI model (first question takes longer)…' : m.phase === 'thinking' ? 'Thinking…' : msg.label; return; }
+      if (kind === 'reasoning') { msg.reasoning.classList.remove('hidden'); msg.reasoningText.textContent += m.text; return; }
+      if (kind === 'token') { stopAssistantProgress(msg); msg.text.textContent += m.text; msg.node.scrollIntoView({ block: 'end' }); return; }
+      if (kind === 'error') { msg.text.textContent = m.error; msg.node.classList.add('note'); asst.history.push({ role: 'user', text: msg.question.slice(0, 2000) }, { role: 'assistant', text: m.error.slice(0, 2000) }); finishAssistant(msg); return; }
+      if (kind !== 'done') return;
+      msg.text.textContent = m.answer;
+      if (m.warning) msg.node.append(el('div', { className: 'a-warn', textContent: m.warning }));
+      if (m.actions && m.actions.length) msg.node.append(el('div', { className: 'a-actions' }, ...m.actions.map(a => el('button', { className: 'a-action', textContent: 'Open: ' + a.path, onclick: async () => { const r = await window.pdfAPI.assistantRunMenu({ path: a.path }); if (!r.success) showNotification(r.error, 'error'); } }))));
+      if (m.quotes && m.quotes.length) msg.node.append(el('div', { className: 'a-quotes' }, ...m.quotes.map(q => el('button', { className: 'a-quote', title: q.text, textContent: (q.page ? 'p. ' + q.page + ': ' : '') + '“' + (q.text.length > 90 ? q.text.slice(0, 90) + '…' : q.text) + '”', onclick: () => highlightQuote(q) }))));
+      if (m.footer) msg.node.append(el('div', { className: 'a-by', textContent: m.footer }));
+      if (m.model) msg.node.append(el('div', { className: 'a-by', textContent: 'answered by ' + m.model }));
+      if (msg.scope !== 'help' && m.quotes && m.quotes[0]) highlightQuote(m.quotes[0]);
+      asst.history.push({ role: 'user', text: msg.question.slice(0, 2000) }, { role: 'assistant', text: m.answer.slice(0, 2000) });
+      asst.history = asst.history.slice(-6);
+      finishAssistant(msg);
+      msg.node.scrollIntoView({ block: 'end' });
+    }
+    // The AI writing helper is not installed and no other model is set up: explain and offer both
+    function showAssistantSetup() {
+      const status = el('div', { className: 'a-status' });
+      const install = el('button', { className: 'a-action', textContent: 'Download the AI writing helper (about 4.1 GB)', onclick: async () => {
+        install.disabled = true; status.textContent = 'Downloading…';
+        window.pdfAPI.onEngineProgress(pr => { status.textContent = pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : ''); });
+        const r = await window.pdfAPI.writerInstall();
+        if (!r.success) { status.textContent = 'Error: ' + r.error; install.disabled = false; return; }
+        status.textContent = 'Installed. Ask your question again.'; await refreshAssistantInfo();
+      } });
+      addAssistantNote('Ask answers questions with the AI writing helper: a small language model that runs on this computer (a one-time download of about 4.1 GB). Nothing you ask leaves the computer. You can also use a model of your own.', [el('div', { className: 'a-actions' }, install, el('button', { className: 'a-action', textContent: 'Use my own model…', onclick: showAssistantModelDialog }), status)]);
+    }
+    function showAssistantModelDialog() {
+      const cur = (asst.info && asst.info.saved) || { url: 'http://127.0.0.1:8001', model: '', reasoning: 'server' };
+      const content = '<div class="form-group"><label class="form-label">For questions about documents, use</label><select class="form-select" id="amKind"><option value="builtin">The built-in model only</option><option value="custom">My own model (any OpenAI-compatible server)</option></select></div>'
+        + '<div id="amCustom"><div class="form-group"><label class="form-label">Server address</label><input type="text" class="form-input" id="amUrl" maxlength="300"></div>'
+        + '<div class="form-group"><label class="form-label">Model</label><div style="display:flex;gap:6px"><input type="text" class="form-input" id="amModel" maxlength="200" list="amModels" placeholder="model id"><datalist id="amModels"></datalist><button class="modal-btn" id="amFind">Find</button></div></div>'
+        + '<div class="form-group"><label><input type="checkbox" id="amReason"> Let the model reason before answering (slower, usually more accurate)</label></div>'
+        + '<div class="form-group"><button class="modal-btn" id="amTest">Test</button> <span id="amTestOut" style="font-size:12px"></span></div>'
+        + '<div class="form-group hidden" id="amWarn" style="border-left:3px solid var(--warning);padding:8px 12px;font-size:12px"><b id="amWarnText"></b><br><label><input type="checkbox" id="amAck"> I understand</label></div></div>'
+        + '<div id="amErr" style="color:var(--danger);font-size:12px"></div>';
+      const m = showModal('AI model for the assistant', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Save', action: 'save', primary: true, handler: modal => { saveAssistantModel(modal); return 'keep-open'; } }]);
+      const q = id => m.querySelector('#' + id);
+      q('amKind').value = asst.info && asst.info.custom ? 'custom' : 'builtin'; q('amUrl').value = cur.url; q('amModel').value = cur.model; q('amReason').checked = cur.reasoning !== 'off';
+      const sync = () => {
+        q('amCustom').classList.toggle('hidden', q('amKind').value !== 'custom');
+        const host = hostOf(q('amUrl').value.trim()), remote = !!host && !isLoopback(host);
+        q('amWarn').classList.toggle('hidden', !remote); q('amWarnText').textContent = 'Your questions and document text will be sent to ' + host;
+      };
+      q('amKind').onchange = sync; q('amUrl').oninput = sync; sync();
+      q('amFind').onclick = async () => {
+        q('amErr').textContent = ''; const r = await window.pdfAPI.assistantModelList({ url: q('amUrl').value.trim() });
+        if (!r.success) { q('amErr').textContent = r.error; return; }
+        q('amModels').replaceChildren(...r.models.map(id => el('option', { value: id }))); if (r.models.length && !q('amModel').value) q('amModel').value = r.models[0];
+        q('amTestOut').textContent = r.models.length + ' model' + (r.models.length === 1 ? '' : 's') + ' found';
+      };
+      q('amTest').onclick = async () => {
+        q('amErr').textContent = ''; q('amTestOut').textContent = 'Testing…';
+        const r = await window.pdfAPI.assistantModelTest({ url: q('amUrl').value.trim(), model: q('amModel').value.trim(), reasoning: q('amReason').checked ? 'server' : 'off' });
+        q('amTestOut').textContent = r.success ? 'Works: answered in ' + (r.ms / 1000).toFixed(1) + ' s' : ''; if (!r.success) q('amErr').textContent = r.error;
+      };
+    }
+    async function saveAssistantModel(m) {
+      const q = id => m.querySelector('#' + id);
+      const r = await window.pdfAPI.assistantModelSet(q('amKind').value === 'builtin' ? { kind: 'builtin' } : { kind: 'custom', url: q('amUrl').value.trim(), model: q('amModel').value.trim(), reasoning: q('amReason').checked ? 'server' : 'off', acknowledged: q('amAck').checked });
+      if (!r.success) { q('amErr').textContent = r.error; return; }
+      m.remove(); await refreshAssistantInfo();
+    }
+    // The text layer's spans have no spaces between them, so a selection across them reads "therequester"; join the selected parts of the spans with spaces
+    function selectionText(sel) {
+      const plain = sel.toString();
+      if (!sel.rangeCount) return plain;
+      const r = sel.getRangeAt(0), c = r.commonAncestorContainer, root = c.nodeType === 1 ? c : c.parentElement;
+      const spans = root && root.querySelectorAll ? [...root.querySelectorAll('.text-layer > span')].filter(sp => r.intersectsNode(sp)) : [];
+      if (!spans.length) return plain;
+      return spans.map(sp => { const t = sp.textContent, n = sp.firstChild; return t.slice(r.startContainer === n ? r.startOffset : 0, r.endContainer === n ? r.endOffset : t.length); }).join(' ').replace(/\s+/g, ' ');
+    }
+    document.addEventListener('selectionchange', () => {
+      const s = window.getSelection(), t = selectionText(s).trim(), n = s.anchorNode && (s.anchorNode.nodeType === 1 ? s.anchorNode : s.anchorNode.parentElement), inPage = n && n.closest && n.closest('#pagesContainer');
+      if (inPage && t) asst.sel = { text: t.slice(0, 400000), page: Number(n.closest('.page-container')?.dataset.page) || state.currentPage };
+      else if (!t && !(document.activeElement && document.activeElement.closest && document.activeElement.closest('#assistantDrawer'))) asst.sel = null;
+      if (asst.open) updateScopeChips();
+    });
+    document.querySelectorAll('.a-chip').forEach(b => { b.onclick = () => setAssistantScope(b.dataset.scope); });
+    $('assistantVisionBtn').onclick = async () => {
+      const btn = $('assistantVisionBtn'), text = $('assistantVisionText'), before = text.textContent;
+      btn.disabled = true; text.textContent = 'Downloading…';
+      window.pdfAPI.onEngineProgress(pr => { text.textContent = pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : ''); });
+      const r = await window.pdfAPI.writerInstall();
+      btn.disabled = false; text.textContent = before;
+      if (!r.success) { showNotification('Download failed: ' + r.error, 'error'); return; }
+      await refreshAssistantInfo();
+    };
+    $('askBtn').onclick = openAssistant; $('assistantClose').onclick = closeAssistant; $('assistantSend').onclick = askAssistant; $('assistantStop').onclick = stopAssistant; $('assistantModelBtn').onclick = showAssistantModelDialog;
+    $('assistantInput').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); askAssistant(); } };
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && asst.open && !document.querySelector('.modal-overlay') && !e.target.closest('#searchBar')) closeAssistant(); });
+    window.pdfAPI.onAssistantEvent(onAssistantEvent);
+    window.pdfAPI.onMenuAssistant(toggleAssistant);
 
     $('newBtn').onclick = createNewPdf; $('openBtn').onclick = openFile; $('welcomeOpenBtn').onclick = openFile; $('welcomeNewBtn').onclick = createNewPdf; $('welcomeMergeBtn').onclick = mergePdfs;
     $('saveBtn').onclick = () => saveDocument(); $('printBtn').onclick = () => window.pdfAPI.printDocument();
