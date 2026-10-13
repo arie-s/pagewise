@@ -4,7 +4,7 @@ const { loadRendererFunctions } = require('./helpers.cjs');
 
 const inert = async () => {};
 function setup({ words = [{ text: 'visible', x0: 2, y0: 2, x1: 20, y1: 12 }], failFinalParse = false, failOcr = false } = {}) {
-  const oldDoc = { numPages: 1, getPage: async () => { throw new Error('old unmasked document used'); } };
+  const oldDoc = { numPages: 1, getPage: async () => { throw new Error('old unmasked document used'); }, destroy: async () => { oldDoc.destroyed = true; } };
   const stagingDoc = {
     numPages: 1,
     destroy: async () => { stagingDoc.destroyed = true; },
@@ -20,7 +20,7 @@ function setup({ words = [{ text: 'visible', x0: 2, y0: 2, x1: 20, y1: 12 }], fa
   const notices = [], ocrInputs = [];
   let documentLoads = 0, undoUpdates = 0, annotationUpdates = 0;
   const { functions } = loadRendererFunctions(['runOcr'], {
-    state,
+    state, helperNames: ['setPdfDoc'],
     api: {
       ocrPage: async request => { ocrInputs.push(request.pngBase64); return failOcr ? { success: false, error: 'recognition failed' } : { success: true, words }; },
       applyModifications: async () => ({ success: true, data: Buffer.from('FINAL').toString('base64') })
@@ -38,7 +38,7 @@ function setup({ words = [{ text: 'visible', x0: 2, y0: 2, x1: 20, y1: 12 }], fa
   });
   // The canvas encodes which document page was rasterized.
   const context = functions.runOcr;
-  return { state, stagingDoc, notices, ocrInputs, get updates() { return [undoUpdates, annotationUpdates]; }, run: context };
+  return { state, oldDoc, stagingDoc, notices, ocrInputs, get updates() { return [undoUpdates, annotationUpdates]; }, run: context };
 }
 
 test('OCR recognizes the baked masked document and destroys its staging document', async () => {
@@ -47,6 +47,7 @@ test('OCR recognizes the baked masked document and destroys its staging document
   assert.equal(env.ocrInputs.length, 1);
   assert.equal(Buffer.from(env.ocrInputs[0], 'base64').toString(), 'masked-baked-page');
   assert.equal(env.stagingDoc.destroyed, true);
+  assert.equal(env.oldDoc.destroyed, true);
   assert.equal(env.state.originalData, Buffer.from('FINAL').toString('base64'));
   assert.notEqual(env.state.pdfDoc.numPages, undefined);
   assert.deepEqual(env.updates, [1, 1]);
@@ -69,6 +70,7 @@ test('invalid final OCR PDF preserves pending state and zero words reports no te
   const priorDoc = failed.state.pdfDoc, annotations = failed.state.annotations;
   await failed.run();
   assert.equal(failed.state.pdfDoc, priorDoc);
+  assert.equal(failed.oldDoc.destroyed, undefined);
   assert.equal(failed.state.originalData, 'OLD');
   assert.equal(failed.state.annotations, annotations);
 

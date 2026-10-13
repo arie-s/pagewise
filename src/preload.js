@@ -85,7 +85,8 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   exportXlsx: (options) => ipcRenderer.invoke('export-xlsx', options),
   copyTables: (tables) => ipcRenderer.invoke('copy-tables', tables),
   saveMarkdown: (options) => ipcRenderer.invoke('save-markdown', options),
-  onEngineProgress: (callback) => ipcRenderer.on('engine-progress', (ev, m) => callback(m)),
+  // Returns a function that removes the listener, so each download listens only while it runs
+  onEngineProgress: (callback) => { const fn = (ev, m) => callback(m); ipcRenderer.on('engine-progress', fn); return () => ipcRenderer.removeListener('engine-progress', fn); },
   onMenuSmartExtract: (callback) => ipcRenderer.on('menu-smart-extract', callback),
   onMenuEngineSetup: (callback) => ipcRenderer.on('menu-engine-setup', callback),
 

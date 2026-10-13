@@ -14,14 +14,14 @@ const basicDeps = state => ({
 });
 
 test('saveDocument reports cancel and save failures as false and success as true', async () => {
-  const state = { pdfDoc: { numPages: 1 }, originalData: 'AQ==', filePath: null, fileName: 'draft.pdf', currentPage: 1, annotations: {}, redactionMarks: {}, textEdits: {}, undoStack: [], redoStack: [], hasUnsavedChanges: true };
+  const state = { pdfDoc: { numPages: 1, destroy: inert }, originalData: 'AQ==', filePath: null, fileName: 'draft.pdf', currentPage: 1, annotations: {}, redactionMarks: {}, textEdits: {}, undoStack: [], redoStack: [], hasUnsavedChanges: true };
   const results = [
     { success: false, canceled: true },
     { success: false, error: 'disk error' },
     { success: true, path: '/tmp/draft.pdf' }
   ];
   const { functions } = loadRendererFunctions(['saveDocument'], {
-    state,
+    state, helperNames: ['setPdfDoc'],
     api: { saveFileAs: async () => results.shift() },
     extra: { ...basicDeps(state), buildDocumentData: async () => 'AQ==', collectModifications: () => [] }
   });
@@ -57,11 +57,11 @@ test('an in-flight save blocks duplicate saves and document replacement without 
 });
 
 test('a page mutation informs the close guard before rendering the changed document', async () => {
-  const state = { pdfDoc: { numPages: 3 }, originalData: 'OLD', currentPage: 1,
+  const state = { pdfDoc: { numPages: 3, destroy: inert }, originalData: 'OLD', currentPage: 1,
     annotations: {}, redactionMarks: {}, textEdits: {}, undoStack: [], redoStack: [], hasUnsavedChanges: false };
   const flags = [];
   const { functions } = loadRendererFunctions(['deletePage'], {
-    state, helperNames: ['remapForReorder', 'setUnsavedChanges'],
+    state, helperNames: ['remapForReorder', 'setUnsavedChanges', 'setPdfDoc'],
     api: { applyModifications: async () => ({ success: true, data: 'AQ==' }), setUnsaved: flag => flags.push(flag) },
     extra: { ...basicDeps(), pdfjsLib: { getDocument: () => ({ promise: Promise.resolve({ numPages: 2 }) }) },
       renderThumbnails: async () => { assert.deepEqual(flags, [true]); assert.equal(state.hasUnsavedChanges, true); } }
@@ -173,8 +173,9 @@ test('every main-process menu action reaches a preload and renderer subscription
 test('page delete and insert operations remap edits and discard old undo snapshots', async () => {
   for (const operation of ['deletePage', 'insertBlankPage', 'showInsertFromFile']) {
     const inserting = operation !== 'deletePage';
+    const oldDoc = { numPages: 3, destroy: async () => { oldDoc.destroyed = true; } };
     const state = {
-      pdfDoc: { numPages: 3 }, originalData: 'AQ==', currentPage: operation === 'deletePage' ? 2 : 1,
+      pdfDoc: oldDoc, originalData: 'AQ==', currentPage: operation === 'deletePage' ? 2 : 1,
       annotations: { 1: ['a1'], 2: ['a2'], 3: ['a3'] },
       redactionMarks: { 1: ['r1'], 2: ['r2'], 3: ['r3'] },
       textEdits: { '1-0': 't1', '2-0': 't2', '3-0': 't3' },
@@ -188,7 +189,7 @@ test('page delete and insert operations remap edits and discard old undo snapsho
       getDocumentInfo: async () => ({ success: true, info: { pageCount: 4 } })
     };
     const { functions } = loadRendererFunctions([operation], {
-      state, api, helperNames: ['remapForReorder'],
+      state, api, helperNames: ['remapForReorder', 'setPdfDoc'],
       extra: {
         pdfjsLib: { getDocument: () => ({ promise: Promise.resolve({ numPages: loadedPageCount }) }) },
         confirm: () => true, setLoading: () => {}, setUnsavedChanges: value => { state.hasUnsavedChanges = value; },
@@ -199,6 +200,7 @@ test('page delete and insert operations remap edits and discard old undo snapsho
     const expected = operation === 'deletePage' ? [1, 3] : [1, 2, 3];
     const mappedPages = operation === 'deletePage' ? [1, 2] : [1, 3, 4];
     assert.equal(state.pdfDoc.numPages, loadedPageCount, `${operation} loads the changed document`);
+    assert.equal(oldDoc.destroyed, true, `${operation} destroys the replaced document`);
     for (let i = 0; i < expected.length; i++) {
       const sourcePage = expected[i], targetPage = mappedPages[i];
       assert.deepEqual(state.annotations[targetPage], [`a${sourcePage}`], `${operation} remaps annotations`);

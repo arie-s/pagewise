@@ -564,6 +564,8 @@
       return stack;
     }
     function pushDocSnapshot(snap) { state.undoStack = trimDocSnapshots([...state.undoStack, snap]); state.redoStack = []; updateUndoRedo(); }
+    // Destroy the replaced document: pdf.js keeps each open document parsed in its worker until destroy()
+    async function setPdfDoc(doc) { const old = state.pdfDoc; state.pdfDoc = doc; if (old && old !== doc) await old.destroy(); }
     async function swapDocument(data) {
       const old = state.pdfDoc;
       state.pdfDoc = await pdfjsLib.getDocument({ data: Uint8Array.from(atob(data), c => c.charCodeAt(0)) }).promise;
@@ -692,7 +694,7 @@
           const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
           const pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
           remapForReorder(newOrder);
-          state.originalData = r.data; state.pdfDoc = pdfDoc;
+          state.originalData = r.data; await setPdfDoc(pdfDoc);
           setUnsavedChanges(true);
           state.currentPage = Math.min(state.currentPage, state.pdfDoc.numPages);
           await renderThumbnails(); await renderAllPages();
@@ -750,7 +752,7 @@
         const d = Uint8Array.from(atob(data), c => c.charCodeAt(0));
         const finalDoc = await pdfjsLib.getDocument({ data: d }).promise;
         state.originalData = data;
-        state.pdfDoc = finalDoc;
+        await setPdfDoc(finalDoc);
         state.annotations = {}; state.redactionMarks = {}; state.textEdits = {};
         state.undoStack = []; state.redoStack = [];
         setUnsavedChanges(true);
@@ -807,13 +809,13 @@
       body.append(err);
       const modal = el('div', { className: 'modal' }, el('div', { className: 'modal-header' }, el('span', { className: 'modal-title', textContent: 'AI Models' }), el('button', { className: 'modal-close', innerHTML: '&times;', onclick: () => m.remove() })), body);
       m.append(modal); $('modalContainer').appendChild(m);
-      window.pdfAPI.onEngineProgress(pr => {
-        const r = busy && rows[busy]; if (!r || !m.isConnected) return;
-        r.bar.style.display = 'block'; r.bar.firstChild.style.width = Math.max(pr.pct, 0) + '%'; r.phase.textContent = pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : '');
-      });
       const run = async (id, fn) => {
         err.textContent = ''; busy = id; render();
-        const r = await fn(); busy = null;
+        const off = window.pdfAPI.onEngineProgress(pr => {
+          const r = busy && rows[busy]; if (!r || !m.isConnected) return;
+          r.bar.style.display = 'block'; r.bar.firstChild.style.width = Math.max(pr.pct, 0) + '%'; r.phase.textContent = pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : '');
+        });
+        const r = await fn().finally(off); busy = null;
         if (!r.success) err.textContent = r.error;
         else if (r.freedBytes != null) { const mb = r.freedBytes / 1048576; showNotification(rows[id].d.name + ' removed, ' + (mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB') + ' freed'); }
         await render(); if (asst.open) refreshAssistantInfo();
@@ -1098,7 +1100,7 @@
         const order = Array.from({ length: oldPageCount }, (_, i) => i);
         order.splice(state.currentPage, 0, ...Array(pdfDoc.numPages - oldPageCount).fill(null));
         remapForReorder(order);
-        state.originalData = data; state.pdfDoc = pdfDoc;
+        state.originalData = data; await setPdfDoc(pdfDoc);
         setUnsavedChanges(true);
         $('pageCount').textContent = state.pdfDoc.numPages;
         await renderThumbnails(); await renderAllPages();
@@ -1117,7 +1119,7 @@
         const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
         if (r.success) {
           state.originalData = r.data; setUnsavedChanges(true); const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
-          state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
+          await setPdfDoc(await pdfjsLib.getDocument({ data: d }).promise);
           await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); setUnsavedChanges(true);
           showNotification('All pages rotated');
         } else showNotification('Error: ' + r.error, 'error');
@@ -1139,7 +1141,7 @@
         const mods = [];
         for (let i = 0; i < n; i++) mods.push({ type: 'pageNumber', pageIndex: i, text: numText(i), position: pos, fontSize: size, x: 0.4 });
         const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
-        if (r.success) { state.originalData = r.data; setUnsavedChanges(true); const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); showNotification('Page numbers added'); }
+        if (r.success) { state.originalData = r.data; setUnsavedChanges(true); const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); await setPdfDoc(await pdfjsLib.getDocument({ data: d }).promise); await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); showNotification('Page numbers added'); }
         else showNotification('Error: ' + r.error, 'error');
         setLoading(false);
       } }]);
@@ -1157,7 +1159,7 @@
         const mods = [];
         for (let i = 0; i < state.pdfDoc.numPages; i++) mods.push({ type: 'headerFooter', pageIndex: i, header: header || '', footer: footer || '' });
         const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
-        if (r.success) { state.originalData = r.data; setUnsavedChanges(true); const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); showNotification('Header & footer added'); }
+        if (r.success) { state.originalData = r.data; setUnsavedChanges(true); const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); await setPdfDoc(await pdfjsLib.getDocument({ data: d }).promise); await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); showNotification('Header & footer added'); }
         else showNotification('Error: ' + r.error, 'error');
         setLoading(false);
       } }]);
@@ -1246,7 +1248,7 @@
           state.originalData = data;
           state.annotations = {}; state.redactionMarks = {}; state.textEdits = {}; state.undoStack = []; state.redoStack = []; updateUndoRedo();
           const d = Uint8Array.from(atob(data), c => c.charCodeAt(0));
-          state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
+          await setPdfDoc(await pdfjsLib.getDocument({ data: d }).promise);
           await renderThumbnails(); await renderAllPages(); goToPage(Math.min(state.currentPage, state.pdfDoc.numPages));
           updateAnnotationCount();
           showNotification('Saved!');
@@ -1950,7 +1952,7 @@
         if (!r.success) throw new Error(r.error || 'Could not change the pages');
         state.originalData = r.data; setUnsavedChanges(true);
         if (pending.length) { state.annotations = {}; state.textEdits = {}; state.undoStack = []; state.redoStack = []; updateUndoRedo(); updateAnnotationCount(); }
-        state.pdfDoc = await pdfjsLib.getDocument({ data: Uint8Array.from(atob(r.data), c => c.charCodeAt(0)) }).promise;
+        await setPdfDoc(await pdfjsLib.getDocument({ data: Uint8Array.from(atob(r.data), c => c.charCodeAt(0)) }).promise);
         await renderThumbnails(); await renderAllPages(); goToPage(Math.min(state.currentPage, state.pdfDoc.numPages)); showNotification(message);
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
       setLoading(false);
@@ -2017,7 +2019,7 @@
         if (small && !pending.length) { showNotification(compactMsg); setLoading(false); return; }
         state.originalData = r.data; setUnsavedChanges(true);
         if (pending.length) { state.annotations = {}; state.textEdits = {}; state.undoStack = []; state.redoStack = []; updateUndoRedo(); updateAnnotationCount(); }
-        state.pdfDoc = await pdfjsLib.getDocument({ data: Uint8Array.from(atob(r.data), c => c.charCodeAt(0)) }).promise;
+        await setPdfDoc(await pdfjsLib.getDocument({ data: Uint8Array.from(atob(r.data), c => c.charCodeAt(0)) }).promise);
         await renderThumbnails(); await renderAllPages(); goToPage(Math.min(state.currentPage, state.pdfDoc.numPages));
         showNotification(small ? compactMsg : mb(r.before) + ' → ' + mb(r.after) + ' (' + Math.round(100 - 100 * r.after / r.before) + '% smaller, ' + r.images.recompressed + ' image' + (r.images.recompressed === 1 ? '' : 's') + ' recompressed)');
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
@@ -2049,7 +2051,7 @@
         const r = await window.pdfAPI.replacePage({ data: state.originalData, pageIndex: page - 1, sourceData, sourcePage });
         if (!r.success) throw new Error(r.error || 'Replace failed');
         state.originalData = r.data; setUnsavedChanges(true);
-        state.pdfDoc = await pdfjsLib.getDocument({ data: Uint8Array.from(atob(r.data), c => c.charCodeAt(0)) }).promise;
+        await setPdfDoc(await pdfjsLib.getDocument({ data: Uint8Array.from(atob(r.data), c => c.charCodeAt(0)) }).promise);
         delete state.annotations[page]; delete state.redactionMarks[page];
         for (const key of Object.keys(state.textEdits)) if (key.startsWith(page + '-')) delete state.textEdits[key];
         state.undoStack = []; state.redoStack = []; updateUndoRedo(); updateAnnotationCount();
@@ -2103,7 +2105,7 @@
     function goToPage(p) { state.currentPage = p; $('currentPage').textContent = p; document.querySelectorAll('.thumbnail').forEach(t => t.classList.remove('active')); document.querySelector('.thumbnail[data-page="' + p + '"]')?.classList.add('active'); document.getElementById('page-' + p)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
     async function rotatePage(angle) {
       if (!state.pdfDoc) return; setLoading(true, 'Rotating...');
-      try { if (state.formsDirty) await commitFormValues(); const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: [{ type: 'rotate', pageIndex: state.currentPage - 1, angle }] }); if (r.success) { state.originalData = r.data; setUnsavedChanges(true); const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); showNotification('Page rotated'); } } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      try { if (state.formsDirty) await commitFormValues(); const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: [{ type: 'rotate', pageIndex: state.currentPage - 1, angle }] }); if (r.success) { state.originalData = r.data; setUnsavedChanges(true); const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); await setPdfDoc(await pdfjsLib.getDocument({ data: d }).promise); await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); showNotification('Page rotated'); } } catch (e) { showNotification('Error: ' + e.message, 'error'); }
       setLoading(false);
     }
     async function deletePage() {
@@ -2117,7 +2119,7 @@
         const pdfDoc = await pdfjsLib.getDocument({ data: d }).promise;
         const order = Array.from({ length: state.pdfDoc.numPages }, (_, i) => i).filter(i => i !== state.currentPage - 1);
         remapForReorder(order);
-        state.originalData = r.data; state.pdfDoc = pdfDoc;
+        state.originalData = r.data; await setPdfDoc(pdfDoc);
         setUnsavedChanges(true);
         $('pageCount').textContent = state.pdfDoc.numPages;
         await renderThumbnails(); await renderAllPages();
@@ -2137,7 +2139,7 @@
         const order = Array.from({ length: state.pdfDoc.numPages }, (_, i) => i);
         order.splice(state.currentPage, 0, null);
         remapForReorder(order);
-        state.originalData = r.data; state.pdfDoc = pdfDoc;
+        state.originalData = r.data; await setPdfDoc(pdfDoc);
         setUnsavedChanges(true);
         $('pageCount').textContent = state.pdfDoc.numPages;
         await renderThumbnails(); await renderAllPages();
@@ -2154,13 +2156,13 @@
         if (!r.success) { showNotification(r.error, 'warning'); return; }
         if (!confirm('Turns the filled-in answers into ordinary page content. They can no longer be edited, and every PDF reader shows them the same.\n\nFlatten the form? Fields become fixed page content and can no longer be edited.')) return;
         state.originalData = r.data; setUnsavedChanges(true);
-        state.pdfDoc = await pdfjsLib.getDocument({ data: Uint8Array.from(atob(r.data), c => c.charCodeAt(0)) }).promise;
+        await setPdfDoc(await pdfjsLib.getDocument({ data: Uint8Array.from(atob(r.data), c => c.charCodeAt(0)) }).promise);
         await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); showNotification('Form flattened');
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
       finally { setLoading(false); }
     }
     async function reloadFromOriginal() {
-      state.pdfDoc = await pdfjsLib.getDocument({ data: Uint8Array.from(atob(state.originalData), c => c.charCodeAt(0)) }).promise;
+      await setPdfDoc(await pdfjsLib.getDocument({ data: Uint8Array.from(atob(state.originalData), c => c.charCodeAt(0)) }).promise);
       await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage);
     }
     // Words with pixel boxes from pdf.js text items: split on spaces, x-ranges by character share
@@ -2519,7 +2521,7 @@
         rows);
       const aiBox = el('div', { style: 'margin-top:12px;' });
       box.append(aiBox);
-      let token = 0, progressBound = false, installing = false;
+      let token = 0, installing = false;
       const filledIds = () => pages.flatMap(p => p.fields).map(f => f.id).filter(id => storage.getRawValue(id)?.value ?? existing[id]);
       const fillRow = (p, tick, hintText, warn) => {
         const hint = el('div', { style: 'font-size:11px;color:var(--text-dim);' }, hintText);
@@ -2534,9 +2536,9 @@
           const st = await window.pdfAPI.writerStatus();
           if (!st.installed) {
             if (!confirm('AI suggestions need the Assistant model, a one-time download of about 3.1 GB. It runs on this computer\'s processor, and nothing you type or fill is sent online. The same model also powers Ask. You can manage it later in Tools → AI Models.\n\nDownload it now?')) return;
-            if (!progressBound) { progressBound = true; window.pdfAPI.onEngineProgress(pr => { if (installing) setLoading(true, pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : '')); }); }
             installing = true; btn.disabled = true; setLoading(true, 'Downloading the assistant model...');
-            const ir = await window.pdfAPI.writerInstall({ part: 'model' });
+            const off = window.pdfAPI.onEngineProgress(pr => { if (installing) setLoading(true, pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : '')); });
+            const ir = await window.pdfAPI.writerInstall({ part: 'model' }).finally(off);
             installing = false;
             if (!ir.success) { showNotification('Error: ' + ir.error, 'error'); btn.disabled = false; return; }
           }
@@ -2699,9 +2701,9 @@
         const st = await window.pdfAPI.writerStatus();
         if (!st.installed) {
           if (!confirm('Reading details from a document needs the Assistant model, a one-time download of about 3.1 GB. It runs on this computer\'s processor, and nothing you type or fill is sent online. The same model also powers Ask. You can manage it later in Tools → AI Models.\n\nDownload it now?')) return;
-          window.pdfAPI.onEngineProgress(pr => { if (installing) setLoading(true, pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : '')); });
           installing = true; setLoading(true, 'Downloading the assistant model...');
-          const ir = await window.pdfAPI.writerInstall({ part: 'model' });
+          const off = window.pdfAPI.onEngineProgress(pr => { if (installing) setLoading(true, pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : '')); });
+          const ir = await window.pdfAPI.writerInstall({ part: 'model' }).finally(off);
           installing = false;
           if (!ir.success) throw new Error(ir.error);
         }
@@ -2744,7 +2746,7 @@
         const mods = []; const list = pages === 'all' ? Array.from({ length: state.pdfDoc.numPages }, (_, i) => i) : [state.currentPage - 1];
         for (const idx of list) mods.push({ type: 'watermark', pageIndex: idx, text, fontSize, opacity, color: { r: 0.7, g: 0.7, b: 0.7 }, rotation: -45 });
         const r = await window.pdfAPI.applyModifications({ originalData: state.originalData, modifications: mods });
-        if (r.success) { state.originalData = r.data; setUnsavedChanges(true); const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); state.pdfDoc = await pdfjsLib.getDocument({ data: d }).promise; await renderThumbnails(); await renderAllPages(); showNotification('Watermark added'); }
+        if (r.success) { state.originalData = r.data; setUnsavedChanges(true); const d = Uint8Array.from(atob(r.data), c => c.charCodeAt(0)); await setPdfDoc(await pdfjsLib.getDocument({ data: d }).promise); await renderThumbnails(); await renderAllPages(); showNotification('Watermark added'); }
         setLoading(false);
       } }]);
     }
@@ -3697,8 +3699,8 @@
       const status = el('div', { className: 'a-status' });
       const install = el('button', { className: 'a-action', textContent: 'Download (about 4.1 GB)', onclick: async () => {
         install.disabled = true; status.textContent = 'Downloading…';
-        window.pdfAPI.onEngineProgress(pr => { status.textContent = pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : ''); });
-        const r = await window.pdfAPI.writerInstall({ part: 'both' });
+        const off = window.pdfAPI.onEngineProgress(pr => { status.textContent = pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : ''); });
+        const r = await window.pdfAPI.writerInstall({ part: 'both' }).finally(off);
         if (!r.success) { status.textContent = 'Error: ' + r.error; install.disabled = false; return; }
         status.textContent = 'Installed. Ask your question again.'; await refreshAssistantInfo();
       } });
@@ -3759,8 +3761,8 @@
     $('assistantVisionBtn').onclick = async () => {
       const btn = $('assistantVisionBtn'), text = $('assistantVisionText'), before = text.textContent;
       btn.disabled = true; text.textContent = 'Downloading…';
-      window.pdfAPI.onEngineProgress(pr => { text.textContent = pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : ''); });
-      const r = await window.pdfAPI.writerInstall({ part: 'images' });
+      const off = window.pdfAPI.onEngineProgress(pr => { text.textContent = pr.phase + (pr.pct >= 0 ? ' ' + pr.pct + '%' : ''); });
+      const r = await window.pdfAPI.writerInstall({ part: 'images' }).finally(off);
       btn.disabled = false; text.textContent = before;
       if (!r.success) { showNotification('Download failed: ' + r.error, 'error'); return; }
       await refreshAssistantInfo();
