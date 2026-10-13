@@ -208,8 +208,14 @@
     .search-bar {
       position: fixed; top: 60px; right: 280px; background: var(--bg-light);
       border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px;
-      display: flex; align-items: center; gap: 8px; z-index: 500;
+      display: flex; flex-direction: column; gap: 8px; z-index: 500;
     }
+    .search-row { display: flex; align-items: center; gap: 8px; }
+    .search-row.hidden { display: none; }
+    .search-btn.active { background: var(--primary); border-color: var(--primary-dark); color: white; }
+    .find-layer { position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; overflow: hidden; }
+    .find-hit { position: absolute; background: rgba(255, 221, 0, 0.4); border-radius: 2px; }
+    .find-hit.current { background: rgba(255, 140, 0, 0.55); outline: 1px solid rgba(214, 105, 0, 0.9); }
     .search-input { width: 200px; padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 13px; }
     .search-results { font-size: 12px; color: var(--text-dim); min-width: 60px; }
     .search-btn { padding: 4px 8px; background: var(--bg-lighter); border: 1px solid var(--border); border-radius: 4px; color: var(--text); cursor: pointer; font-size: 12px; }
@@ -389,7 +395,10 @@
   </div>
 
   <div class="status-bar"><div><span id="statusText">Ready</span></div><div class="status-separator"></div><div>Tool: <span id="currentToolDisplay">Select</span></div><div style="margin-left: auto;"><span id="filePath">No file loaded</span></div></div>
-  <div class="search-bar hidden" id="searchBar"><input type="text" class="search-input" id="searchInput" placeholder="Find..."><span class="search-results" id="searchResults"></span><button class="search-btn" id="searchPrev" data-tip="Previous match">◀</button><button class="search-btn" id="searchNext" data-tip="Next match">▶</button><button class="search-btn" id="searchClose" data-tip="Close search (Esc)">✕</button></div>
+  <div class="search-bar hidden" id="searchBar">
+    <div class="search-row"><input type="text" class="search-input" id="searchInput" placeholder="Find..."><span class="search-results" id="searchResults"></span><button class="search-btn" id="searchCase" data-tip="Match case">Aa</button><button class="search-btn" id="searchWord" data-tip="Whole word">Ab|</button><button class="search-btn" id="searchPrev" data-tip="Previous match (Shift+Enter)">◀</button><button class="search-btn" id="searchNext" data-tip="Next match (Enter)">▶</button><button class="search-btn" id="searchReplaceToggle" data-tip="Replace text (Ctrl+H)">⇄ Replace</button><button class="search-btn" id="searchClose" data-tip="Close search (Esc)">✕</button></div>
+    <div class="search-row hidden" id="replaceRow"><input type="text" class="search-input" id="replaceInput" placeholder="Replace with..."><button class="search-btn" id="replaceOne" data-tip="Replace this match">Replace</button><button class="search-btn" id="replaceAll" data-tip="Replace every match">Replace All</button></div>
+  </div>
   <div class="loading-overlay hidden" id="loadingOverlay"><div class="loading-spinner"></div><div class="loading-text" id="loadingText">Loading...</div></div>
   <div class="notification hidden" id="notification"></div>
   <div id="modalContainer"></div>
@@ -430,10 +439,10 @@
       }
     };
     function hexToRgb(hex) { const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex); return r ? { r: parseInt(r[1], 16) / 255, g: parseInt(r[2], 16) / 255, b: parseInt(r[3], 16) / 255 } : { r: 0, g: 0, b: 0 }; }
-    function editSnapshot() {
+    function editSnapshot(extra) {
       const forms = {}; // typed form values: id -> { value }
       if (state.pdfDoc && state.pdfDoc.annotationStorage) for (const [id, v] of Object.entries(state.pdfDoc.annotationStorage.getAll() || {})) if (v && 'value' in v) forms[id] = { value: v.value };
-      return JSON.stringify({ annotations: state.annotations, redactionMarks: state.redactionMarks, textEdits: state.textEdits, forms });
+      return JSON.stringify({ ...extra, annotations: state.annotations, redactionMarks: state.redactionMarks, textEdits: state.textEdits, forms });
     }
     // Values in the snapshot are set again; fields typed into since are reset to what the document itself holds
     async function restoreForms(forms) {
@@ -447,8 +456,29 @@
       for (const id of stale) storage.setValue(id, { value: id in original ? original[id] : '' });
     }
     function saveState(snap = editSnapshot()) { state.undoStack.push(snap); if (state.undoStack.length > 50) state.undoStack.shift(); state.redoStack = []; setUnsavedChanges(true); updateUndoRedo(); }
-    async function undo() { if (state.undoStack.length === 0) return; state.redoStack.push(editSnapshot()); const { forms, ...rest } = JSON.parse(state.undoStack.pop()); Object.assign(state, rest); if (state.pdfDoc) await restoreForms(forms || {}); setUnsavedChanges(true); await renderAllPages(); updateAnnotationCount(); updateUndoRedo(); }
-    async function redo() { if (state.redoStack.length === 0) return; state.undoStack.push(editSnapshot()); const { forms, ...rest } = JSON.parse(state.redoStack.pop()); Object.assign(state, rest); if (state.pdfDoc) await restoreForms(forms || {}); setUnsavedChanges(true); await renderAllPages(); updateAnnotationCount(); updateUndoRedo(); }
+    // A snapshot of an operation that changes the document itself (Replace) is { doc: json } and carries the document bytes; plain snapshots are strings.
+    // Only the newest 5 snapshots keep their bytes: an older one is dropped together with everything below it, since undoing past a missing document state would be wrong.
+    function docSnapshot() { return { doc: editSnapshot({ originalData: state.originalData }) }; }
+    function trimDocSnapshots(stack, max = 5) {
+      let kept = 0;
+      for (let i = stack.length - 1; i >= 0; i--) if (typeof stack[i] !== 'string' && ++kept > max) return stack.slice(i + 1);
+      return stack;
+    }
+    function pushDocSnapshot(snap) { state.undoStack = trimDocSnapshots([...state.undoStack, snap]); state.redoStack = []; updateUndoRedo(); }
+    async function swapDocument(data) {
+      const old = state.pdfDoc;
+      state.pdfDoc = await pdfjsLib.getDocument({ data: Uint8Array.from(atob(data), c => c.charCodeAt(0)) }).promise;
+      if (old) await old.destroy();
+      await renderThumbnails();
+    }
+    async function restoreDocSnapshot(snap) {
+      const { forms, originalData, ...rest } = JSON.parse(snap.doc); Object.assign(state, rest);
+      state.originalData = originalData; state.formsDirty = false;
+      await swapDocument(originalData); await restoreForms(forms || {});
+      setUnsavedChanges(true); await renderAllPages(); goToPage(Math.min(state.currentPage, state.pdfDoc.numPages)); updateAnnotationCount(); updateUndoRedo();
+    }
+    async function undo() { if (state.undoStack.length === 0) return; if (typeof state.undoStack[state.undoStack.length - 1] !== 'string') { state.redoStack.push(docSnapshot()); return restoreDocSnapshot(state.undoStack.pop()); } state.redoStack.push(editSnapshot()); const { forms, ...rest } = JSON.parse(state.undoStack.pop()); Object.assign(state, rest); if (state.pdfDoc) await restoreForms(forms || {}); setUnsavedChanges(true); await renderAllPages(); updateAnnotationCount(); updateUndoRedo(); }
+    async function redo() { if (state.redoStack.length === 0) return; if (typeof state.redoStack[state.redoStack.length - 1] !== 'string') { state.undoStack.push(docSnapshot()); return restoreDocSnapshot(state.redoStack.pop()); } state.undoStack.push(editSnapshot()); const { forms, ...rest } = JSON.parse(state.redoStack.pop()); Object.assign(state, rest); if (state.pdfDoc) await restoreForms(forms || {}); setUnsavedChanges(true); await renderAllPages(); updateAnnotationCount(); updateUndoRedo(); }
 
     async function showSplitDialog() {
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
@@ -1275,6 +1305,7 @@
       }
       buildFieldEditLayers();
       refreshSignPanel();
+      if (state.find) { if (state.find.doc === state.pdfDoc) drawHighlights(); else runFind(); }
       const storage = state.pdfDoc.annotationStorage;
       if (storage.onSetModified !== markFormsDirty) { storage.resetModified(); storage.onSetModified = markFormsDirty; state.formsDirty = false; }
     }
@@ -2992,9 +3023,180 @@
       }
     });
 
-    function showSearch() { $('searchBar').classList.remove('hidden'); $('searchInput').focus(); }
-    function hideSearch() { $('searchBar').classList.add('hidden'); }
-    async function performSearch() { const q = $('searchInput').value.trim().toLowerCase(); if (!q || !state.pdfDoc) return; const matches = []; for (let i = 1; i <= state.pdfDoc.numPages; i++) { const p = await state.pdfDoc.getPage(i); const tc = await p.getTextContent(); const t = tc.items.map(it => it.str).join(' ').toLowerCase(); if (t.includes(q)) matches.push(i); } $('searchResults').textContent = matches.length ? '1 of ' + matches.length : 'No matches'; if (matches.length) goToPage(matches[0]); }
+    // ---------- Find & Replace ----------
+    function showSearch() { $('searchBar').classList.remove('hidden'); $('searchInput').focus(); $('searchInput').select(); if ($('searchInput').value.trim() && state.pdfDoc) runFind(); }
+    function showReplace() { showSearch(); $('replaceRow').classList.remove('hidden'); }
+    function hideSearch() { clearTimeout(state.findTimer); $('searchBar').classList.add('hidden'); state.find = null; document.querySelectorAll('.find-layer').forEach(l => l.remove()); }
+    // Whitespace in the query matches any run of whitespace
+    function findRegex(query, matchCase, wholeWord) {
+      const parts = String(query || '').trim().split(/\s+/).filter(Boolean).map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      if (!parts.length) return null;
+      const w = '[\\p{L}\\p{N}_]';
+      return new RegExp((wholeWord ? `(?<!${w})` : '') + parts.join('\\s+') + (wholeWord ? `(?!${w})` : ''), 'gu' + (matchCase ? '' : 'i'));
+    }
+    // The items of a page as one string. map[i] is [item index, character in the item], or null for a space put in between items.
+    function pageSearchText(items) {
+      let text = '', prev = null, eol = false;
+      const map = [];
+      items.forEach((it, idx) => {
+        if (!it.str) { if (it.hasEOL) eol = true; return; }
+        if (prev) {
+          const gap = it.transform[4] - (prev.transform[4] + prev.width), dy = Math.abs(it.transform[5] - prev.transform[5]), h = Math.max(it.height, 1);
+          if ((eol || gap > 0.25 * h || gap < -2 * h || dy > 0.5 * h) && !/\s$/.test(text) && !/^\s/.test(it.str)) { text += ' '; map.push(null); }
+        }
+        for (let k = 0; k < it.str.length; k++) map.push([idx, k]);
+        text += it.str; prev = it; eol = !!it.hasEOL;
+      });
+      return { text, map };
+    }
+    // Matches of the query in a page: { parts: [{ item, from, to }] }, one part for each item the match touches
+    function findPageMatches(items, query, matchCase, wholeWord) {
+      const re = findRegex(query, matchCase, wholeWord), found = [];
+      if (!re) return found;
+      const { text, map } = pageSearchText(items);
+      for (let m; (m = re.exec(text));) {
+        if (!m[0].length) { re.lastIndex++; continue; }
+        const parts = [];
+        for (let i = m.index; i < m.index + m[0].length; i++) {
+          const c = map[i]; if (!c) continue;
+          const last = parts[parts.length - 1];
+          if (last && last.item === c[0] && last.to === c[1]) last.to++; else parts.push({ item: c[0], from: c[1], to: c[1] + 1 });
+        }
+        if (parts.length) found.push({ parts });
+      }
+      return found;
+    }
+    // A part of a match in PDF user space (points, origin bottom-left): the characters of an item are of equal width
+    function partBox(items, p) {
+      const it = items[p.item], cw = it.width / (it.str.length || 1);
+      return [it.transform[4] + p.from * cw, it.transform[5], it.transform[4] + p.to * cw, it.transform[5] + it.height];
+    }
+    function matchPdfBox(items, match) {
+      const boxes = match.parts.map(p => partBox(items, p));
+      return [Math.min(...boxes.map(b => b[0])), Math.min(...boxes.map(b => b[1])), Math.max(...boxes.map(b => b[2])), Math.max(...boxes.map(b => b[3]))];
+    }
+    // The same boxes on the rendered page, placed as renderTextLayer places an item
+    function matchViewportRects(items, match, viewport) {
+      return match.parts.map(p => {
+        const it = items[p.item], tx = pdfjsLib.Util.transform(viewport.transform, it.transform), cw = it.width * viewport.scale / (it.str.length || 1), h = it.height * viewport.scale;
+        return { x: tx[4] + p.from * cw, y: tx[5] - h, w: (p.to - p.from) * cw, h };
+      });
+    }
+    async function pageItems(n) {
+      if (!state.textCache || state.textCache.doc !== state.pdfDoc) state.textCache = { doc: state.pdfDoc, pages: new Map() };
+      const cache = state.textCache.pages;
+      if (!cache.has(n)) cache.set(n, (await (await state.pdfDoc.getPage(n)).getTextContent()).items);
+      return cache.get(n);
+    }
+    function findKey() { return JSON.stringify([$('searchInput').value.trim(), $('searchCase').classList.contains('active'), $('searchWord').classList.contains('active')]); }
+    function updateFindCounter() {
+      const f = state.find;
+      $('searchResults').textContent = !f || !f.query ? '' : f.matches.length ? (f.index + 1) + ' of ' + f.matches.length : 'No matches';
+    }
+    // Finds every match in the document, highlights them and goes to the first one from the current page (or the one pick chooses)
+    async function runFind(pick) {
+      const query = $('searchInput').value.trim(), doc = state.pdfDoc;
+      const find = state.find = { key: findKey(), query, matchCase: $('searchCase').classList.contains('active'), wholeWord: $('searchWord').classList.contains('active'), doc, matches: [], index: -1 };
+      if (!query || !doc) { document.querySelectorAll('.find-layer').forEach(l => l.remove()); updateFindCounter(); return find; }
+      for (let n = 1; n <= doc.numPages; n++) {
+        const items = await pageItems(n);
+        if (state.find !== find) return find; // a newer search took over
+        for (const m of findPageMatches(items, query, find.matchCase, find.wholeWord)) find.matches.push({ page: n, parts: m.parts });
+      }
+      const count = find.matches.length, first = find.matches.findIndex(m => m.page >= state.currentPage);
+      find.index = count ? (pick ? ((pick(count) % count) + count) % count : first < 0 ? 0 : first) : -1;
+      await drawHighlights(); updateFindCounter(); scrollToMatch();
+      return find;
+    }
+    async function drawHighlights() {
+      const find = state.find;
+      document.querySelectorAll('.find-layer').forEach(l => l.remove());
+      if (!find || !find.matches.length) return;
+      const byPage = new Map();
+      find.matches.forEach((m, i) => { if (!byPage.has(m.page)) byPage.set(m.page, []); byPage.get(m.page).push([m, i]); });
+      for (const [n, list] of byPage) {
+        const container = document.getElementById('page-' + n);
+        if (!container) continue;
+        const vp = (await state.pdfDoc.getPage(n)).getViewport({ scale: state.scale }), items = await pageItems(n);
+        if (state.find !== find) return;
+        const layer = document.createElement('div'); layer.className = 'find-layer';
+        for (const [m, i] of list) for (const r of matchViewportRects(items, m, vp)) {
+          const hit = document.createElement('div'); hit.className = 'find-hit' + (i === find.index ? ' current' : ''); hit.dataset.match = i;
+          hit.style.cssText = `left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`;
+          layer.appendChild(hit);
+        }
+        container.insertBefore(layer, container.querySelector('.text-layer'));
+      }
+    }
+    function scrollToMatch() {
+      const f = state.find;
+      if (!f || f.index < 0) return;
+      document.querySelectorAll('.find-hit.current').forEach(h => h.classList.remove('current'));
+      const hits = document.querySelectorAll('.find-hit[data-match="' + f.index + '"]');
+      hits.forEach(h => h.classList.add('current'));
+      const page = f.matches[f.index].page;
+      state.currentPage = page; $('currentPage').textContent = page;
+      if (hits[0]) hits[0].scrollIntoView({ block: 'center', inline: 'nearest' });
+    }
+    function gotoMatch(delta) {
+      const f = state.find;
+      if (!f || !f.matches.length) return;
+      f.index = (f.index + delta + f.matches.length) % f.matches.length;
+      updateFindCounter(); scrollToMatch();
+    }
+    async function onSearchKey(e) {
+      if (e.key === 'Escape') hideSearch();
+      if (e.key !== 'Enter') return;
+      e.preventDefault(); clearTimeout(state.findTimer);
+      if (!state.find || state.find.key !== findKey() || state.find.doc !== state.pdfDoc) await runFind(); else gotoMatch(e.shiftKey ? -1 : 1);
+    }
+    // 'Replaced 12 of 14. 2 could not be replaced: font without text mapping (page 3)'
+    function describeReplace(wanted, result, pages) {
+      let text = 'Replaced ' + result.replaced + ' of ' + wanted + '.';
+      if (result.replaced >= wanted) return text;
+      const why = new Map();
+      for (const s of result.skipped) if (pages.includes(s.page)) { if (!why.has(s.reason)) why.set(s.reason, new Set()); why.get(s.reason).add(s.page); }
+      if (!why.size) why.set('not found', new Set(pages));
+      return text + ' ' + (wanted - result.replaced) + ' could not be replaced: ' + [...why].map(([reason, set]) => reason + ' (page' + (set.size > 1 ? 's ' : ' ') + [...set].sort((a, b) => a - b).join(', ') + ')').join('; ');
+    }
+    // Replaces the current match, or every match, in the text of the page itself. Changes the document, so (like crop) pending edits are baked in first.
+    async function replaceMatches(all) {
+      const find = state.find;
+      if (!state.pdfDoc || !find || !find.matches.length) { showNotification('No matches to replace', 'warning'); return; }
+      const picked = all ? find.matches : [find.matches[find.index]], replacement = $('replaceInput').value;
+      setLoading(true, 'Replacing...');
+      try {
+        if (state.formsDirty) await commitFormValues();
+        const pending = collectModifications();
+        if (pending.some(m => m.type === 'redaction')) throw new Error('Apply or clear the redaction marks first');
+        const before = docSnapshot();
+        let data = state.originalData;
+        if (pending.length) {
+          const b = await window.pdfAPI.applyModifications({ originalData: data, modifications: pending });
+          if (!b.success) throw new Error(b.error || 'Could not apply your changes');
+          data = b.data;
+        }
+        const targets = all ? 'all' : [{ page: picked[0].page, rect: matchPdfBox(await pageItems(picked[0].page), picked[0]) }];
+        const r = await window.pdfAPI.replaceText({ data, query: find.query, replacement, matchCase: find.matchCase, wholeWord: find.wholeWord, targets });
+        if (!r.success) throw new Error(r.error);
+        if (r.signedWarning && !confirm('This PDF is digitally signed.\n\nReplacing text changes the document and breaks the signature. Continue?')) return;
+        const message = describeReplace(picked.length, r, picked.map(m => m.page));
+        if (!r.replaced) { showNotification(message, 'warning'); if (!all) gotoMatch(1); return; }
+        pushDocSnapshot(before);
+        const prevIndex = find.index, prevCount = find.matches.length;
+        state.originalData = r.data; state.annotations = {}; state.redactionMarks = {}; state.textEdits = {}; state.formsDirty = false; setUnsavedChanges(true);
+        state.find = null;
+        await swapDocument(r.data); await renderAllPages(); updateAnnotationCount();
+        goToPage(Math.min(state.currentPage, state.pdfDoc.numPages));
+        await runFind(all ? undefined : count => count < prevCount ? prevIndex : prevIndex + 1);
+        showNotification(message + (r.overflow ? ' (' + r.overflow + (r.overflow === 1 ? ' line' : ' lines') + ' got longer)' : ''), r.replaced === picked.length ? 'success' : 'warning');
+      } catch (e) { showNotification('Error: ' + e.message, 'error'); }
+      finally {
+        setLoading(false);
+        const active = document.activeElement;
+        if (active && active.closest && active.closest('#searchBar')) active.blur(); // so Ctrl+Z reaches the document
+      }
+    }
 
     $('newBtn').onclick = createNewPdf; $('openBtn').onclick = openFile; $('welcomeOpenBtn').onclick = openFile; $('welcomeNewBtn').onclick = createNewPdf; $('welcomeMergeBtn').onclick = mergePdfs;
     $('saveBtn').onclick = () => saveDocument(); $('printBtn').onclick = () => window.pdfAPI.printDocument();
@@ -3005,7 +3207,12 @@
     $('deletePageBtn').onclick = deletePage; $('insertPageBtn').onclick = insertBlankPage;
     $('clearAnnotationsBtn').onclick = clearAllAnnotations;
     $('addWatermarkBtn').onclick = showWatermarkDialog; $('propertiesBtn').onclick = showDocumentProperties;
-    $('searchBtn').onclick = showSearch; $('searchClose').onclick = hideSearch; $('searchInput').onkeydown = e => { if (e.key === 'Enter') performSearch(); if (e.key === 'Escape') hideSearch(); };
+    $('searchBtn').onclick = showSearch; $('searchClose').onclick = hideSearch; $('searchInput').onkeydown = onSearchKey; $('searchInput').oninput = () => { clearTimeout(state.findTimer); state.findTimer = setTimeout(() => runFind(), 200); };
+    $('searchNext').onclick = () => gotoMatch(1); $('searchPrev').onclick = () => gotoMatch(-1);
+    $('searchCase').onclick = () => { $('searchCase').classList.toggle('active'); runFind(); }; $('searchWord').onclick = () => { $('searchWord').classList.toggle('active'); runFind(); };
+    $('searchReplaceToggle').onclick = () => { $('replaceRow').classList.toggle('hidden'); if (!$('replaceRow').classList.contains('hidden')) $('replaceInput').focus(); };
+    $('replaceOne').onclick = () => replaceMatches(false); $('replaceAll').onclick = () => replaceMatches(true);
+    $('replaceInput').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); replaceMatches(e.ctrlKey || e.metaKey); } if (e.key === 'Escape') hideSearch(); };
     $('imageBtn').onclick = async () => { const img = await window.pdfAPI.selectImage(); if (img) { state.pendingImage = img; selectTool('image'); showNotification('Click to place image', 'info'); } };
     $('signatureBtn').onclick = () => showSignatureDialog();
     document.addEventListener('mousedown', e => { if (state.sigSel && !e.target.closest('.sig-hit')) setSigSel(null); });
@@ -3017,7 +3224,7 @@
         if (e.key === 'Escape') { state.isDrawing = false; state.currentPath = []; document.querySelectorAll('.annotation-layer').forEach(l => { const pg = l.dataset.page; if (pg) renderAnnotations(+pg); }); selectTool('select'); return; }
         if ((e.key === 'Delete' || e.key === 'Backspace') && state.currentTool === 'editFields' && state.fieldSel) { e.preventDefault(); const { pageNum, ref } = state.fieldSel; removeFormField(pageNum, ref); return; }
       }
-      if (e.ctrlKey || e.metaKey) { switch (e.key.toLowerCase()) { case 'n': e.preventDefault(); createNewPdf(); break; case 'o': e.preventDefault(); openFile(); break; case 's': e.preventDefault(); saveDocument(e.shiftKey); break; case 'z': e.preventDefault(); undo(); break; case 'y': e.preventDefault(); redo(); break; case 'f': e.preventDefault(); showSearch(); break; case '=': case '+': e.preventDefault(); setZoom(state.scale + 0.25); break; case '-': e.preventDefault(); setZoom(state.scale - 0.25); break; case '0': e.preventDefault(); setZoom(1); break; } }
+      if (e.ctrlKey || e.metaKey) { switch (e.key.toLowerCase()) { case 'n': e.preventDefault(); createNewPdf(); break; case 'o': e.preventDefault(); openFile(); break; case 's': e.preventDefault(); saveDocument(e.shiftKey); break; case 'z': e.preventDefault(); e.shiftKey ? redo() : undo(); break; case 'y': e.preventDefault(); redo(); break; case 'f': e.preventDefault(); showSearch(); break; case 'h': e.preventDefault(); showReplace(); break; case '=': case '+': e.preventDefault(); setZoom(state.scale + 0.25); break; case '-': e.preventDefault(); setZoom(state.scale - 0.25); break; case '0': e.preventDefault(); setZoom(1); break; } }
       else { switch (e.key.toLowerCase()) { case 'v': selectTool('select'); break; case 'h': selectTool('hand'); break; case 't': selectTool('text'); break; case 'p': selectTool('draw'); break; case 'e': selectTool('eraser'); break; case 'l': selectTool('line'); break; case 'a': selectTool('arrow'); break; case 'r': selectTool('rectangle'); break; case 'c': selectTool('circle'); break; } }
     });
 
@@ -3054,7 +3261,7 @@
       if (e.dataTransfer.types && e.dataTransfer.types.includes('application/x-pdf-page')) return; // page reorder, not file open
       await openDroppedFiles(e.dataTransfer && e.dataTransfer.files);
     });
-    window.pdfAPI.onMenuUndo(undo); window.pdfAPI.onMenuRedo(redo); window.pdfAPI.onMenuFind(showSearch);
+    window.pdfAPI.onMenuUndo(undo); window.pdfAPI.onMenuRedo(redo); window.pdfAPI.onMenuFind(showSearch); window.pdfAPI.onMenuReplace(showReplace);
     window.pdfAPI.onMenuZoomIn(() => setZoom(state.scale + 0.25)); window.pdfAPI.onMenuZoomOut(() => setZoom(state.scale - 0.25)); window.pdfAPI.onMenuZoomReset(() => setZoom(1));
     window.pdfAPI.onMenuTool(t => selectTool(t === 'editFields' && state.currentTool === 'editFields' ? 'select' : t)); window.pdfAPI.onMenuRotate(rotatePage); window.pdfAPI.onMenuRotateAll(rotateAllPages); window.pdfAPI.onMenuDeletePage(deletePage); window.pdfAPI.onMenuInsertPage(insertBlankPage);
     window.pdfAPI.onMenuAddWatermark(showWatermarkDialog); window.pdfAPI.onMenuFlattenForm(flattenForm); window.pdfAPI.onMenuMakeFillable(makeFillable); window.pdfAPI.onMenuProfiles(() => showProfiles()); window.pdfAPI.onMenuAutofill(fillFromProfile); window.pdfAPI.onMenuSignDocument(showSignDocument); window.pdfAPI.onMenuSaveAnswers(saveAnswersToProfile); window.pdfAPI.onMenuProfileFromDoc(profileFromDocument);

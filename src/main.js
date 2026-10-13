@@ -13,7 +13,7 @@ if (!hasUserData(app.getPath('userData'))) {
 }
 // @cantoo/pdf-lib encryption needs Web Crypto; Electron <=28's bundled Node lacks the global
 if (!globalThis.crypto) globalThis.crypto = require('crypto').webcrypto;
-const { PDFDocument, rgb, degrees, StandardFonts, PDFName, PDFArray, PDFDict, PDFString, PDFHexString, PDFNumber, PDFBool, PDFTextField, PDFCheckBox, PDFDropdown, PDFRawStream, PDFRef, grayscale, cmyk, pushGraphicsState, popGraphicsState, rectangle, clip, endPath } = require('@cantoo/pdf-lib');
+const { PDFDocument, rgb, degrees, StandardFonts, StandardFontEmbedder, decodePDFRawStream, EncryptedPDFError, PDFName, PDFArray, PDFDict, PDFString, PDFHexString, PDFNumber, PDFBool, PDFTextField, PDFCheckBox, PDFDropdown, PDFRawStream, PDFRef, grayscale, cmyk, pushGraphicsState, popGraphicsState, rectangle, clip, endPath } = require('@cantoo/pdf-lib');
 
 let mainWindow;
 let currentFilePath = null;
@@ -184,6 +184,11 @@ function createWindow() {
           label: 'Find',
           accelerator: 'CmdOrCtrl+F',
           click: () => mainWindow.webContents.send('menu-find')
+        },
+        {
+          label: 'Find & Replace...',
+          accelerator: 'CmdOrCtrl+H',
+          click: () => mainWindow.webContents.send('menu-replace')
         },
         { type: 'separator' },
         { role: 'selectAll' }
@@ -3814,4 +3819,642 @@ ipcMain.handle('save-multiple-files', async (event, { files, folder }) => {
   } catch (error) {
     return { success: false, error: error.message };
   }
+});
+
+// ---------- Find & Replace: edit the text inside the page content ----------
+// replaceText deletes the matched glyph codes from the content stream (nothing is covered up). A kerning
+// number takes the place of what was removed, so the rest of the line stays where it was.
+const isPsWs = c => c === 0 || c === 9 || c === 10 || c === 12 || c === 13 || c === 32;
+const isPsDelim = c => c === 40 || c === 41 || c === 60 || c === 62 || c === 91 || c === 93 || c === 123 || c === 125 || c === 47 || c === 37;
+const PS_NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)$/;
+
+// Content stream bytes -> operations: { op, args, s, e } where s..e covers the operands and the operator.
+function tokenizeContent(b) {
+  const n = b.length, ops = [];
+  let i = 0, args = [], argStart = 0;
+  const fail = what => { throw new Error('Cannot read the page content (' + what + ')'); };
+  const skip = () => { for (;;) { while (i < n && isPsWs(b[i])) i++; if (i < n && b[i] === 37) { while (i < n && b[i] !== 10 && b[i] !== 13) i++; } else return; } };
+  const word = () => { const s = i; while (i < n && !isPsWs(b[i]) && !isPsDelim(b[i])) i++; if (i === s) fail('unexpected character'); return Buffer.from(b.subarray(s, i)).toString('latin1'); };
+  const litString = () => {
+    const out = []; let depth = 1; i++;
+    while (i < n) {
+      const c = b[i++];
+      if (c === 92) {
+        const d = b[i++];
+        if (d >= 48 && d <= 55) { let v = d - 48, k = 1; while (k++ < 3 && b[i] >= 48 && b[i] <= 55) v = v * 8 + b[i++] - 48; out.push(v & 255); }
+        else if (d === 110) out.push(10); else if (d === 114) out.push(13); else if (d === 116) out.push(9); else if (d === 98) out.push(8); else if (d === 102) out.push(12);
+        else if (d === 13) { if (b[i] === 10) i++; } else if (d !== 10 && d !== undefined) out.push(d);
+      } else if (c === 40) { depth++; out.push(c); }
+      else if (c === 41) { if (--depth === 0) return out; out.push(c); }
+      else out.push(c);
+    }
+    return fail('unterminated string');
+  };
+  const hexString = () => {
+    i++; const out = []; let hi = -1;
+    while (i < n && b[i] !== 62) {
+      const c = b[i++], v = c >= 48 && c <= 57 ? c - 48 : c >= 65 && c <= 70 ? c - 55 : c >= 97 && c <= 102 ? c - 87 : -1;
+      if (v < 0) { if (isPsWs(c)) continue; fail('bad hex string'); }
+      if (hi < 0) hi = v; else { out.push(hi * 16 + v); hi = -1; }
+    }
+    if (i >= n) fail('unterminated hex string');
+    i++; if (hi >= 0) out.push(hi * 16);
+    return out;
+  };
+  const readObj = () => {
+    const c = b[i];
+    if (c === 40) return { t: 'str', bytes: litString(), hex: false };
+    if (c === 60) {
+      if (b[i + 1] !== 60) return { t: 'str', bytes: hexString(), hex: true };
+      i += 2; const items = [];
+      for (;;) { skip(); if (i >= n) fail('unterminated dictionary'); if (b[i] === 62 && b[i + 1] === 62) { i += 2; return { t: 'dict', items }; } items.push(readObj()); }
+    }
+    if (c === 91) {
+      i++; const items = [];
+      for (;;) { skip(); if (i >= n) fail('unterminated array'); if (b[i] === 93) { i++; return { t: 'arr', items }; } items.push(readObj()); }
+    }
+    if (c === 47) { i++; return { t: 'name', v: word().replace(/#([0-9a-fA-F]{2})/g, (m, h) => String.fromCharCode(parseInt(h, 16))) }; }
+    const w = word();
+    return PS_NUMBER.test(w) ? { t: 'num', v: parseFloat(w) } : { t: 'kw', v: w };
+  };
+  const inlineImage = () => { // after BI: the dictionary up to ID, then binary data up to EI
+    const d = {};
+    for (;;) {
+      skip(); if (i >= n) fail('inline image');
+      const k = readObj();
+      if (k.t === 'kw' && k.v === 'ID') break;
+      if (k.t !== 'name') fail('inline image');
+      skip(); d[k.v] = readObj();
+    }
+    if (b[i] === 13 && b[i + 1] === 10) i += 2; else i++;
+    const get = (...keys) => keys.map(k => d[k]).find(Boolean);
+    const w = get('W', 'Width'), h = get('H', 'Height'), bpc = get('BPC', 'BitsPerComponent'), cs = get('CS', 'ColorSpace'), mask = get('IM', 'ImageMask');
+    const comps = mask && mask.v === 'true' ? 1 : cs && cs.t === 'name' ? ({ G: 1, DeviceGray: 1, CalGray: 1, RGB: 3, DeviceRGB: 3, CalRGB: 3, CMYK: 4, DeviceCMYK: 4 })[cs.v] : cs && cs.t === 'arr' ? 1 : 0;
+    if (!get('F', 'Filter') && w && h && comps && (bpc || mask)) {
+      let j = i + Math.ceil(w.v * comps * (mask && mask.v === 'true' ? 1 : bpc.v) / 8) * h.v;
+      while (j < n && isPsWs(b[j])) j++;
+      if (b[j] === 69 && b[j + 1] === 73) { i = j + 2; return; }
+    }
+    for (let k = i; k + 1 < n; k++) {
+      if (b[k] !== 69 || b[k + 1] !== 73 || (k > i && !isPsWs(b[k - 1])) || (k + 2 < n && !isPsWs(b[k + 2]))) continue;
+      let text = true;
+      for (let q = k + 2; q < Math.min(n, k + 12); q++) if (b[q] > 127 || (b[q] < 32 && !isPsWs(b[q]))) text = false;
+      if (text) { i = k + 2; return; }
+    }
+    fail('inline image without end');
+  };
+  for (;;) {
+    skip(); if (i >= n) break;
+    const s = i, o = readObj();
+    if (o.t === 'kw' && o.v !== 'true' && o.v !== 'false' && o.v !== 'null') {
+      if (o.v === 'BI') { inlineImage(); ops.push({ op: 'BI', args: [], s, e: i }); }
+      else ops.push({ op: o.v, args, s: args.length ? argStart : s, e: i });
+      args = [];
+    } else { if (!args.length) argStart = s; args.push(o); }
+  }
+  return ops;
+}
+
+const fmtNum = (v, d = 4) => { const s = (Math.round(v * 10 ** d) / 10 ** d).toFixed(d).replace(/\.?0+$/, ''); return s === '-0' || s === '' ? '0' : s; };
+function fmtString(bytes, hex) {
+  if (hex) return '<' + Buffer.from(bytes).toString('hex') + '>';
+  let s = '(';
+  for (const c of bytes) s += c === 40 || c === 41 || c === 92 ? '\\' + String.fromCharCode(c) : c < 32 || c > 126 ? '\\' + c.toString(8).padStart(3, '0') : String.fromCharCode(c);
+  return s + ')';
+}
+const mulMatrix = (m, n) => [m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3], m[2] * n[0] + m[3] * n[2], m[2] * n[1] + m[3] * n[3], m[4] * n[0] + m[5] * n[2] + n[4], m[4] * n[1] + m[5] * n[3] + n[5]];
+
+// ----- glyph names and encodings -----
+const GLYPH_CHARS = new Map(), CHAR_GLYPHS = new Map();
+(function () {
+  const add = (name, cp) => { const ch = String.fromCodePoint(cp); GLYPH_CHARS.set(name, ch); if (!CHAR_GLYPHS.has(ch)) CHAR_GLYPHS.set(ch, name); };
+  const ascii = 'space exclam quotedbl numbersign dollar percent ampersand quotesingle parenleft parenright asterisk plus comma hyphen period slash zero one two three four five six seven eight nine colon semicolon less equal greater question at'.split(' ');
+  ascii.forEach((name, k) => add(name, 0x20 + k));
+  for (let c = 0; c < 26; c++) { add(String.fromCharCode(65 + c), 65 + c); add(String.fromCharCode(97 + c), 97 + c); }
+  'bracketleft backslash bracketright asciicircum underscore grave'.split(' ').forEach((name, k) => add(name, 0x5B + k));
+  'braceleft bar braceright asciitilde'.split(' ').forEach((name, k) => add(name, 0x7B + k));
+  ('nbspace exclamdown cent sterling currency yen brokenbar section dieresis copyright ordfeminine guillemotleft logicalnot sfthyphen registered macron degree plusminus twosuperior threesuperior acute mu paragraph periodcentered cedilla onesuperior ordmasculine guillemotright onequarter onehalf threequarters questiondown ' +
+    'Agrave Aacute Acircumflex Atilde Adieresis Aring AE Ccedilla Egrave Eacute Ecircumflex Edieresis Igrave Iacute Icircumflex Idieresis Eth Ntilde Ograve Oacute Ocircumflex Otilde Odieresis multiply Oslash Ugrave Uacute Ucircumflex Udieresis Yacute Thorn germandbls ' +
+    'agrave aacute acircumflex atilde adieresis aring ae ccedilla egrave eacute ecircumflex edieresis igrave iacute icircumflex idieresis eth ntilde ograve oacute ocircumflex otilde odieresis divide oslash ugrave uacute ucircumflex udieresis yacute thorn ydieresis').split(' ').forEach((name, k) => add(name, 0xA0 + k));
+  const extra = { bullet: 0x2022, endash: 0x2013, emdash: 0x2014, quoteleft: 0x2018, quoteright: 0x2019, quotedblleft: 0x201C, quotedblright: 0x201D, quotesinglbase: 0x201A, quotedblbase: 0x201E, dagger: 0x2020, daggerdbl: 0x2021, ellipsis: 0x2026, perthousand: 0x2030, guilsinglleft: 0x2039, guilsinglright: 0x203A, Euro: 0x20AC, trademark: 0x2122, fi: 0xFB01, fl: 0xFB02, ff: 0xFB00, ffi: 0xFB03, ffl: 0xFB04, florin: 0x192, circumflex: 0x2C6, tilde: 0x2DC, OE: 0x152, oe: 0x153, Scaron: 0x160, scaron: 0x161, Zcaron: 0x17D, zcaron: 0x17E, Ydieresis: 0x178, minus: 0x2212, fraction: 0x2044, dotlessi: 0x131, Lslash: 0x141, lslash: 0x142, breve: 0x2D8, caron: 0x2C7, dotaccent: 0x2D9, ring: 0x2DA, ogonek: 0x2DB, hungarumlaut: 0x2DD };
+  for (const name in extra) add(name, extra[name]);
+})();
+function glyphChar(name) {
+  if (GLYPH_CHARS.has(name)) return GLYPH_CHARS.get(name);
+  let m = /^uni((?:[0-9A-Fa-f]{4})+)$/.exec(name);
+  if (m) return m[1].match(/.{4}/g).map(h => String.fromCharCode(parseInt(h, 16))).join('');
+  m = /^u([0-9A-Fa-f]{4,6})$/.exec(name);
+  if (m) return String.fromCodePoint(parseInt(m[1], 16));
+  const dot = name.indexOf('.');
+  return dot > 0 ? glyphChar(name.slice(0, dot)) : undefined;
+}
+const STANDARD_HIGH = { 0xA1: 'exclamdown', 0xA2: 'cent', 0xA3: 'sterling', 0xA4: 'fraction', 0xA5: 'yen', 0xA6: 'florin', 0xA7: 'section', 0xA8: 'currency', 0xA9: 'quotesingle', 0xAA: 'quotedblleft', 0xAB: 'guillemotleft', 0xAC: 'guilsinglleft', 0xAD: 'guilsinglright', 0xAE: 'fi', 0xAF: 'fl', 0xB1: 'endash', 0xB2: 'dagger', 0xB3: 'daggerdbl', 0xB4: 'periodcentered', 0xB6: 'paragraph', 0xB7: 'bullet', 0xB8: 'quotesinglbase', 0xB9: 'quotedblbase', 0xBA: 'quotedblright', 0xBB: 'guillemotright', 0xBC: 'ellipsis', 0xBD: 'perthousand', 0xBF: 'questiondown', 0xC1: 'grave', 0xC2: 'acute', 0xC3: 'circumflex', 0xC4: 'tilde', 0xC5: 'macron', 0xC6: 'breve', 0xC7: 'dotaccent', 0xC8: 'dieresis', 0xCA: 'ring', 0xCB: 'cedilla', 0xCD: 'hungarumlaut', 0xCE: 'ogonek', 0xCF: 'caron', 0xD0: 'emdash', 0xE1: 'AE', 0xE3: 'ordfeminine', 0xE8: 'Lslash', 0xE9: 'Oslash', 0xEA: 'OE', 0xEB: 'ordmasculine', 0xF1: 'ae', 0xF5: 'dotlessi', 0xF8: 'lslash', 0xF9: 'oslash', 0xFA: 'oe', 0xFB: 'germandbls' };
+const encodingTables = {};
+function encodingTable(name) { // 256 characters (undefined where the code is unused); pdf-lib only has WinAnsi inside its fonts, so these are built here
+  if (name in encodingTables) return encodingTables[name];
+  const t = new Array(256).fill(undefined);
+  if (name === 'StandardEncoding') {
+    for (let c = 0x20; c < 0x7F; c++) t[c] = String.fromCharCode(c);
+    t[0x27] = '’'; t[0x60] = '‘';
+    for (const c in STANDARD_HIGH) t[c] = GLYPH_CHARS.get(STANDARD_HIGH[c]);
+  } else if (name === 'WinAnsiEncoding' || name === 'MacRomanEncoding') {
+    const { TextDecoder } = require('util');
+    const dec = new TextDecoder(name === 'WinAnsiEncoding' ? 'windows-1252' : 'macintosh');
+    for (let c = 0x20; c < 256; c++) if (c !== 0x7F) t[c] = dec.decode(Uint8Array.of(c));
+  } else return (encodingTables[name] = null);
+  return (encodingTables[name] = t);
+}
+
+function parseToUnicode(bytes, maxCodes = 65536) { // a hostile map cannot grow without bound: at most maxCodes entries
+  const map = new Map();
+  const put = (c, v) => { if (map.size < maxCodes) map.set(c, v); };
+  const str = a => a.length === 1 ? String.fromCharCode(a[0]) : a.reduce((s, v, k) => k % 2 ? s : s + String.fromCharCode(v * 256 + (a[k + 1] || 0)), '');
+  const code = a => a.reduce((x, y) => x * 256 + y, 0);
+  for (const o of tokenizeContent(bytes)) {
+    if (o.op === 'endbfchar') {
+      for (let k = 0; k + 1 < o.args.length; k += 2) if (o.args[k].t === 'str' && o.args[k + 1].t === 'str') put(code(o.args[k].bytes), str(o.args[k + 1].bytes));
+    } else if (o.op === 'endbfrange') {
+      for (let k = 0; k + 2 < o.args.length; k += 3) {
+        const [lo, hi, d] = [o.args[k], o.args[k + 1], o.args[k + 2]];
+        if (lo.t !== 'str' || hi.t !== 'str') continue;
+        const from = code(lo.bytes), to = Math.min(code(hi.bytes), from + 65535);
+        if (d.t === 'str') { const s = str(d.bytes); for (let c = from; c <= to && map.size < maxCodes; c++) put(c, s.slice(0, -1) + String.fromCharCode(s.charCodeAt(s.length - 1) + c - from)); }
+        else if (d.t === 'arr') d.items.forEach((x, k2) => { if (x.t === 'str' && from + k2 <= to) put(from + k2, str(x.bytes)); });
+      }
+    }
+  }
+  return map;
+}
+
+// The standard font that stands in for a font name (also the family drawn for replacement text)
+function standardFontFor(baseFont) {
+  const n = String(baseFont || '').replace(/^[A-Z]{6}\+/, '').toLowerCase();
+  const bold = /bold|black|heavy|semibold|demi/.test(n), italic = /italic|oblique/.test(n);
+  if (/mono|courier|consol/.test(n)) return 'Courier' + (bold ? (italic ? '-BoldOblique' : '-Bold') : italic ? '-Oblique' : '');
+  if (!/sans|helvet|arial/.test(n) && /serif|times|roman|georgia|garamond/.test(n)) return bold ? (italic ? 'Times-BoldItalic' : 'Times-Bold') : italic ? 'Times-Italic' : 'Times-Roman';
+  return 'Helvetica' + (bold ? (italic ? '-BoldOblique' : '-Bold') : italic ? '-Oblique' : '');
+}
+const std14Metrics = {};
+function standardGlyphWidth(fontName, ch) {
+  const m = std14Metrics[fontName] || (std14Metrics[fontName] = StandardFontEmbedder.for(fontName));
+  return m.font.getWidthOfGlyph(CHAR_GLYPHS.get(ch)) || 0;
+}
+
+// ----- fonts: code -> unicode, code -> width, unicode -> code -----
+function loadFontInfo(ctx, fd) {
+  const get = (d, k) => d instanceof PDFDict ? ctx.lookup(d.get(PDFName.of(k))) : undefined;
+  const nm = o => o instanceof PDFName ? o.decodeText() : undefined;
+  const num = o => o instanceof PDFNumber ? o.asNumber() : undefined;
+  const bad = reason => ({ bad: reason });
+  const subtype = nm(get(fd, 'Subtype')), base = (nm(get(fd, 'BaseFont')) || '').replace(/^[A-Z]{6}\+/, '');
+  if (subtype === 'Type3') return bad('a Type3 font');
+  let toU = null;
+  const tu = get(fd, 'ToUnicode');
+  if (tu instanceof PDFRawStream) { try { toU = parseToUnicode(Buffer.from(decodePDFRawStream(tu).decode()), subtype === 'Type0' ? 65536 : 256); } catch (e) { toU = null; } }
+  const info = { base, twoByte: false, toU, used: new Set() };
+  const subset = /^[A-Z]{6}\+/.test(nm(get(fd, 'BaseFont')) || '');
+  const finish = () => {
+    const rev = new Map();
+    info.encode = ch => {
+      if (!rev.size) info.codes().forEach(c => { const u = info.uni(c); if (u && [...u].length === 1 && info.hasGlyph(c) && !rev.has(u)) rev.set(u, c); });
+      return rev.get(ch);
+    };
+    return info;
+  };
+  if (subtype === 'Type0') {
+    const enc = get(fd, 'Encoding');
+    if (!(enc instanceof PDFName)) return bad('an unsupported character encoding');
+    if (/-V$/.test(enc.decodeText())) return bad('vertical writing');
+    if (enc.decodeText() !== 'Identity-H') return bad('an unsupported character encoding');
+    if (!toU) return bad('font without text mapping');
+    const df = fd.get(PDFName.of('DescendantFonts')) && ctx.lookup(fd.get(PDFName.of('DescendantFonts')));
+    const desc = df instanceof PDFArray ? ctx.lookup(df.get(0)) : undefined;
+    const dw = num(get(desc, 'DW')) ?? 1000, w = new Map();
+    const wa = get(desc, 'W');
+    if (wa instanceof PDFArray) {
+      const at = k => ctx.lookup(wa.get(k));
+      for (let k = 0; k < wa.size();) {
+        const c = num(at(k)), x = at(k + 1);
+        if (w.size >= 65536) break;
+        if (x instanceof PDFArray) { for (let j = 0; j < x.size() && w.size < 65536; j++) w.set(c + j, num(ctx.lookup(x.get(j))) || 0); k += 2; }
+        else { const to = num(x), v = num(at(k + 2)) || 0; for (let j = c; j <= to && j - c < 65536 && w.size < 65536; j++) w.set(j, v); k += 3; }
+      }
+    }
+    info.twoByte = true;
+    info.width = c => w.has(c) ? w.get(c) : dw;
+    info.uni = c => toU.get(c);
+    info.codes = () => [...toU.keys()];
+    info.hasGlyph = c => c < 65536 && (!subset || info.used.has(c)); // a subset's ToUnicode can list more than the subset has
+    return finish();
+  }
+  // simple fonts: one byte per code
+  const descriptor = get(fd, 'FontDescriptor'), flags = num(get(descriptor, 'Flags')) || 0;
+  const enc = get(fd, 'Encoding'), std = standardFontFor(base);
+  const symbolic = /^(Symbol|ZapfDingbats)/.test(base) || ((flags & 4) && !(flags & 32));
+  let table = null;
+  const defaultName = subtype === 'TrueType' ? 'WinAnsiEncoding' : 'StandardEncoding';
+  if (enc instanceof PDFName) table = encodingTable(nm(enc));
+  else if (enc instanceof PDFDict) {
+    const b = nm(get(enc, 'BaseEncoding'));
+    table = (encodingTable(b || defaultName) || []).slice();
+    const diff = get(enc, 'Differences');
+    if (diff instanceof PDFArray) {
+      let code = 0;
+      for (let k = 0; k < diff.size(); k++) {
+        const x = ctx.lookup(diff.get(k));
+        if (x instanceof PDFNumber) code = x.asNumber(); else if (x instanceof PDFName) table[code++] = glyphChar(x.decodeText());
+      }
+    }
+  } else if (!symbolic) table = encodingTable(defaultName);
+  if (!toU && !table) return bad('font without text mapping');
+  const first = num(get(fd, 'FirstChar')) ?? 0, wa = get(fd, 'Widths'), widths = [];
+  if (wa instanceof PDFArray) for (let k = 0; k < wa.size(); k++) widths.push(num(ctx.lookup(wa.get(k))) || 0);
+  const missing = num(get(descriptor, 'MissingWidth')) || 0;
+  info.uni = c => (toU && toU.get(c)) ?? (table && table[c]);
+  info.width = c => widths.length ? (c >= first && c < first + widths.length ? widths[c - first] : missing) : (u => u ? standardGlyphWidth(std, u) : 0)(info.uni(c));
+  info.codes = () => Array.from({ length: 256 }, (_, c) => c);
+  // a glyph is only known to exist if the font says so (/CharSet), or, for a subset, if the document shows it
+  const charSetText = get(descriptor, 'CharSet'), charSet = charSetText && charSetText.asString ? new Set(charSetText.asString().split('/').filter(Boolean)) : null;
+  info.hasGlyph = c => info.width(c) > 0 && (charSet ? charSet.has(CHAR_GLYPHS.get(info.uni(c))) : !subset || info.used.has(c));
+  return finish();
+}
+
+// ----- content stream state machine -----
+const newGs = () => ({ ctm: [1, 0, 0, 1, 0, 0], font: null, fs: 0, tc: 0, tw: 0, tz: 100, tl: 0, ts: 0, tr: 0, fill: [0], fillN: 1 });
+const cloneGs = g => ({ ...g, ctm: g.ctm.slice(), fill: g.fill.slice() });
+
+const fontCaches = new WeakMap();
+function scanUnit(ctx, bytes, res, ctm0, gsInit, isForm) {
+  const ops = tokenizeContent(bytes);
+  const unit = { bytes, ops, ctm0, runs: [], dos: [], unreadable: new Set(), depth: 0 };
+  const fonts = res instanceof PDFDict ? ctx.lookup(res.get(PDFName.of('Font'))) : null;
+  const fontCache = fontCaches.get(ctx) || fontCaches.set(ctx, new Map()).get(ctx); // shared by every stream of the document, so the codes shown with a font add up
+  const getFont = name => {
+    const fd = fonts instanceof PDFDict ? ctx.lookup(fonts.get(PDFName.of(name))) : null;
+    if (!(fd instanceof PDFDict)) return { bad: 'a missing font' };
+    if (!fontCache.has(fd)) { let f; try { f = loadFontInfo(ctx, fd); } catch (e) { f = { bad: 'a font that cannot be read' }; } fontCache.set(fd, f); }
+    return fontCache.get(fd);
+  };
+  const csComps = name => {
+    const known = { DeviceGray: 1, CalGray: 1, DeviceRGB: 3, CalRGB: 3, Lab: 3, DeviceCMYK: 4 };
+    if (name in known) return known[name];
+    const cs = res instanceof PDFDict ? ctx.lookup(res.get(PDFName.of('ColorSpace'))) : null;
+    const def = cs instanceof PDFDict ? ctx.lookup(cs.get(PDFName.of(name))) : null;
+    if (def instanceof PDFArray) {
+      const kind = ctx.lookup(def.get(0));
+      if (kind instanceof PDFName && kind.decodeText() in known) return known[kind.decodeText()];
+      if (kind instanceof PDFName && kind.decodeText() === 'ICCBased') { const s = ctx.lookup(def.get(1)); const n = s && s.dict && ctx.lookup(s.dict.get(PDFName.of('N'))); if (n instanceof PDFNumber) return n.asNumber(); }
+    }
+    return 0;
+  };
+  let gs = cloneGs(gsInit || newGs());
+  gs.ctm = [1, 0, 0, 1, 0, 0];
+  const stack = [];
+  let tm = [1, 0, 0, 1, 0, 0], tlm = tm, cur = null, known = true, repos = true;
+  const sameLine = (r, m) => {
+    const h = Math.hypot(r.a, r.b);
+    if (Math.abs(m[0] - r.a) > 1e-6 * (1 + h) || Math.abs(m[1] - r.b) > 1e-6 * (1 + h) || Math.abs(m[2] - r.c) > 1e-6 * (1 + h) || Math.abs(m[3] - r.d) > 1e-6 * (1 + h)) return false;
+    const dx = m[4] - r.e0, dy = m[5] - r.f0;
+    return Math.abs((dx * r.b - dy * r.a) / (h || 1)) < 0.01 + 0.01 * Math.abs(gs.fs) * h;
+  };
+  const setLine = m => { tlm = m; tm = m.slice(); known = true; repos = true; if (cur && !sameLine(cur, tm)) cur = null; };
+  const nextLine = () => setLine(mulMatrix([1, 0, 0, 1, 0, -gs.tl], tlm));
+  const nums = o => o.args.map(a => a.t === 'num' ? a.v : 0);
+  const showString = (token, items, op) => {
+    const bytes = token.bytes, f = gs.font, item = { kind: 's', bytes, hex: token.hex, glyphs: [], f, fs: gs.fs, th: gs.tz / 100 };
+    items.push(item);
+    if (!bytes.length) return;
+    if (!f || f.bad) { unit.unreadable.add(f && f.bad ? f.bad : 'font without text mapping'); known = false; cur = null; return; }
+    if (!known) return;
+    const step = f.twoByte ? 2 : 1, th = gs.tz / 100;
+    const st = { ctm: gs.ctm.slice(), fill: gs.fill.slice(), tr: gs.tr, ts: gs.ts, tz: gs.tz, fs: gs.fs, base: f.base };
+    for (let k = 0; k + step <= bytes.length; k += step) {
+      const code = step === 2 ? bytes[k] * 256 + bytes[k + 1] : bytes[k];
+      const adv = (f.width(code) / 1000 * gs.fs + gs.tc + (step === 1 && code === 32 ? gs.tw : 0)) * th;
+      if (!cur) { cur = { glyphs: [], a: tm[0], b: tm[1], c: tm[2], d: tm[3], e0: tm[4], f0: tm[5], ctm: gs.ctm.slice() }; unit.runs.push(cur); }
+      const den = cur.a * cur.a + cur.b * cur.b;
+      const g = { code, n: step, pos: k, uni: f.uni(code), adv, f, fs: gs.fs, tc: gs.tc, tw: gs.tw, th, item, st, x0: den ? ((tm[4] - cur.e0) * cur.a + (tm[5] - cur.f0) * cur.b) / den : 0, tm: tm.slice() };
+      cur.glyphs.push(g); item.glyphs.push(g); f.used.add(code);
+      tm = [tm[0], tm[1], tm[2], tm[3], tm[4] + adv * tm[0], tm[5] + adv * tm[1]];
+    }
+  };
+  for (const o of ops) {
+    const a = o.args;
+    switch (o.op) {
+      case 'q': stack.push(cloneGs(gs)); cur = null; break;
+      case 'Q': if (stack.length) gs = stack.pop(); cur = null; break;
+      case 'cm': if (a.length === 6) gs.ctm = mulMatrix(nums(o), gs.ctm); cur = null; break;
+      case 'BT': tm = [1, 0, 0, 1, 0, 0]; tlm = tm; cur = null; known = true; repos = true; break;
+      case 'ET': cur = null; break;
+      case 'Tf': if (a.length === 2 && a[0].t === 'name') { gs.font = getFont(a[0].v); gs.fs = a[1].v || 0; } break;
+      case 'Tc': gs.tc = a[0] ? a[0].v : 0; break;
+      case 'Tw': gs.tw = a[0] ? a[0].v : 0; break;
+      case 'Tz': gs.tz = a[0] ? a[0].v : 100; break;
+      case 'TL': gs.tl = a[0] ? a[0].v : 0; break;
+      case 'Ts': gs.ts = a[0] ? a[0].v : 0; break;
+      case 'Tr': gs.tr = a[0] ? a[0].v : 0; break;
+      case 'Td': if (a.length === 2) setLine(mulMatrix([1, 0, 0, 1, a[0].v, a[1].v], tlm)); break;
+      case 'TD': if (a.length === 2) { gs.tl = -a[1].v; setLine(mulMatrix([1, 0, 0, 1, a[0].v, a[1].v], tlm)); } break;
+      case 'Tm': if (a.length === 6) setLine(nums(o)); break;
+      case 'T*': nextLine(); break;
+      case 'Tj': if (a.length === 1 && a[0].t === 'str') { const items = []; showString(a[0], items, o); o.show = { items, positioned: repos }; if (items.some(it => it.glyphs.length)) repos = false; } break;
+      case "'": if (a.length === 1 && a[0].t === 'str') { nextLine(); const items = []; showString(a[0], items, o); o.show = { items, positioned: repos }; if (items.some(it => it.glyphs.length)) repos = false; } break;
+      case '"': if (a.length === 3 && a[2].t === 'str') { gs.tw = a[0].v; gs.tc = a[1].v; nextLine(); const items = []; showString(a[2], items, o); o.show = { items, positioned: repos }; if (items.some(it => it.glyphs.length)) repos = false; } break;
+      case 'TJ': if (a.length === 1 && a[0].t === 'arr') {
+        const items = [];
+        for (const x of a[0].items) {
+          if (x.t === 'str') showString(x, items, o);
+          else if (x.t === 'num') { items.push({ kind: 'n', v: x.v }); tm = [tm[0], tm[1], tm[2], tm[3], tm[4] - x.v / 1000 * gs.fs * gs.tz / 100 * tm[0], tm[5] - x.v / 1000 * gs.fs * gs.tz / 100 * tm[1]]; }
+        }
+        o.show = { items, positioned: repos }; if (items.some(it => it.glyphs && it.glyphs.length)) repos = false;
+      } break;
+      case 'g': gs.fill = [a[0] ? a[0].v : 0]; gs.fillN = 1; break;
+      case 'rg': gs.fill = nums(o).slice(0, 3); gs.fillN = 3; break;
+      case 'k': gs.fill = nums(o).slice(0, 4); gs.fillN = 4; break;
+      case 'cs': { const n = a[0] && a[0].t === 'name' ? csComps(a[0].v) : 0; gs.fillN = n; gs.fill = n === 4 ? [0, 0, 0, 1] : n ? new Array(n).fill(0) : [0]; break; }
+      case 'sc': case 'scn': if (gs.fillN && a.length === gs.fillN && a.every(x => x.t === 'num')) gs.fill = nums(o); else { gs.fill = [0]; gs.fillN = 0; } break;
+      case 'Do': if (!isForm && a.length === 1 && a[0].t === 'name' && res instanceof PDFDict) {
+        const xd = ctx.lookup(res.get(PDFName.of('XObject'))), ref = xd instanceof PDFDict ? xd.get(PDFName.of(a[0].v)) : null;
+        const stream = ref instanceof PDFRef ? ctx.lookup(ref) : null;
+        if (stream instanceof PDFRawStream && ctx.lookup(stream.dict.get(PDFName.of('Subtype'))) instanceof PDFName && ctx.lookup(stream.dict.get(PDFName.of('Subtype'))).decodeText() === 'Form') unit.dos.push({ ref, stream, ctm: gs.ctm.slice(), gs: cloneGs(gs) });
+      } break;
+    }
+  }
+  unit.depth = stack.length;
+  unit.endCtm = stack.length ? stack[0].ctm : gs.ctm; // what the CTM is again once every unclosed q is closed
+  return unit;
+}
+
+// ----- matching -----
+function searchRegex(query, matchCase, wholeWord) {
+  const parts = String(query || '').trim().split(/\s+/).filter(Boolean).map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (!parts.length) return null;
+  const w = '[\\p{L}\\p{N}_]';
+  return new RegExp((wholeWord ? `(?<!${w})` : '') + parts.join('\\s+') + (wholeWord ? `(?!${w})` : ''), 'gu' + (matchCase ? '' : 'i'));
+}
+// The text of a run (a gap wider than a quarter em reads as a space), with a map from each character to its glyph
+function runText(run) {
+  let text = '', prev = null;
+  const map = [];
+  run.glyphs.forEach((g, gi) => {
+    const u = g.uni === undefined ? '�' : g.uni;
+    if (prev && g.x0 - (prev.x0 + prev.adv) > 0.25 * Math.abs(g.fs) * g.th && !/\s$/.test(text) && !/^\s/.test(u)) { text += ' '; map.push({ g: -1, c: 0 }); }
+    for (let k = 0; k < u.length; k++) map.push({ g: gi, c: k });
+    text += u; prev = g;
+  });
+  return { text, map };
+}
+function occurrenceBox(unit, run, first, last) {
+  const x0 = first.x0, x1 = last.x0 + last.adv, h = Math.abs(first.fs), m = mulMatrix([run.a, run.b, run.c, run.d, run.e0, run.f0], mulMatrix(run.ctm, unit.ctm0));
+  const pts = [[x0, 0], [x1, 0], [x1, h], [x0, h]].map(([x, y]) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]);
+  return [Math.min(...pts.map(p => p[0])), Math.min(...pts.map(p => p[1])), Math.max(...pts.map(p => p[0])), Math.max(...pts.map(p => p[1]))];
+}
+function boxOverlap(a, b) { // shared area as a fraction of the smaller box
+  const w = Math.min(a[2], b[2]) - Math.max(a[0], b[0]), h = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
+  const small = Math.min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]));
+  return w > 0 && h > 0 && small > 0 ? w * h / small : 0;
+}
+function findOccurrences(unit, re) {
+  const found = [];
+  for (const run of unit.runs) {
+    const { text, map } = runText(run);
+    re.lastIndex = 0;
+    for (let m; (m = re.exec(text));) {
+      if (!m[0].length) { re.lastIndex++; continue; }
+      const s = m.index, e = s + m[0].length, gl = [...new Set(map.slice(s, e).map(x => x.g).filter(g => g >= 0))];
+      if (!gl.length) continue;
+      const startsInside = map[s].g >= 0 && map[s].c > 0, endsInside = e < map.length && map[e - 1].g >= 0 && map[e].g === map[e - 1].g;
+      found.push({ unit, run, glyphs: gl.map(g => run.glyphs[g]), ligature: startsInside || endsInside, box: occurrenceBox(unit, run, run.glyphs[gl[0]], run.glyphs[gl[gl.length - 1]]) });
+    }
+  }
+  return found;
+}
+
+// ----- planning and writing the edits -----
+// Glyph start in the device space of the stream (its text matrix x its CTM x the CTM the stream is drawn with)
+const glyphDevice = (unit, g) => g.dev || (g.dev = mulMatrix(g.tm, mulMatrix(g.st.ctm, unit.ctm0)));
+function planReplacement(occ, replacement) {
+  if (occ.ligature) return { reason: 'the match starts or ends inside a ligature' };
+  const unit = occ.unit, first = occ.glyphs[0], last = occ.glyphs[occ.glyphs.length - 1], chars = [...String(replacement)];
+  if (occ.glyphs.some(g => !g.fs || !g.th)) return { reason: 'the text size is zero' };
+  const f = first.f, mf = glyphDevice(unit, first), ml = glyphDevice(unit, last), scale = Math.hypot(mf[0], mf[1]) || 1;
+  const removed = occ.glyphs.reduce((sum, g) => sum + g.adv * (Math.hypot(...glyphDevice(unit, g).slice(0, 2)) || 1), 0);
+  let codes = occ.glyphs.every(g => g.f === f) ? [] : null;
+  for (const ch of codes ? chars : []) { const c = f.encode(ch); if (c === undefined) { codes = null; break; } codes.push(c); }
+  let added, path, ins = null, std = null;
+  if (codes) {
+    const bytes = codes.flatMap(c => f.twoByte ? [c >> 8, c & 255] : [c]);
+    ins = { bytes, adv: codes.reduce((sum, c) => sum + (f.width(c) / 1000 * first.fs + first.tc + (!f.twoByte && c === 32 ? first.tw : 0)) * first.th, 0) };
+    added = ins.adv * scale; path = 'sameFont';
+  } else {
+    const enc = StandardFontEmbedder.for('Helvetica').encoding;
+    if (!chars.every(ch => ch.codePointAt(0) >= 32 && enc.canEncodeUnicodeCodePoint(ch.codePointAt(0)))) return { reason: "the replacement uses characters this PDF's font does not have" };
+    const fontName = standardFontFor(first.st.base);
+    std = { g: first, bytes: chars.map(ch => enc.encodeUnicodeCodePoint(ch.codePointAt(0)).code), fontName };
+    added = chars.reduce((sum, ch) => sum + standardGlyphWidth(fontName, ch), 0) / 1000 * Math.abs(first.fs) * first.th * scale; path = 'standardFont';
+  }
+  occ.glyphs.forEach(g => { g.rm = true; });
+  if (ins) first.ins = ins;
+  if (std) unit.appends.push(std);
+  const h = Math.hypot(mf[0], mf[1]) || 1, dx = mf[0] / h, dy = mf[1] / h;
+  // the line after the match moves by what the new text is wider (or narrower) than the old, measured in device units
+  const edit = { m: mf, h, delta: added - removed, endAlong: (ml[4] + last.adv * ml[0] - mf[4]) * dx + (ml[5] + last.adv * ml[1] - mf[5]) * dy };
+  unit.edits.push(edit);
+  if (std) std.edit = edit;
+  return { path };
+}
+// How far a glyph has to move because of the edits before it on its line (same baseline within 0.5 pt, same text matrix, at or after the match end)
+function shiftFor(unit, g) {
+  const m = glyphDevice(unit, g);
+  let shift = 0;
+  for (const e of unit.edits) {
+    const tol = 1e-3 * (1 + e.h);
+    if (Math.abs(m[0] - e.m[0]) > tol || Math.abs(m[1] - e.m[1]) > tol || Math.abs(m[2] - e.m[2]) > tol || Math.abs(m[3] - e.m[3]) > tol) continue;
+    const vx = m[4] - e.m[4], vy = m[5] - e.m[5], dx = e.m[0] / e.h, dy = e.m[1] / e.h;
+    if (Math.abs(vx * dy - vy * dx) <= 0.5 && vx * dx + vy * dy >= e.endAlong - 0.01) shift += e.delta;
+  }
+  return shift;
+}
+// Rewrites the show operations of an edited stream: removed codes go, new codes come in, and a kerning number wherever a glyph is not where
+// the edits before it on its line put it (the glyphs after a match in the same run move by themselves; separately positioned text does not).
+function reflowUnit(u) {
+  let moved = 0; // how far the text at this point already is from where it was
+  for (const o of u.ops) {
+    if (!o.show || !o.show.items.some(it => it.glyphs && it.glyphs.length)) continue;
+    if (o.show.positioned) moved = 0;
+    const els = []; let changed = false;
+    for (const it of o.show.items) {
+      if (it.kind === 'n') { els.push({ n: it.v }); continue; }
+      let buf = [];
+      const hex = it.f && it.f.twoByte;
+      const flush = () => { if (buf.length) { els.push({ s: buf, hex }); buf = []; } };
+      for (const g of it.glyphs) {
+        const h = Math.hypot(...glyphDevice(u, g).slice(0, 2)) || 1;
+        if (g.rm) { changed = true; moved -= g.adv * h; if (g.ins) { buf.push(...g.ins.bytes); moved += g.ins.adv * h; } continue; }
+        const want = u.edits.length ? shiftFor(u, g) : 0;
+        if (Math.abs(want - moved) > 1e-3) { const n = Math.round(-1000 * (want - moved) / (h * g.fs * g.th) * 10000) / 10000; if (n) { flush(); els.push({ n }); changed = true; } moved = want; }
+        for (let k = 0; k < g.n; k++) buf.push(it.bytes[g.pos + k]);
+      }
+      buf.push(...it.bytes.slice(it.glyphs.length * (hex ? 2 : 1)));
+      flush();
+    }
+    if (changed) o.rewrite = formatShowOp(o, els);
+  }
+}
+function formatShowOp(o, els) {
+  const arr = '[' + els.map(e => 's' in e ? fmtString(e.s, e.hex) : fmtNum(e.n)).join(' ') + ']', hasNum = els.some(e => 'n' in e);
+  const str = hasNum ? '' : els.length ? fmtString(els[0].s, els[0].hex) : '()', a = o.args;
+  switch (o.op) {
+    case 'TJ': return arr + ' TJ';
+    case 'Tj': return hasNum ? arr + ' TJ' : str + ' Tj';
+    case "'": return hasNum ? 'T* ' + arr + ' TJ' : str + " '";
+    default: return hasNum ? `${fmtNum(a[0].v)} Tw ${fmtNum(a[1].v)} Tc T* ${arr} TJ` : `${fmtNum(a[0].v)} ${fmtNum(a[1].v)} ${str} "`;
+  }
+}
+function isSignedPdf(doc) {
+  const ctx = doc.context, form = ctx.lookup(doc.catalog.get(PDFName.of('AcroForm')));
+  if (!(form instanceof PDFDict)) return false;
+  const flags = ctx.lookup(form.get(PDFName.of('SigFlags')));
+  if (flags instanceof PDFNumber && (flags.asNumber() & 1)) return true;
+  const seen = new Set();
+  const signed = f => {
+    f = ctx.lookup(f);
+    if (!(f instanceof PDFDict) || seen.has(f)) return false;
+    seen.add(f);
+    const ft = ctx.lookup(f.get(PDFName.of('FT'))), kids = ctx.lookup(f.get(PDFName.of('Kids')));
+    return (ft instanceof PDFName && ft.decodeText() === 'Sig' && !!ctx.lookup(f.get(PDFName.of('V')))) || (kids instanceof PDFArray && kids.asArray().some(signed));
+  };
+  const fields = ctx.lookup(form.get(PDFName.of('Fields')));
+  return fields instanceof PDFArray && fields.asArray().some(signed);
+}
+
+// Replaces the matches of query in the text of a PDF. targets: 'all', or [{ page, rect: [x1, y1, x2, y2] }] (page from 1, PDF points)
+// to replace only the occurrence on that page that overlaps the rect most.
+// Content shared between pages (a Form XObject drawn more than once, or a content stream used by several pages) is not edited.
+async function replaceText(input, { query, replacement = '', matchCase = false, wholeWord = false, targets = 'all' } = {}) {
+  let doc;
+  try { doc = await PDFDocument.load(input, { updateMetadata: false }); }
+  catch (e) { throw e instanceof EncryptedPDFError ? new Error('Remove the password first (Security → Remove Password)') : e; }
+  const ctx = doc.context, re = searchRegex(query, matchCase, wholeWord);
+  const result = { data: Buffer.from(input), replaced: 0, sameFont: 0, standardFont: 0, overflow: 0, found: 0, skipped: [], signedWarning: isSignedPdf(doc) };
+  if (!re) return result;
+  const skip = (page, reason) => { if (!result.skipped.some(s => s.page === page && s.reason === reason) || targets !== 'all') result.skipped.push({ page, reason }); };
+  const inherited = (node, key) => {
+    for (let n = node, k = 0; n instanceof PDFDict && k < 32; k++, n = ctx.lookup(n.get(PDFName.of('Parent')))) { const v = ctx.lookup(n.get(PDFName.of(key))); if (v) return v; }
+    return undefined;
+  };
+  const pages = doc.getPages();
+  const pageRefs = pages.map(p => { const c = p.node.get(PDFName.of('Contents')), v = ctx.lookup(c); return v instanceof PDFArray ? v.asArray().filter(x => x instanceof PDFRef) : c instanceof PDFRef ? [c] : []; });
+  const refUse = new Map();
+  pageRefs.forEach(rs => new Set(rs.map(r => r.tag)).forEach(t => refUse.set(t, (refUse.get(t) || 0) + 1)));
+  const units = [];
+  pages.forEach((page, idx) => {
+    const refs = pageRefs[idx];
+    if (!refs.length) return;
+    try {
+      const streams = refs.map(r => ctx.lookup(r));
+      if (!streams.every(s => s instanceof PDFRawStream)) throw new Error('not a stream');
+      const bytes = Buffer.concat(streams.flatMap((s, k) => [Buffer.from(k ? '\n' : ''), Buffer.from(decodePDFRawStream(s).decode())]));
+      const res = inherited(page.node, 'Resources');
+      const unit = scanUnit(ctx, bytes, res instanceof PDFDict ? res : null, [1, 0, 0, 1, 0, 0], null, false);
+      units.push(Object.assign(unit, { page: idx + 1, kind: 'page', refs, node: page.node, res: res instanceof PDFDict ? res : null, appends: [], edits: [], shared: refs.some(r => refUse.get(r.tag) > 1), sharedWhy: 'the page content is shared with another page' }));
+    } catch (e) { skip(idx + 1, 'the page content could not be read'); }
+  });
+  // Form XObjects the pages draw (one level deep): edited only when they are drawn once in the whole document
+  const formUse = new Map();
+  units.slice().forEach(u => u.dos.forEach(d => formUse.set(d.ref.tag, (formUse.get(d.ref.tag) || 0) + 1)));
+  const seenForms = new Set();
+  for (const pu of units.slice()) for (const d of pu.dos) {
+    if (seenForms.has(d.ref.tag)) continue;
+    seenForms.add(d.ref.tag);
+    try {
+      const own = ctx.lookup(d.stream.dict.get(PDFName.of('Resources'))), m = ctx.lookup(d.stream.dict.get(PDFName.of('Matrix')));
+      const matrix = m instanceof PDFArray && m.size() === 6 ? m.asArray().map(x => ctx.lookup(x).asNumber()) : [1, 0, 0, 1, 0, 0];
+      const res = own instanceof PDFDict ? own : pu.res;
+      const unit = scanUnit(ctx, Buffer.from(decodePDFRawStream(d.stream).decode()), res, mulMatrix(matrix, mulMatrix(d.ctm, pu.ctm0)), d.gs, true);
+      units.push(Object.assign(unit, { page: pu.page, kind: 'form', stream: d.stream, ref: d.ref, res, appends: [], edits: [], shared: formUse.get(d.ref.tag) > 1, sharedWhy: 'the text is in an object shared by several places' }));
+    } catch (e) { skip(pu.page, 'the page content could not be read'); }
+  }
+  const all = [];
+  for (const u of units) for (const occ of findOccurrences(u, re)) { occ.page = u.page; all.push(occ); }
+  result.found = all.length;
+  const unreadable = new Map();
+  for (const u of units) for (const reason of u.unreadable) unreadable.set(u.page, [...(unreadable.get(u.page) || []), reason]);
+  let chosen = all;
+  if (targets !== 'all') {
+    chosen = [];
+    for (const t of targets) {
+      let best = null, most = 0.5;
+      for (const o of all) { const ov = o.page === t.page && !chosen.includes(o) ? boxOverlap(o.box, t.rect) : 0; if (ov > most) { best = o; most = ov; } }
+      if (best) chosen.push(best); else skip(t.page, (unreadable.get(t.page) || [])[0] || 'not found');
+    }
+  } else unreadable.forEach((reasons, page) => reasons.forEach(r => skip(page, r)));
+  for (const occ of chosen) {
+    const plan = occ.unit.shared ? { reason: occ.unit.sharedWhy } : planReplacement(occ, replacement);
+    if (plan.reason) { skip(occ.page, plan.reason); continue; }
+    occ.unit.edited = true; result.replaced++; result[plan.path]++;
+  }
+  if (!result.replaced) return result;
+  const stdFonts = new Map();
+  for (const u of units.filter(x => x.edited)) {
+    const chunks = [];
+    let pos = 0;
+    reflowUnit(u);
+    for (const o of u.ops) {
+      if (!o.rewrite) continue;
+      chunks.push(u.bytes.subarray(pos, o.s), Buffer.from(o.rewrite, 'latin1'));
+      pos = o.e;
+    }
+    const lines = []; // a line that ends up more than 2 pt longer than it was
+    for (const e of u.edits) {
+      const line = lines.find(l => Math.abs(l.m[0] - e.m[0]) < 1e-3 * (1 + e.h) && Math.abs(l.m[1] - e.m[1]) < 1e-3 * (1 + e.h) && Math.abs((e.m[4] - l.m[4]) * l.m[1] - (e.m[5] - l.m[5]) * l.m[0]) / l.h <= 0.5);
+      if (line) line.grow += e.delta; else lines.push({ m: e.m, h: e.h, grow: e.delta });
+    }
+    result.overflow += lines.filter(l => l.grow > 2).length;
+    chunks.push(u.bytes.subarray(pos));
+    if (u.appends.length) {
+      let res = u.res;
+      if (!res) { res = ctx.obj({}); (u.kind === 'page' ? u.node : u.stream.dict).set(PDFName.of('Resources'), res); }
+      let fonts = ctx.lookup(res.get(PDFName.of('Font')));
+      if (!(fonts instanceof PDFDict)) { fonts = ctx.obj({}); res.set(PDFName.of('Font'), fonts); }
+      const keys = new Map();
+      const keyFor = name => {
+        if (!keys.has(name)) {
+          if (!stdFonts.has(name)) stdFonts.set(name, doc.embedStandardFont(name));
+          const ref = stdFonts.get(name).ref;
+          let key = fonts.keys().find(k => fonts.get(k) instanceof PDFRef && fonts.get(k).tag === ref.tag);
+          for (let n = 1; !key; n++) if (!fonts.has(PDFName.of('PW' + n))) { key = PDFName.of('PW' + n); fonts.set(key, ref); }
+          keys.set(name, key.decodeText());
+        }
+        return keys.get(name);
+      };
+      const [ea, eb, ec, ed, ee, ef] = u.endCtm, det = ea * ed - eb * ec, inv = [ed / det, -eb / det, -ec / det, ea / det, (ec * ef - ed * ee) / det, (eb * ee - ea * ef) / det];
+      const shiftedTm = (unit, a) => { const sh = shiftFor(unit, a.g) / (Math.hypot(...glyphDevice(unit, a.g).slice(0, 2)) || 1), t = a.g.tm; return [t[0], t[1], t[2], t[3], t[4] + sh * t[0], t[5] + sh * t[1]]; };
+      const block = u.appends.map(a => {
+        const st = a.g.st, fill = st.fill.length === 1 ? 'g' : st.fill.length === 3 ? 'rg' : 'k';
+        return `q ${mulMatrix(st.ctm, inv).map(v => fmtNum(v, 6)).join(' ')} cm BT /${keyFor(a.fontName)} ${fmtNum(a.g.fs)} Tf ${shiftedTm(u, a).map(v => fmtNum(v, 6)).join(' ')} Tm ${st.fill.map(v => fmtNum(v, 4)).join(' ')} ${fill} 0 Tc 0 Tw ${fmtNum(st.tz)} Tz ${fmtNum(st.ts)} Ts ${st.tr} Tr ${fmtString(a.bytes, false)} Tj ET Q`;
+      });
+      chunks.push(Buffer.from('\n' + 'Q\n'.repeat(u.depth) + block.join('\n') + '\n', 'latin1'));
+    }
+    const data = Buffer.concat(chunks);
+    if (u.kind === 'page') u.refs.forEach((r, k) => ctx.assign(r, ctx.flateStream(k ? '\n' : data)));
+    else {
+      const ns = ctx.flateStream(data);
+      for (const [k, v] of u.stream.dict.entries()) if (!['Length', 'Filter', 'DecodeParms'].includes(k.decodeText())) ns.dict.set(k, v);
+      ctx.assign(u.ref, ns);
+    }
+  }
+  result.data = Buffer.from(await doc.save({ updateFieldAppearances: false }));
+  return result;
+}
+ipcMain.handle('replace-text', async (event, args) => {
+  try {
+    const { data, query, replacement = '', matchCase, wholeWord, targets = 'all' } = args || {};
+    if (typeof data !== 'string') throw new Error('No document was given');
+    if (typeof query !== 'string' || !query.length || query.length > 500) throw new Error('The text to find must be 1 to 500 characters');
+    if (typeof replacement !== 'string' || replacement.length > 2000) throw new Error('The replacement can be at most 2000 characters');
+    if (targets !== 'all' && !(Array.isArray(targets) && targets.length <= 1000 && targets.every(t => t && Number.isInteger(t.page) && t.page >= 1 && Array.isArray(t.rect) && t.rect.length === 4 && t.rect.every(Number.isFinite)))) throw new Error('The places to replace are not valid');
+    const r = await replaceText(Buffer.from(data, 'base64'), { query, replacement, matchCase: !!matchCase, wholeWord: !!wholeWord, targets });
+    return { success: true, ...r, data: r.data.toString('base64') };
+  } catch (e) { return { success: false, error: e.message }; }
 });
