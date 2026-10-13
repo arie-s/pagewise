@@ -354,7 +354,7 @@ test('assistant-ask streams events to the window, a new ask cancels the old one,
   m.builtinReady = () => true;
   const aborted = [];
   m.assistantStream = (cfg, body, onEvent, ctl) => new Promise((resolve, reject) => {
-    const q = body.messages[body.messages.length - 1].content.includes('first') ? 'first' : 'second';
+    const q = body.messages[body.messages.length - 1].content.endsWith('first') ? 'first' : 'second'; // the question ends the prompt; guide excerpts may say "first" too
     ctl.req = { abort: () => { aborted.push(q); reject(Object.assign(new Error('Stopped'), { stopped: true })); } };
     if (q === 'second') { onEvent({ text: 'Use File → Print.' }); resolve(''); }
   });

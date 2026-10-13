@@ -1171,7 +1171,7 @@
     }
 
     function showShortcutsDialog() {
-      const rows = [['Ctrl+N', 'New blank PDF'], ['Ctrl+O', 'Open PDF'], ['Ctrl+S', 'Save'], ['Ctrl+Shift+S', 'Save As'], ['Ctrl+P', 'Print'], ['Ctrl+F', 'Find'], ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'], ['Ctrl+Plus / Minus / 0', 'Zoom in / out / reset'], ['Ctrl+G', 'Go to page'], ['Ctrl+I', 'Add image'], ['Ctrl+B', 'Bookmarks panel'], ['V H', 'Select / Hand tool'], ['T P E', 'Text / Pen / Eraser tool'], ['L A', 'Line / Arrow tool'], ['R C', 'Rectangle / Circle tool'], ['Home End PgUp PgDn', 'First / last / prev / next page']];
+      const rows = [['Ctrl+N', 'New blank PDF'], ['Ctrl+O', 'Open PDF'], ['Ctrl+S', 'Save'], ['Ctrl+Shift+S', 'Save As'], ['Ctrl+P', 'Print'], ['Ctrl+F', 'Find'], ['Ctrl+H', 'Find & Replace'], ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'], ['Ctrl+Plus / Minus / 0', 'Zoom in / out / reset'], ['Ctrl+G', 'Go to page'], ['Ctrl+Shift+R', 'Rotate page clockwise'], ['Ctrl+D', 'Document properties'], ['Ctrl+Shift+L', 'Apply redactions (save)'], ['Ctrl+Shift+T', 'Light / dark theme'], ['Ctrl+Shift+A', 'Ask the assistant'], ['F1', 'User guide'], ['Ctrl+/', 'This list'], ['Ctrl+I', 'Add image'], ['Ctrl+B', 'Bookmarks panel'], ['V H', 'Select / Hand tool'], ['T P E', 'Text / Pen / Eraser tool'], ['L A', 'Line / Arrow tool'], ['R C', 'Rectangle / Circle tool'], ['Home End PgUp PgDn', 'First / last / prev / next page']];
       const content = rows.map(r => '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);"><span style="font-family:monospace;color:var(--text-dim);">' + r[0] + '</span><span>' + r[1] + '</span></div>').join('');
       showModal('Keyboard Shortcuts', content, [{ label: 'Close', action: 'close', primary: true }]);
     }

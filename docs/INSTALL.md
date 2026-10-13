@@ -129,6 +129,8 @@ On Windows and Linux x64 the installer tries the Vulkan (GPU) build of llama.cpp
 
 The AI server binds to `127.0.0.1:8731`; page images are sent to that local server, not a cloud service. Use **Tools → Scanned Pages → Read Tables & Handwriting with AI** after setup. Read Tables & Handwriting produces a Markdown transcript, which can be saved as a `.md` file, and exports any tables it finds as CSV. It does not add a searchable text layer to the PDF.
 
+The Assistant model runs on the processor in its own local server on `127.0.0.1:8733`, started on the first Ask question or AI suggestion and stopped when the app closes. It needs about 4.5 GB of free memory, about 5.5 GB once Ask has loaded page images. Questions and page images go only to that local server unless you point Ask at a model server of your own.
+
 **Removing a model:** open **Tools → AI Models…** and choose **Remove** on its row; only that model is deleted (removing the Assistant model also removes its page images). The shared llama.cpp program files are deleted with the last model. `pagewise cli engine-remove` removes the Scan reading model the same way. Settings and OCR language data are kept, and any model can be downloaded again later.
 
 ## Uninstalling and removing data

@@ -136,11 +136,11 @@
 
   <h2>14. Privacy, shortcuts, command line, troubleshooting</h2>
   <h3>Privacy</h3>
-  <p>Everything runs on your machine. There are no accounts, no telemetry, no cloud inference. Internet access is used only to download OCR language data and the optional AI models (see section 13). The AI features use a local server bound to <code>127.0.0.1</code>. Profiles stay on this computer.</p>
+  <p>Everything runs on your machine. There are no accounts, no telemetry, no cloud inference. The one exception is your choice: if you point Ask at a model server on another computer, your questions and document text go to that server, and Pagewise asks you to confirm first. Internet access is used only to download OCR language data and the optional AI models (see section 13). The AI features use a local server bound to <code>127.0.0.1</code>. Profiles stay on this computer.</p>
 
   <h3>Keyboard shortcuts</h3>
   <p>Use <kbd>Cmd</kbd> instead of <kbd>Ctrl</kbd> on macOS. Full list: <i>Help → Keyboard Shortcuts</i> (<kbd>Ctrl+/</kbd>).</p>
-  <p><kbd>Ctrl+O</kbd> open · <kbd>Ctrl+S</kbd> save · <kbd>Ctrl+F</kbd> find · <kbd>Ctrl+H</kbd> replace · <kbd>Ctrl+G</kbd> go to page · <kbd>V H T P E</kbd> select/hand/text/pen/eraser · <kbd>L A R C</kbd> line/arrow/rectangle/circle</p>
+  <p><kbd>Ctrl+O</kbd> open · <kbd>Ctrl+S</kbd> save · <kbd>Ctrl+F</kbd> find · <kbd>Ctrl+H</kbd> replace · <kbd>Ctrl+G</kbd> go to page · <kbd>Ctrl+Shift+A</kbd> ask the assistant · <kbd>V H T P E</kbd> select/hand/text/pen/eraser · <kbd>L A R C</kbd> line/arrow/rectangle/circle</p>
 
   <h3>Command line (for automation)</h3>
   <p>Merge, split, encrypt, decrypt, document info and Scan reading model commands are scriptable. Run <code>npm run cli -- ...</code> from the source folder, or the packaged binary followed by <code>cli</code>. Examples:</p>
@@ -158,6 +158,7 @@
     <li><b>Recognize Text says it needs language data</b> — allow internet once; it downloads about 15 MB and keeps it.</li>
     <li><b>An AI feature says it needs a model</b> — the <i>AI Models</i> window opens for you. Choose <i>Download</i> on the highlighted model (once). You can also open it from <i>Tools → AI Models...</i>.</li>
     <li><b>AI reading is slow</b> — speed depends on the computer, the page and whether a graphics card is used. Processor-only reading can be much slower.</li>
+    <li><b>Ask takes a while to answer the first time</b> — the Assistant model is starting (a few seconds), and the first question about a page also loads its page images. Later answers are quicker.</li>
     <li><b>Find or Replace finds nothing</b> — the page may be a scan; use Recognize Text first.</li>
     <li><b>Encrypted PDF won't open</b> — the editor needs the password; open it from <i>File → Open PDF</i> and enter it when asked.</li>
     <li><b>Recent files list is empty</b> — settings are stored per user account in Electron's app data folder. Data from earlier versions is reused on first launch when available.</li>
