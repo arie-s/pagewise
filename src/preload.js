@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('pdfAPI', {
   extractPages: (options) => ipcRenderer.invoke('extract-pages', options),
   reorderPages: (options) => ipcRenderer.invoke('reorder-pages', options),
   replacePage: (options) => ipcRenderer.invoke('replace-page', options),
+  replaceText: (options) => ipcRenderer.invoke('replace-text', options),
   insertPagesFromFile: (options) => ipcRenderer.invoke('insert-pages-from-file', options),
 
   // Document operations

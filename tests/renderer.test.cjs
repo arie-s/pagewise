@@ -612,3 +612,170 @@ test('a placed signature moves, resizes keeping its proportions, and deletes; ea
   functions.deleteSelectedAnnotation();
   assert.equal(calls.length, 4);
 });
+
+// ---------- Find & Replace ----------
+const findFns = () => loadRendererFunctions(['findRegex', 'pageSearchText', 'findPageMatches', 'partBox', 'matchPdfBox', 'matchViewportRects', 'describeReplace'], {
+  extra: { pdfjsLib: { Util: { transform: (a, b) => [a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1], a[0] * b[2] + a[2] * b[3], a[1] * b[2] + a[3] * b[3], a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5]] } } }
+}).functions;
+const item = (str, x, y, width, extra = {}) => ({ str, transform: [12, 0, 0, 12, x, y], width, height: 12, hasEOL: false, ...extra });
+const plainJson = x => JSON.parse(JSON.stringify(x));
+
+test('find: whitespace in the query matches any run of whitespace, case and whole word options', () => {
+  const f = findFns(), items = [item('The  Cat sat on', 10, 100, 100), item('concat cats', 10, 80, 60)];
+  const count = (q, c, w) => f.findPageMatches(items, q, c, w).length;
+  assert.equal(count('cat', false, false), 3); // Cat, concat, cats
+  assert.equal(count('cat', true, false), 2);
+  assert.equal(count('cat', false, true), 1);
+  assert.equal(count('Cat', true, true), 1);
+  assert.equal(count('the cat', false, false), 1);
+  assert.equal(count('sat   on', false, false), 1);
+  assert.equal(count('  ', false, false), 0);
+  assert.equal(count('', false, false), 0);
+  assert.equal(count('a.c', false, false), 0, 'the query is text, not a pattern');
+  assert.equal(count('on concat', false, false), 1, 'the end of a line reads as a space');
+});
+test('find: items are joined with a space where there is a gap, a line break or a new line, and a match keeps one part per item', () => {
+  const f = findFns();
+  const items = [item('Hel', 10, 100, 20), item('lo', 30, 100, 14), item('wor', 60, 100, 20), item('ld', 80, 100, 14), item('next', 10, 80, 30)];
+  const text = f.pageSearchText(items).text;
+  assert.equal(text, 'Hello world next', 'no space inside a word split between items; a gap or a new line gets one');
+  const [m] = f.findPageMatches(items, 'llo wor', true, false);
+  assert.deepEqual(plainJson(m.parts), [{ item: 0, from: 2, to: 3 }, { item: 1, from: 0, to: 2 }, { item: 2, from: 0, to: 3 }]);
+  const eol = [item('end', 10, 100, 20, { hasEOL: true }), item('start', 10, 100, 25)];
+  assert.equal(f.pageSearchText(eol).text, 'end start');
+  assert.deepEqual(plainJson(f.pageSearchText([item('a ', 10, 100, 10), item('b', 20, 100, 5)]).text), 'a b', 'no second space after a space');
+});
+test('find: the PDF-space box of a match splits an item by an equal width per character, and the highlight is placed like the text layer', () => {
+  const f = findFns(), items = [item('abcdefghij', 100, 200, 100)];
+  const [m] = f.findPageMatches(items, 'cde', true, false);
+  assert.deepEqual(plainJson(f.matchPdfBox(items, m)), [120, 200, 150, 212]);
+  const [rect] = f.matchViewportRects(items, m, { scale: 2, transform: [2, 0, 0, -2, 0, 800] });
+  assert.deepEqual(plainJson(rect), { x: 240, y: 800 - 400 - 24, w: 60, h: 24 });
+});
+test('describeReplace names what could not be replaced and on which pages', () => {
+  const { describeReplace } = findFns();
+  assert.equal(describeReplace(3, { replaced: 3, skipped: [] }, [1, 1, 2]), 'Replaced 3 of 3.');
+  assert.equal(describeReplace(14, { replaced: 12, skipped: [{ page: 3, reason: 'font without text mapping' }, { page: 3, reason: 'font without text mapping' }, { page: 9, reason: 'font without text mapping' }] }, [1, 3, 3]),
+    'Replaced 12 of 14. 2 could not be replaced: font without text mapping (page 3)');
+  assert.equal(describeReplace(4, { replaced: 1, skipped: [{ page: 2, reason: 'not found' }, { page: 5, reason: 'the match starts or ends inside a ligature' }, { page: 4, reason: 'not found' }] }, [1, 2, 4, 5]),
+    'Replaced 1 of 4. 3 could not be replaced: not found (pages 2, 4); the match starts or ends inside a ligature (page 5)');
+  assert.equal(describeReplace(2, { replaced: 0, skipped: [] }, [6, 7]), 'Replaced 0 of 2. 2 could not be replaced: not found (pages 6, 7)');
+});
+
+// ---------- undo of an operation that changes the document ----------
+const docs = n => Array.from({ length: n }, (_, i) => ({ doc: JSON.stringify({ originalData: 'D' + i }) }));
+test('trimDocSnapshots keeps the bytes of the newest 5 snapshots and cuts the stack below the oldest one dropped', () => {
+  const { functions } = loadRendererFunctions(['trimDocSnapshots']);
+  const trim = functions.trimDocSnapshots, [d0, d1, d2, d3, d4, d5, d6] = docs(7);
+  assert.deepEqual(plainJson(trim([d0, d1, d2, d3, d4])), plainJson([d0, d1, d2, d3, d4]), 'five are kept');
+  assert.deepEqual(plainJson(trim([d0, d1, d2, d3, d4, d5])), plainJson([d1, d2, d3, d4, d5]));
+  assert.deepEqual(plainJson(trim(['p0', d0, 'p1', d1, 'p2', d2, 'p3', d3, 'p4', d4, 'p5', d5, 'p6', d6])), plainJson(['p2', d2, 'p3', d3, 'p4', d4, 'p5', d5, 'p6', d6]), 'plain snapshots below the oldest kept document snapshot go with it');
+  assert.deepEqual(plainJson(trim(['a', 'b', d0, 'c'])), ['a', 'b', plainJson(d0), 'c'], 'plain snapshots are never counted');
+  assert.deepEqual(plainJson(trim(['a', 'b'])), ['a', 'b']);
+  assert.deepEqual(plainJson(trim([d0, d1, d2], 2)), plainJson([d1, d2]));
+});
+test('undo and redo of a document snapshot reload the document bytes, and the history around it still works', async () => {
+  const loaded = [], state = {
+    originalData: 'T0xE', annotations: { 1: ['pending'] }, redactionMarks: {}, textEdits: {}, undoStack: [], redoStack: [], hasUnsavedChanges: false, currentPage: 2,
+    pdfDoc: { numPages: 3, annotationStorage: { getAll: () => ({}), setValue() {} }, destroy: inert }
+  };
+  const { functions } = loadRendererFunctions(['saveState', 'undo', 'redo', 'pushDocSnapshot', 'trimDocSnapshots', 'docSnapshot', 'restoreDocSnapshot', 'swapDocument'], {
+    state, helperNames: ['editSnapshot', 'restoreForms'],
+    extra: { setUnsavedChanges: flag => { state.hasUnsavedChanges = flag; }, updateUndoRedo: () => {}, renderAllPages: inert, updateAnnotationCount: () => {}, renderThumbnails: inert, goToPage: p => { state.shown = p; },
+      pdfjsLib: { getDocument: ({ data }) => { loaded.push(Buffer.from(data).toString('latin1')); return { promise: Promise.resolve({ numPages: 3, annotationStorage: { getAll: () => ({}), setValue() {} }, destroy: inert }) }; } } }
+  });
+  functions.saveState(); // a plain step before: pending annotations were empty
+  functions.pushDocSnapshot(functions.docSnapshot()); // what Replace does, before it changes anything
+  state.originalData = 'TkVX'; state.annotations = {};
+  assert.equal(state.undoStack.length, 2);
+  await functions.undo();
+  assert.equal(state.originalData, 'T0xE');
+  assert.deepEqual(plainJson(state.annotations), { 1: ['pending'] }, 'the edits that were pending come back');
+  assert.deepEqual(loaded, ['OLD'], 'the old bytes were loaded again');
+  assert.equal(state.redoStack.length, 1);
+  await functions.redo();
+  assert.equal(state.originalData, 'TkVX');
+  assert.deepEqual(plainJson(state.annotations), {});
+  assert.deepEqual(loaded, ['OLD', 'NEW']);
+  await functions.undo();
+  state.annotations = { 1: ['x'] };
+  await functions.undo(); // the plain step below
+  assert.equal(state.originalData, 'T0xE', 'plain steps leave the document alone');
+  assert.deepEqual(loaded.length, 3);
+});
+test('pushDocSnapshot clears redo, and keeps document bytes in at most 5 snapshots', () => {
+  const state = { undoStack: ['p'], redoStack: ['r'] };
+  const { functions } = loadRendererFunctions(['pushDocSnapshot', 'trimDocSnapshots'], { state, extra: { updateUndoRedo: () => {} } });
+  docs(8).forEach(d => functions.pushDocSnapshot(d));
+  assert.deepEqual(plainJson(state.redoStack), []);
+  assert.equal(state.undoStack.length, 5);
+  assert.equal(JSON.parse(state.undoStack[0].doc).originalData, 'D3');
+});
+
+// ---------- the Replace buttons ----------
+function replaceHarness({ pending = [], signed = false, replaced = 1, matchCount = 3, redaction = false } = {}) {
+  const calls = [], notes = [], match = n => ({ page: 1, parts: [{ item: 0, from: 4 * n, to: 4 * n + 3 }] });
+  const state = {
+    pdfDoc: { numPages: 1, destroy: inert }, originalData: 'T0xE', annotations: pending.length ? { 1: pending } : {}, redactionMarks: redaction ? { 1: [{ x: 0, y: 0, width: 0.1, height: 0.1 }] } : {}, textEdits: { '1-1': 'x' },
+    undoStack: ['older'], redoStack: ['stale'], currentPage: 1, formsDirty: false, hasUnsavedChanges: false,
+    find: { query: 'cat', matchCase: false, wholeWord: true, matches: Array.from({ length: matchCount }, (_, n) => match(n)), index: 1 }
+  };
+  const { functions } = loadRendererFunctions(['replaceMatches', 'describeReplace', 'docSnapshot', 'pushDocSnapshot', 'trimDocSnapshots', 'matchPdfBox', 'partBox', 'collectModifications', 'editSnapshot'], {
+    state, elements: { replaceInput: { value: 'dog' }, searchBar: { classList: { toggle() {}, add() {}, remove() {} } } },
+    api: {
+      applyModifications: async req => { calls.push(['bake', req.originalData, req.modifications.length]); return { success: true, data: 'QkFLRUQ=' }; },
+      replaceText: async req => { calls.push(['replace', req.data, req.query, req.replacement, req.wholeWord, JSON.parse(JSON.stringify(req.targets))]); return { success: true, data: 'TkVX', replaced, skipped: [], signedWarning: signed }; }
+    },
+    extra: {
+      setLoading: () => {}, showNotification: (msg, type) => notes.push([msg, type]), setUnsavedChanges: flag => { state.hasUnsavedChanges = flag; }, updateUndoRedo: () => {}, updateAnnotationCount: () => {},
+      swapDocument: async data => { calls.push(['swap', data]); }, renderAllPages: inert, goToPage: () => {}, gotoMatch: () => calls.push(['next']),
+      pageItems: async () => [{ str: 'cat cat cat', transform: [12, 0, 0, 12, 100, 200], width: 110, height: 12 }],
+      runFind: async () => calls.push(['find']), confirm: () => { calls.push(['confirm']); return !signed; },
+      document: { activeElement: null, getElementById: id => ({ value: 'dog', textContent: '', classList: { toggle() {}, add() {}, remove() {} } }) }
+    }
+  });
+  return { state, calls, notes, replaceMatches: functions.replaceMatches };
+}
+test('Replace sends the current match as a rect in PDF space, makes the change undoable, and moves on', async () => {
+  const h = replaceHarness({ pending: [{ type: 'text' }] });
+  await h.replaceMatches(false);
+  assert.deepEqual(plainJson(h.calls[0]), ['bake', 'T0xE', 1], 'pending annotations are baked first');
+  assert.deepEqual(plainJson(h.calls[1]), ['replace', 'QkFLRUQ=', 'cat', 'dog', true, [{ page: 1, rect: [140, 200, 170, 212] }]]);
+  assert.equal(h.state.originalData, 'TkVX');
+  assert.deepEqual(plainJson(h.state.annotations), {});
+  assert.deepEqual(plainJson(h.state.textEdits), {});
+  assert.equal(h.state.undoStack.length, 2);
+  assert.equal(JSON.parse(h.state.undoStack[1].doc).originalData, 'T0xE', 'undo returns to the document as it was, with the pending edits');
+  assert.deepEqual(plainJson(JSON.parse(h.state.undoStack[1].doc).annotations), { 1: [{ type: 'text' }] });
+  assert.equal(h.state.undoStack[0], 'older', 'the earlier history is kept');
+  assert.deepEqual(plainJson(h.state.redoStack), []);
+  assert.equal(h.state.hasUnsavedChanges, true);
+  assert.deepEqual(plainJson(h.notes.at(-1)), ['Replaced 1 of 1.', 'success']);
+});
+test('Replace All asks for every match and reports what could not be done', async () => {
+  const h = replaceHarness({ replaced: 2 });
+  await h.replaceMatches(true);
+  assert.equal(h.calls[0][0], 'replace');
+  assert.equal(h.calls[0][5], 'all');
+  assert.equal(h.calls[0][1], 'T0xE', 'nothing pending: the document as it is');
+  assert.deepEqual(plainJson(h.notes.at(-1)), ['Replaced 2 of 3. 1 could not be replaced: not found (page 1)', 'warning']);
+});
+test('Replace refuses while redaction marks are pending, and asks first on a signed PDF', async () => {
+  const h = replaceHarness({ redaction: true });
+  await h.replaceMatches(true);
+  assert.deepEqual(plainJson(h.calls), []);
+  assert.match(h.notes.at(-1)[0], /redaction marks first/);
+  const s = replaceHarness({ signed: true });
+  await s.replaceMatches(true);
+  assert.deepEqual(plainJson(s.calls.map(c => c[0])), ['replace', 'confirm']);
+  assert.equal(s.state.originalData, 'T0xE', 'declined: nothing changed');
+  assert.equal(s.state.undoStack.length, 1);
+});
+test('Replace changes nothing when nothing could be replaced', async () => {
+  const h = replaceHarness({ replaced: 0 });
+  await h.replaceMatches(false);
+  assert.equal(h.state.originalData, 'T0xE');
+  assert.equal(h.state.undoStack.length, 1);
+  assert.deepEqual(plainJson(h.notes.at(-1)), ['Replaced 0 of 1. 1 could not be replaced: not found (page 1)', 'warning']);
+  assert.deepEqual(plainJson(h.calls.at(-1)), ['next'], 'moves on to the next match');
+});
