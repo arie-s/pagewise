@@ -363,20 +363,26 @@ function createWindow() {
           click: () => mainWindow.webContents.send('menu-add-image')
         },
         {
-          label: 'Make Searchable — offline OCR (any computer)',
-          click: () => mainWindow.webContents.send('menu-ocr')
-        },
-        {
-          label: 'Make Searchable (AI) — better on hard scans, needs the AI engine',
-          click: () => mainWindow.webContents.send('menu-ocr-ai')
-        },
-        {
-          label: 'Smart Extract — AI reading (tables, handwriting)',
-          click: () => mainWindow.webContents.send('menu-smart-extract')
-        },
-        {
-          label: 'Setup AI Reading Engine...',
-          click: () => mainWindow.webContents.send('menu-engine-setup')
+          label: 'Scanned Pages',
+          submenu: [
+            {
+              label: 'Recognize Text (fast, built-in)',
+              click: () => mainWindow.webContents.send('menu-ocr')
+            },
+            {
+              label: 'Recognize Text with AI (more accurate)',
+              click: () => mainWindow.webContents.send('menu-ocr-ai')
+            },
+            {
+              label: 'Read Tables && Handwriting with AI...',
+              click: () => mainWindow.webContents.send('menu-smart-extract')
+            },
+            { type: 'separator' },
+            {
+              label: 'Download AI Reading Model (4.5 GB)...',
+              click: () => mainWindow.webContents.send('menu-engine-setup')
+            }
+          ]
         },
         { type: 'separator' },
         {
@@ -462,44 +468,6 @@ function createWindow() {
           label: 'Add Page Numbers',
           click: () => mainWindow.webContents.send('menu-add-page-numbers')
         },
-        {
-          label: 'Form Fields',
-          submenu: [
-            { label: 'Text Field', click: () => mainWindow.webContents.send('menu-tool', 'fieldText') },
-            { label: 'Checkbox', click: () => mainWindow.webContents.send('menu-tool', 'fieldCheck') },
-            { label: 'Dropdown', click: () => mainWindow.webContents.send('menu-tool', 'fieldDropdown') },
-            { type: 'separator' },
-            { label: 'Edit Form Fields', click: () => mainWindow.webContents.send('menu-tool', 'editFields') }
-          ]
-        },
-        {
-          label: 'Make Fillable (detect form fields)',
-          click: () => mainWindow.webContents.send('menu-make-fillable')
-        },
-        {
-          label: 'Profiles...',
-          click: () => mainWindow.webContents.send('menu-profiles')
-        },
-        {
-          label: 'Fill from Profile',
-          click: () => mainWindow.webContents.send('menu-autofill')
-        },
-        {
-          label: 'Sign Document...',
-          click: () => mainWindow.webContents.send('menu-sign-document')
-        },
-        {
-          label: 'Save Answers to Profile',
-          click: () => mainWindow.webContents.send('menu-save-answers')
-        },
-        {
-          label: 'New Profile from Document',
-          click: () => mainWindow.webContents.send('menu-profile-from-doc')
-        },
-        {
-          label: 'Flatten Form',
-          click: () => mainWindow.webContents.send('menu-flatten-form')
-        },
         { type: 'separator' },
         {
           label: 'Go to Page...',
@@ -525,6 +493,54 @@ function createWindow() {
           label: 'Next Page',
           accelerator: 'PageDown',
           click: () => mainWindow.webContents.send('menu-goto', 'next')
+        }
+      ]
+    },
+    {
+      label: 'Forms',
+      submenu: [
+        {
+          label: 'Fill from Profile',
+          click: () => mainWindow.webContents.send('menu-autofill')
+        },
+        {
+          label: 'Sign Document...',
+          click: () => mainWindow.webContents.send('menu-sign-document')
+        },
+        { type: 'separator' },
+        {
+          label: 'Add Field',
+          submenu: [
+            { label: 'Text Field', click: () => mainWindow.webContents.send('menu-tool', 'fieldText') },
+            { label: 'Checkbox', click: () => mainWindow.webContents.send('menu-tool', 'fieldCheck') },
+            { label: 'Dropdown', click: () => mainWindow.webContents.send('menu-tool', 'fieldDropdown') }
+          ]
+        },
+        {
+          label: 'Move && Resize Fields',
+          click: () => mainWindow.webContents.send('menu-tool', 'editFields')
+        },
+        {
+          label: 'Detect Fields Automatically',
+          click: () => mainWindow.webContents.send('menu-make-fillable')
+        },
+        { type: 'separator' },
+        {
+          label: 'Manage Profiles...',
+          click: () => mainWindow.webContents.send('menu-profiles')
+        },
+        {
+          label: 'Save Filled Answers to a Profile',
+          click: () => mainWindow.webContents.send('menu-save-answers')
+        },
+        {
+          label: 'Create Profile from This Document',
+          click: () => mainWindow.webContents.send('menu-profile-from-doc')
+        },
+        { type: 'separator' },
+        {
+          label: 'Flatten Form (make answers permanent)',
+          click: () => mainWindow.webContents.send('menu-flatten-form')
         }
       ]
     },
@@ -1568,7 +1584,7 @@ ipcMain.handle('writer-remove', () => {
   } catch (e) { return { success: false, error: e.message }; }
 });
 
-// ---------- Make Searchable (AI): dots.ocr text + Tesseract boxes (else ink-estimated) ----------
+// ---------- Recognize Text with AI: dots.ocr text + Tesseract boxes (else ink-estimated) ----------
 const LAYOUT_PROMPT = `Please output the layout information from the PDF image, including each layout element's bbox, its category, and the corresponding text within the bbox.
 
 1. Bbox format: [x1, y1, x2, y2]
@@ -1677,7 +1693,7 @@ function inkWords(gray, block, tokens) {
   });
   return out;
 }
-// ---------- Make Fillable: find blank fields on a flat page (classical image analysis, no AI) ----------
+// ---------- Detect Fields Automatically: find blank fields on a flat page (classical image analysis, no AI) ----------
 function detectFormFields(gray) {
   const { width: W, height: H } = gray, u = W / 1275; // 1.0 for a letter page at 150 dpi
   const ink = inkMask(gray);
@@ -2343,7 +2359,7 @@ function findSignPlaces({ pages, self = null, now = new Date(), skipIds = [] }) 
   }
   return out.sort((a, b) => a.page - b.page || a.box[1] - b.box[1] || a.box[0] - b.box[0]);
 }
-// pages as for autofill-plan; pages with pngBase64 (flat pages) also get their blank lines detected, as in Make Fillable
+// pages as for autofill-plan; pages with pngBase64 (flat pages) also get their blank lines detected, as in Detect Fields Automatically
 ipcMain.handle('sign-places', async (event, { pages, selfId, skipIds } = {}) => {
   try {
     const { profiles } = loadStore(), self = profiles.find(p => p.id === selfId);
@@ -2672,7 +2688,7 @@ ipcMain.handle('ai-text-layer', async (event, { pngBase64 }) => {
     const tessWords = [];
     (data.blocks || []).forEach(b => b.paragraphs.forEach(pa => pa.lines.forEach(l => l.words.forEach(w => tessWords.push({ text: w.text, x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1 })))));
     const blocks = parseLayout((await smartExtract(pngBase64, LAYOUT_PROMPT)).content);
-    if (!blocks.length) return { success: false, error: 'The AI engine returned no layout for this page' };
+    if (!blocks.length) return { success: false, error: 'The AI reading model returned no layout for this page' };
     const img = nativeImage.createFromBuffer(buf);
     const merged = mergeLayout({ blocks, tessWords, gray: bgraToGray(img.getSize(), img.toBitmap()) });
     const count = s => merged.filter(w => w.source === s).length;

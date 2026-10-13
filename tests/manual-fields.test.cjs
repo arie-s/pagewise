@@ -176,7 +176,7 @@ test('update-form-field rejects invalid input and changes nothing', async () => 
   assert.equal((await update(data, 'Nope', { readOnly: true })).success, false);
 });
 
-test('the Form Fields menu reaches the tools the renderer handles', () => {
+test('the Forms menu reaches the tools the renderer handles', () => {
   const main = fs.readFileSync(path.join(root, 'src/main.js'), 'utf8'), html = fs.readFileSync(path.join(root, 'src/index.html'), 'utf8');
   for (const tool of ['fieldText', 'fieldCheck', 'fieldDropdown', 'editFields']) {
     assert.ok(main.includes(`send('menu-tool', '${tool}')`), tool + ' is in the menu');
@@ -190,4 +190,20 @@ test('suggest-field-name finds the label of a box drawn on the underline just be
   // the drawn box starts 12 px below the label's top and only overlaps its last few px
   const r = await call('suggest-field-name', { data, kind: 'text', box: [300, 312, 600, 334], words, width: 1275 });
   assert.equal(r.name, 'Daytime telephone');
+});
+
+test('the Forms menu holds every form channel and Page holds none', () => {
+  const main = fs.readFileSync(path.join(root, 'src/main.js'), 'utf8');
+  const top = label => { // the text of one top-level menu: from its label to the next top-level label
+    const start = main.indexOf(`\n    {\n      label: '${label}',`);
+    assert.ok(start >= 0, label + ' menu exists');
+    const end = main.indexOf('\n    {\n      label: ', start + 1);
+    return main.slice(start, end);
+  };
+  const labels = [...main.matchAll(/\n    \{\n      label: '([^']+)'/g)].map(m => m[1]);
+  assert.ok(labels.indexOf('Page') < labels.indexOf('Forms') && labels.indexOf('Forms') < labels.indexOf('Security'), 'Forms sits between Page and Security');
+  const forms = top('Forms'), page = top('Page');
+  const channels = ['menu-autofill', 'menu-sign-document', 'menu-make-fillable', 'menu-profiles', 'menu-save-answers', 'menu-profile-from-doc', 'menu-flatten-form',
+    "menu-tool', 'fieldText", "menu-tool', 'fieldCheck", "menu-tool', 'fieldDropdown", "menu-tool', 'editFields"];
+  for (const c of channels) { assert.ok(forms.includes(`send('${c}'`), c + ' is in Forms'); assert.ok(!page.includes(`send('${c}'`), c + ' is not in Page'); }
 });

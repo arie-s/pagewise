@@ -323,7 +323,7 @@ test('runSmartExtract asks for an engine update when files exist but the install
   });
   await functions.runSmartExtract();
   assert.equal(setup, 1);
-  assert.match(notes[0], /AI engine update \(small download\)/);
+  assert.match(notes[0], /AI reading model needs an update \(small download\)/);
 });
 
 function extractResultHarness(tables, over = {}) {

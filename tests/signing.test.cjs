@@ -281,7 +281,7 @@ test('signature widgets are places, labelled by their tooltip; their other-perso
 });
 
 // ---------- the menu ----------
-test('Tools has Sign Document, wired from the menu to the renderer', () => {
+test('Forms has Sign Document, wired from the menu to the renderer', () => {
   const read = f => fs.readFileSync(path.join(root, f), 'utf8');
   assert.match(read('src/main.js'), /label: 'Sign Document\.\.\.',\s*click: \(\) => mainWindow\.webContents\.send\('menu-sign-document'\)/);
   assert.match(read('src/preload.js'), /onMenuSignDocument:/);

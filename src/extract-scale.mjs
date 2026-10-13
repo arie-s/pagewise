@@ -1,4 +1,4 @@
-// Render scale for Smart Extract: 2x, except image-only pages (screenshots, small scans) whose image
+// Render scale for Read Tables & Handwriting: 2x, except image-only pages (screenshots, small scans) whose image
 // has fewer pixels than that; upscaling them adds vision tokens without adding detail. Never above 2x:
 // on a 12 MP photo, 4 MP and 9 MP renders read no better than 2x but took 3x and 12x longer on CPU.
 // Every page is capped at 4 MP (~5k vision tokens) so oversized pages fit the engine context.

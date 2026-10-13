@@ -26,90 +26,139 @@
 </head>
 <body>
   <h1>Pagewise — User Guide</h1>
-  <div class="sub">A local-first PDF editor. Your documents never leave your machine.</div>
+  <div class="sub">A PDF editor that works on your own computer. Your documents never leave it.</div>
 
-  <h2>The two tiers</h2>
+  <h2>1. Getting started</h2>
+  <ul>
+    <li><b>Open a PDF:</b> <i>File → Open PDF</i> (<kbd>Ctrl+O</kbd>), or drag a PDF onto the window. <i>File → Open Recent</i> lists earlier files, and the last document reopens when you start the app.</li>
+    <li><b>Open pictures:</b> open or drop PNG/JPEG photos, screenshots or scans. They become a PDF with one page per picture, in filename order. The first save asks where to put the PDF; the pictures are never overwritten.</li>
+    <li><b>Save:</b> <kbd>Ctrl+S</kbd>, or <i>File → Save As</i>. The app warns you if you close with unsaved changes.</li>
+    <li><b>Undo and redo:</b> <kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd>.</li>
+  </ul>
+  <div class="tip"><b>What gets saved:</b> highlights, underlines, strikethroughs and sticky notes are saved as real PDF comments. Other PDF programs show them, and you can still change or remove them later. Drawings, shapes, added text, stamps, images and signatures become part of the page when you save, like ink on paper. Form answers are saved as form data until you flatten the form (see Filling forms).</div>
+  <p>Use <i>View → Light / Dark Theme</i> (<kbd>Ctrl+Shift+T</kbd>) to change the look.</p>
+
+  <h2>2. Reading and finding</h2>
+  <ul>
+    <li><b>Zoom:</b> <i>View → Zoom In / Zoom Out / Actual Size</i>, or the toolbar buttons.</li>
+    <li><b>Side panel:</b> the <i>Pages</i> tab shows thumbnails; the <i>Bookmarks</i> tab shows the document's outline (click an entry to jump); the <i>Comments</i> tab is described in section 5.</li>
+    <li><b>Find:</b> <i>Edit → Find</i> (<kbd>Ctrl+F</kbd>) highlights every match on every page. <i>Aa</i> matches upper and lower case exactly, <i>Ab|</i> matches whole words only. <kbd>Enter</kbd> and <kbd>Shift+Enter</kbd> step to the next and previous match. This only works on pages that contain real text; for a scan, see section 9.</li>
+    <li><b>Go to a page:</b> <kbd>Ctrl+G</kbd>, or the <i>Page</i> menu (first, last, previous, next).</li>
+  </ul>
+
+  <h2>3. Filling forms</h2>
+  <p><b>Fill a form:</b> in a form that already has fields, click a field with the Select tool, then type, tick a box or choose from a list. Answers are saved into the file.</p>
+  <p><b>A form with no fields</b> (a flat PDF or a scan): <i>Forms → Detect Fields Automatically</i> finds the blank lines and boxes and makes them fillable, naming each after the text beside it. Right-click a field to remove it.</p>
+  <p><b>Fix or add fields:</b> <i>Forms → Add Field</i> (Text Field, Checkbox or Dropdown), then drag on the page. <i>Forms → Move &amp; Resize Fields</i> lets you drag a field, drag its corner to resize it, or press Delete to remove it. Right-click a field and choose <i>Field Properties</i> to rename it or set multi-line, maximum length, font size, read-only, required and dropdown choices.</p>
+  <p><b>Fill from Profile:</b> save your details once with <i>Forms → Manage Profiles...</i> (kept on this computer only). You can keep several, for example one for you and one for your spouse. <i>Forms → Fill from Profile</i> proposes a value for each matching field. Choose who you are filling as, and a spouse profile if the form has spouse fields, then review the list and untick anything you do not want. Social Security number and date of birth are never filled unless you tick them, and fields about other people (dependents, a requester) are left alone.</p>
+  <p><b>AI suggestions:</b> for fields your profile cannot fill, a <i>Suggest the rest with AI</i> button appears in that review window. It uses the optional AI writing helper (section 13) to guess answers or write short drafts from your profile. Suggestions are never ticked for you and are always yours to review; anything not found in your profile is flagged. The first use asks before downloading the helper.</p>
+  <p><b>Build a profile from what you have:</b> <i>Forms → Save Filled Answers to a Profile</i> turns the answers in a filled form into profile details. <i>Forms → Create Profile from This Document</i> reads an ID card, bill or letter (the first three pages; it needs the AI writing helper, and the AI reading model for scanned pages). Both end in a review window and save nothing until you click Save; Social Security number and date of birth start unticked.</p>
+  <p><b>Flatten:</b> <i>Forms → Flatten Form (make answers permanent)</i> turns the answers into ordinary page content. They can no longer be edited, and every PDF reader shows them the same way.</p>
+
+  <h2>4. Signing</h2>
+  <ul>
+    <li><b>Add Signature</b> (toolbar): choose <i>Draw</i>, <i>Type</i> (three styles) or <i>Upload</i> a picture of your signature (tick <i>Remove white background</i> to make the white transparent). The <i>Initials</i> tab does the same for initials. <i>Save for next time</i> keeps them on this computer, and saved ones appear in the window to reuse.</li>
+    <li><b>Place it:</b> click the page, or drag a box. Drag a placed signature to move it, drag its corner to resize it, and press Delete to remove it.</li>
+    <li><b>Forms → Sign Document...</b> finds the signature fields and signature lines in a form and places your signature in each one, filling in the date beside it. Check the result before saving.</li>
+  </ul>
+
+  <h2>5. Comments and markup</h2>
+  <ul>
+    <li><b>Sticky note:</b> <i>Tools → Annotation Tools → Note</i> (or the Note button), then click the page and type. Click a note later to read, edit or delete it.</li>
+    <li><b>Highlight, underline, strikethrough:</b> choose the tool and drag over text. Or select text and press the <i>Comment</i> button that appears to highlight it and add a note in one step.</li>
+    <li><b>Comments panel:</b> the <i>Comments</i> tab lists every comment by page with its author, date and text. Click one to jump to it. You can <i>Reply</i>, <i>Edit</i>, <i>Delete</i> and <i>Mark Completed</i> / <i>Reopen</i>, search, and filter by All / Open / Completed. <kbd>Ctrl+Z</kbd> undoes these.</li>
+    <li><b>Your name:</b> click the name at the top of the Comments tab to change the author shown on new comments.</li>
+    <li><b>Drawing and shapes:</b> <i>Tools → Drawing Tools</i> (Pen, Eraser) and <i>Shape Tools</i> (Rectangle, Circle, Line, Arrow), plus Add Text, Stamp and Add Image. <i>Clear All</i> in the right panel removes your unsaved drawings and redaction marks.</li>
+  </ul>
+
+  <h2>6. Editing text</h2>
+  <p><b>Find &amp; Replace</b> (<i>Edit → Find &amp; Replace...</i>, <kbd>Ctrl+H</kbd>) changes the words inside the PDF itself. The old letters are removed, not covered. <i>Replace</i> changes the current match and <i>Replace All</i> every match; <kbd>Ctrl+Z</kbd> undoes it. Limits:</p>
+  <ul>
+    <li>It needs real text, so it does not work on scans.</li>
+    <li>It works within one line at a time; it does not reflow a paragraph.</li>
+    <li>It uses the PDF's own font when it has the letters you type. If a letter is missing, it uses a similar standard font.</li>
+    <li>On a digitally signed PDF it asks first, because any change breaks the signature.</li>
+  </ul>
+  <p><b>Double-click a word</b> to type a different one in its place. This covers the old word with a white box and writes the new word on top, so the old text is still inside the file and can be found or copied. For a real change, use Find &amp; Replace. To permanently remove sensitive text, use Redact (section 12).</p>
+
+  <h2>7. Pages</h2>
+  <ul>
+    <li><b>Reorder:</b> drag thumbnails in the left panel; a blue line shows where the page will land.</li>
+    <li><b>Rotate, insert, delete:</b> from the right panel or the <i>Page</i> menu. <i>Rotate All</i> turns every page. <i>Insert Pages From File...</i> adds pages of another PDF after the current page.</li>
+    <li><b>Replace Page...</b> swaps the current page for a page of another PDF. <b>Extract Pages...</b> saves chosen pages as their own file.</li>
+    <li><b>Crop Page...</b> hides everything outside a rectangle you drag (it is hidden, not deleted; <i>Remove Crop</i> brings it back). <b>Resize Pages...</b> fits the content to A4, Letter, Legal or A5.</li>
+    <li><b>Add Watermark</b>, <b>Add Header &amp; Footer</b> and <b>Add Page Numbers</b> are in the <i>Page</i> menu.</li>
+  </ul>
+
+  <h2>8. Combining and splitting</h2>
+  <ul>
+    <li><b>Merge:</b> <i>File → Merge PDFs...</i> (or the button on the welcome screen). Pick several PDFs or pictures in order, then reorder pages by dragging thumbnails.</li>
+    <li><b>Split:</b> <i>File → Split PDF...</i> every N pages, or custom ranges like <code>1-3,5,7-10</code>.</li>
+  </ul>
+
+  <h2>9. Scanned pages</h2>
+  <p>A scanned or photographed page is only a picture of text, so you cannot search or copy from it. The <i>Tools → Scanned Pages</i> menu fixes that:</p>
   <table>
-    <tr><th></th><th>Base (installed with the app)</th><th>AI Reading (optional add-on)</th></tr>
-    <tr><td><b>What</b></td><td>Everything: viewing, annotating, page tools, merge/split, encryption, offline OCR, CLI</td><td><b>Smart Extract</b> — AI model (dots.ocr) that reads tables, multi-column layouts, formulas and handwriting into clean markdown</td></tr>
-    <tr><td><b>Hardware</b></td><td>No GPU required</td><td>Installer targets Windows x64, Linux x64 and Macs (Apple Silicon and Intel). The installer uses a GPU when llama.cpp can find one (Vulkan on Windows/Linux, Metal on Apple Silicon) and otherwise falls back to the CPU.</td></tr>
-    <tr><td><b>Internet</b></td><td>Not needed (one-time 15MB language pack for OCR)</td><td>One-time ~4.5GB download, then fully offline</td></tr>
+    <tr><th></th><th>Recognize Text (fast, built-in)</th><th>Recognize Text with AI (more accurate)</th><th>Read Tables &amp; Handwriting with AI</th></tr>
+    <tr><td><b>Result</b></td><td>Adds an invisible text layer. The page looks the same, but search and copy work.</td><td>Same invisible text layer, from the AI reading model.</td><td>Shows the page as text you can copy or save as Markdown, with tables you can copy or export to CSV / Excel. The PDF is not changed.</td></tr>
+    <tr><td><b>Best for</b></td><td>Clean typed or printed pages.</td><td>Poor scans, faxes, shadowed photos, unusual layouts. Slower.</td><td>Tables, columns, formulas and handwriting.</td></tr>
+    <tr><td><b>Needs</b></td><td>Nothing, apart from a one-time 15 MB language download.</td><td>The AI reading model (section 13).</td><td>The AI reading model (section 13).</td></tr>
   </table>
+  <p>If you are unsure, start with Recognize Text (fast). Use the AI versions when its result is poor or you need tables. A table that continues over several pages with the same header row is exported as one table. Cells that start like a spreadsheet formula (for example <code>=</code>) are saved with a leading <code>'</code> so opening the file cannot run them.</p>
 
-  <h2>Basic workflow</h2>
-  <p><b>Open a PDF:</b> click <i>Open PDF</i>, or simply <b>drag a PDF onto the window</b>. The last document you had open reopens automatically on launch.</p>
-  <p><b>Open images:</b> open or drop one or more PNG/JPEG images (photos, screenshots, scans) and they become a PDF with one page per image, in filename order, with phone-photo rotation applied. The first save asks where to write the PDF; the original images are never overwritten.</p>
-  <p><b>Annotate:</b> pick a tool on the toolbar (hover any button for a description), click or drag on the page. Everything is drawn as you go.</p>
-  <p><b>Fill a form:</b> in a fillable PDF, use the Select tool and click a field to type, tick a box or pick from a list. Values are saved into the file as real form data. <i>Tools → Flatten Form</i> turns them into fixed page content that can no longer be edited.</p>
-  <p><b>Make a flat form fillable:</b> <i>Tools → Make Fillable</i> finds the blank lines, boxes and checkboxes on pages without form fields (including scans) and adds real fields named after their printed labels. Right-click a field to remove it. To add one it missed, use <i>Tools → Form Fields</i> (Text Field, Checkbox or Dropdown) and drag on the page; <i>Edit Form Fields</i> lets you drag a field to move it, drag its corner handle to resize it, or press Delete to remove it. Right-click a field and choose <i>Field Properties</i> to rename it or set multi-line, max length, comb, font size, read-only, required and dropdown options.</p>
-  <p><b>Fill from a profile:</b> store your name, address and contact details once with <i>Tools → Profiles</i> (kept on this computer only); you can keep several profiles, for example one for you and one for your spouse. <i>Tools → Fill from Profile</i> then proposes values for the matching fields; choose who to fill as and, if the form has spouse fields, a spouse profile, then review and untick anything before it is filled. SSN and date of birth are never filled unless you tick them, and fields about other people (requester, dependents and so on) are left alone, as are spouse fields when no spouse profile is chosen. For fields the rules leave empty, <i>Suggest the rest with AI</i> asks a small local model (a one-time 3.1 GB download that runs on your computer) for guesses and short drafts based on your profile and its Notes; these are never ticked for you, and anything not found in your profile is flagged. You can also build a profile from what you already have: <i>Tools → Save Answers to Profile</i> proposes details from the values in the open filled form, and <i>Tools → New Profile from Document</i> reads an ID card, bill or letter (the first three pages); both show a review dialog and save nothing until you click Save, and SSN and date of birth start unticked.</p>
-  <p><b>Sign:</b> <i>Tools → Sign Document...</i> finds the signature fields and signature lines in a form, lets you pick a drawn, typed or uploaded signature (saved on this computer for next time, along with initials) and drops it into each place, filling the date beside it. For anywhere else use the Add Signature button, then click the page or drag a box. A placed signature can be dragged to move it, resized from its corner and removed with Delete.</p>
-  <p><b>Find and replace:</b> <kbd>Ctrl+F</kbd> highlights every match (<i>Aa</i> matches case, <i>Ab|</i> whole words) and <kbd>Enter</kbd> / <kbd>Shift+Enter</kbd> step through them. <i>⇄ Replace</i> (<kbd>Ctrl+H</kbd>) shows a second row: <i>Replace</i> changes the current match, <i>Replace All</i> every match. The text is changed inside the PDF itself, the old letters are removed rather than covered, and <kbd>Ctrl+Z</kbd> undoes it. It needs real text (not a scan), is done within one line at a time, and uses the PDF's own font when it has the letters, otherwise a similar standard font. A digitally signed PDF asks first, because changing it breaks the signature.</p>
-  <p><b>Save:</b> <kbd>Ctrl+S</kbd>. Annotations are baked permanently into the saved file — this is intentional, like printing a stamp onto paper. The app warns you if you close with unsaved changes.</p>
-  <p><b>Tweak the look:</b> <i>View → Light / Dark Theme</i> (<kbd>Ctrl+Shift+T</kbd>).</p>
-
-  <h2>Page operations</h2>
+  <h2>10. Converting and exporting</h2>
   <ul>
-    <li><b>Reorder pages:</b> drag thumbnails in the left sidebar onto another page. A blue line shows where the page will land.</li>
-    <li><b>Delete / rotate / insert</b> pages from the right panel or the <i>Page</i> menu. <i>Rotate All</i> affects every page at once.</li>
-    <li><b>Insert pages from another PDF</b> (right panel) — picks up where copy-and-paste never did.</li>
-    <li><b>Replace, crop, resize:</b> <i>Page → Replace Page...</i> swaps the current page for a page of another PDF. <i>Crop Page...</i> lets you drag a rectangle on the page; content outside it is hidden, not deleted, and <i>Remove Crop</i> brings it back. <i>Resize Pages...</i> scales the content to fit A4, Letter, Legal or A5 and centres it.</li>
-    <li><b>Reduce file size:</b> <i>File → Reduce File Size...</i> shrinks scans and photos by lowering their resolution and re-encoding them as JPEG. Pick Smallest, Balanced or High quality; text and vector graphics are not changed.</li>
-    <li><b>Sticky notes:</b> <i>Tools → Annotation Tools → Note</i> (or the Note button), then click the page and type. Notes are saved as real PDF comments; click a note to read, edit or delete it before saving.</li>
-    <li><b>Comments panel:</b> the <i>Comments</i> tab in the sidebar lists every comment in the PDF, grouped by page, with its author, date and text (for a highlight with no comment, the text it covers). Click one to jump to it; use <i>Reply</i>, <i>Edit</i>, <i>Delete</i> and <i>Mark Completed</i> / <i>Reopen</i>, the search box and the All / Open / Completed filter. Highlights, underlines, strikethroughs and notes are saved as real PDF comments other viewers show too. Select text and press <i>Comment</i> to highlight it with a note. Click your name at the top of the tab to change the author on new comments. <kbd>Ctrl+Z</kbd> undoes a reply, edit, delete or status change.</li>
-    <li><b>Bookmarks:</b> the Bookmarks tab in the left sidebar shows the document's outline; click an entry to jump to it.</li>
-    <li><b>Extract pages</b>: <i>Page → Extract Pages...</i>, then save the selection as its own file.</li>
+    <li><i>File → Export → Word Document (.docx)...</i> and <i>Excel Workbook (.xlsx)...</i> convert the whole document or a page range. Digital pages convert directly; scanned pages (and every page, if you tick the AI option) use the AI reading model.</li>
+    <li><i>File → Export → Export as Images (PNG)</i> / <i>(JPEG)</i> saves each page as a picture.</li>
+    <li><i>File → Export → Export Selected Pages...</i> saves chosen pages as a new PDF.</li>
   </ul>
 
-  <h2>Multi-document operations</h2>
-  <ul>
-    <li><b>Merge PDFs:</b> welcome screen button, or <i>File → Merge PDFs...</i> — pick multiple PDFs or PNG/JPEG images in order; you can then reorder pages by dragging thumbnails.</li>
-    <li><b>Split PDF:</b> <i>File → Split PDF...</i> — every N pages, or custom ranges like <code>1-3,5,7-10</code>.</li>
-  </ul>
+  <h2>11. Smaller files</h2>
+  <p><i>File → Reduce File Size...</i> lowers the resolution of scans and photos and re-saves them as JPEG. Choose <i>Smallest</i> (100 dpi), <i>Balanced</i> (150 dpi, recommended) or <i>High quality</i> (220 dpi). Text and vector graphics are not changed.</p>
 
-  <h2>Security</h2>
-  <p><i>Security → Set Password Protection</i> adds real AES-256 encryption. Remove Password decrypts with the current password. Note: encrypted PDFs are saved as new files — the editor holds your working copy unencrypted while you edit.</p>
+  <h2>12. Security</h2>
+  <p><i>Security → Set Password Protection...</i> adds real AES-256 encryption. <i>Remove Password</i> decrypts with the current password. An encrypted PDF is saved as a new file, because the editor holds your working copy unencrypted while you edit.</p>
   <p><b>Redact:</b> use <i>Tools → Redact → Mark for Redaction</i>, drag over the content, then save. Applying redactions rebuilds the entire document from rendered images with opaque black masks, removing the original text, images and hidden objects. Text selection, forms, links, bookmarks and metadata are removed from the output. The app asks before applying this change; canceling Save keeps your pending edits.</p>
 
-  <h2>OCR — reading text out of images</h2>
-  <p>If a PDF is a scan or photo, it has no real text: you can't search or copy from it. Two tools fix that:</p>
+  <h2>13. Optional AI features</h2>
+  <p>The base app needs no downloads. Two optional AI models add extra abilities. Both run on this computer and nothing is sent online when you use them.</p>
   <table>
-    <tr><th></th><th>Make Searchable</th><th>Smart Extract (AI)</th></tr>
-    <tr><td><b>What it gives</b></td><td>Invisible text layer inside the PDF — the file stays visually identical, but search, Ctrl+F and copy now work</td><td>a <b>markdown transcript</b> for copying or saving, plus <b>tables as CSV</b> (Export CSV) or ready to paste into a spreadsheet (Copy table) — the PDF is not modified</td></tr>
-    <tr><td><b>Strength</b></td><td>typed/printed pages; fast, works everywhere</td><td>tables, columns, formulas, handwriting, messy scans</td></tr>
-    <tr><td><b>Setup</b></td><td>none (15MB language pack once)</td><td>one-time ~4.5GB download via <i>Tools → Setup AI Reading Engine</i></td></tr>
+    <tr><th></th><th>AI reading model</th><th>AI writing helper</th></tr>
+    <tr><td><b>Size</b></td><td>about 4.5 GB</td><td>about 3.1 GB</td></tr>
+    <tr><td><b>Unlocks</b></td><td>Recognize Text with AI, Read Tables &amp; Handwriting with AI, Word / Excel export of scanned pages</td><td><i>Suggest the rest with AI</i> in Fill from Profile, and Create Profile from This Document</td></tr>
+    <tr><td><b>Hardware</b></td><td>Uses a graphics card when one can be found (Vulkan on Windows/Linux, Metal on Apple Silicon); otherwise the processor, which is much slower (about a minute per page). For Windows x64, Linux x64 and Macs.</td><td>Processor only; no graphics card needed.</td></tr>
+    <tr><td><b>Install</b></td><td><i>Tools → Scanned Pages → Download AI Reading Model...</i>, then <i>Download &amp; Install</i> and <i>Test AI Model</i>. The AI features also offer this when needed.</td><td>Offered the first time you use an AI suggestion; you can say no.</td></tr>
+    <tr><td><b>Remove</b></td><td>Same window, <i>Remove AI Model</i>.</td><td>The same <i>Remove AI Model</i> button deletes it too (both live in one folder). There is no separate button for it.</td></tr>
   </table>
-  <p><b>Make Searchable (AI)</b> (Tools menu) builds the same invisible text layer from the AI engine's reading. It is slower but works on faxes and shadowed photos where standard OCR finds little.</p>
-  <p><b>Word and Excel:</b> File &rarr; Export &rarr; Word Document (.docx) or Excel Workbook (.xlsx) converts the document (or a page range) to an editable file; scanned pages and Excel tables use Smart Extract.</p>
-  <p>Tip: run <b>both</b> on a scanned document — searchable for finding things, Smart Extract for a clean copy-paste of tables.</p>
-  <p>Tables that continue across pages with the same header row are exported as one table. Cells that start like a spreadsheet formula (for example <code>=</code>) are saved with a leading <code>'</code> so opening the CSV can't run them.</p>
+  <p>Each is downloaded once; after that it works offline. The writing helper also uses the program files that the reading model's installer fetches, so installing it first downloads those (a small extra).</p>
 
-  <h2>Command line (for automation)</h2>
-  <p>Merge, split, encrypt, decrypt, document info and AI engine commands are scriptable. Run <code>npm run cli -- ...</code> from the source folder, or the packaged binary followed by <code>cli</code>. Examples:</p>
+  <h2>14. Privacy, shortcuts, command line, troubleshooting</h2>
+  <h3>Privacy</h3>
+  <p>Everything runs on your machine. There are no accounts, no telemetry, no cloud inference. Internet access is used only to download OCR language data and the optional AI models. The AI features use a local server bound to <code>127.0.0.1</code>. Profiles stay on this computer.</p>
+
+  <h3>Keyboard shortcuts</h3>
+  <p>Use <kbd>Cmd</kbd> instead of <kbd>Ctrl</kbd> on macOS. Full list: <i>Help → Keyboard Shortcuts</i> (<kbd>Ctrl+/</kbd>).</p>
+  <p><kbd>Ctrl+O</kbd> open · <kbd>Ctrl+S</kbd> save · <kbd>Ctrl+F</kbd> find · <kbd>Ctrl+H</kbd> replace · <kbd>Ctrl+G</kbd> go to page · <kbd>V H T P E</kbd> select/hand/text/pen/eraser · <kbd>L A R C</kbd> line/arrow/rectangle/circle</p>
+
+  <h3>Command line (for automation)</h3>
+  <p>Merge, split, encrypt, decrypt, document info and AI reading model commands are scriptable. Run <code>npm run cli -- ...</code> from the source folder, or the packaged binary followed by <code>cli</code>. Examples:</p>
   <p>
     <code>... cli merge out.pdf a.pdf b.pdf c.pdf</code><br>
     <code>... cli split doc.pdf --every 5</code> or <code>--ranges 1-3,5,7-10</code><br>
     <code>... cli encrypt doc.pdf --password secret</code><br>
     <code>... cli decrypt doc.pdf --password secret</code><br>
     <code>... cli info doc.pdf</code><br>
-    <code>... cli engine-extract page.png</code> (after engine install; add <code>--csv out.csv</code> to save tables)
+    <code>... cli engine-extract page.png</code> (after the AI reading model is installed; add <code>--csv out.csv</code> to save tables)
   </p>
 
-  <h2>Keyboard shortcuts</h2>
-  <p>Use <kbd>Cmd</kbd> instead of <kbd>Ctrl</kbd> for menu shortcuts on macOS.</p>
-  <p>Full list: <i>Help → Keyboard Shortcuts</i> (<kbd>Ctrl+/</kbd>). Frequently used:</p>
-  <p><kbd>Ctrl+O</kbd> open · <kbd>Ctrl+S</kbd> save · <kbd>Ctrl+F</kbd> find · <kbd>Ctrl+G</kbd> go to page · <kbd>V H T P E</kbd> select/hand/text/pen/eraser · <kbd>L A R C</kbd> line/arrow/rect/circle</p>
-
-  <h2>Privacy</h2>
-  <p>Everything runs on your machine. There are no accounts, no telemetry, no cloud inference. Internet access is used to download OCR language data and the optional AI engine/model. AI document processing uses a local server bound to <code>127.0.0.1</code>.</p>
-
-  <h2>Troubleshooting</h2>
+  <h3>Troubleshooting</h3>
   <ul>
-    <li><b>OCR says it needs language data</b> — allow internet once; it downloads ~15MB and caches it.</li>
-    <li><b>Smart Extract says engine not installed</b> — Tools → Setup AI Reading Engine → Download &amp; Install (~4.5GB, one time).</li>
-    <li><b>Smart Extract is slow</b> — processing speed depends on the computer, page and available GPU acceleration. CPU inference can be substantially slower.</li>
-    <li><b>Encrypted PDF won't open</b> — the editor needs the password; open it from File → Open and enter it if prompted.</li>
-    <li><b>Lost recent files list</b> — settings are stored per user account in Electron's app data directory. Data from earlier versions of the app is reused on first launch when available.</li>
+    <li><b>Recognize Text says it needs language data</b> — allow internet once; it downloads about 15 MB and keeps it.</li>
+    <li><b>An AI feature says the AI reading model is not installed</b> — <i>Tools → Scanned Pages → Download AI Reading Model...</i> → <i>Download &amp; Install</i> (about 4.5 GB, once).</li>
+    <li><b>AI reading is slow</b> — speed depends on the computer, the page and whether a graphics card is used. Processor-only reading can be much slower.</li>
+    <li><b>Find or Replace finds nothing</b> — the page may be a scan; use Recognize Text first.</li>
+    <li><b>Encrypted PDF won't open</b> — the editor needs the password; open it from <i>File → Open PDF</i> and enter it when asked.</li>
+    <li><b>Recent files list is empty</b> — settings are stored per user account in Electron's app data folder. Data from earlier versions is reused on first launch when available.</li>
   </ul>
 </body>
 </html>
