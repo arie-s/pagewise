@@ -1,7 +1,7 @@
 {
   "name": "pagewise",
   "productName": "Pagewise",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "description": "Private PDF editor that reads your documents with local AI.",
   "main": "src/main.js",
   "scripts": {
