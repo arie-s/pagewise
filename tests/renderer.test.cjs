@@ -784,3 +784,13 @@ test('Replace changes nothing when nothing could be replaced', async () => {
   assert.deepEqual(plainJson(h.notes.at(-1)), ['Replaced 0 of 1. 1 could not be replaced: not found (page 1)', 'warning']);
   assert.deepEqual(plainJson(h.calls.at(-1)), ['next'], 'moves on to the next match');
 });
+
+test('the Ask model finder pre-selects only an obvious choice and never a draft model', () => {
+  const { functions } = loadRendererFunctions(['defaultAssistantModel']);
+  const pick = functions.defaultAssistantModel;
+  assert.equal(pick(['Qwen3.6-27B-EAGLE3', 'Qwen3.6-27B-MTP-Q6_K', 'gemma-4-12B-it-qat']), '');
+  assert.equal(pick(['Qwen3.6-27B-EAGLE3', 'Qwen3.6-27B-MTP-Q6_K']), 'Qwen3.6-27B-MTP-Q6_K');
+  assert.equal(pick(['llama-3-draft', 'mistral-7b']), 'mistral-7b');
+  assert.equal(pick(['Qwen3.6-27B-EAGLE3']), '');
+  assert.equal(pick([]), '');
+});

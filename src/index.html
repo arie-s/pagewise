@@ -3706,11 +3706,16 @@
       } });
       addAssistantNote('Ask needs the Assistant model: a one-time download of about 4.1 GB (3.1 GB for the model plus 1 GB so it can look at page images). It runs on this computer, and nothing you ask is sent online. It also powers AI suggestions in forms.', [el('div', { className: 'a-actions' }, install, el('button', { className: 'a-action', textContent: 'Use my own model…', onclick: showAssistantModelDialog }), status)]);
     }
+    // Pre-select only when the choice is obvious: one model, not counting speculative-decoding drafts (EAGLE, draft) that can't answer on their own
+    function defaultAssistantModel(models) {
+      const usable = models.filter(id => !/eagle|draft/i.test(id));
+      return usable.length === 1 ? usable[0] : '';
+    }
     function showAssistantModelDialog() {
       const cur = (asst.info && asst.info.saved) || { url: 'http://127.0.0.1:8001', model: '', reasoning: 'server' };
       const content = '<div class="form-group"><label class="form-label">For questions about documents, use</label><select class="form-select" id="amKind"><option value="builtin">The built-in model only</option><option value="custom">My own model (any OpenAI-compatible server)</option></select></div>'
         + '<div id="amCustom"><div class="form-group"><label class="form-label">Server address</label><input type="text" class="form-input" id="amUrl" maxlength="300"></div>'
-        + '<div class="form-group"><label class="form-label">Model</label><div style="display:flex;gap:6px"><input type="text" class="form-input" id="amModel" maxlength="200" list="amModels" placeholder="model id"><datalist id="amModels"></datalist><button class="modal-btn" id="amFind">Find</button></div></div>'
+        + '<div class="form-group"><label class="form-label">Model</label><div style="display:flex;gap:6px"><input type="text" class="form-input" id="amModel" maxlength="200" placeholder="model id"><button class="modal-btn" id="amFind">Find</button></div><select class="form-select hidden" id="amPick" style="margin-top:6px"></select></div>'
         + '<div class="form-group"><label><input type="checkbox" id="amReason"> Let the model reason before answering (slower, usually more accurate)</label></div>'
         + '<div class="form-group"><button class="modal-btn" id="amTest">Test</button> <span id="amTestOut" style="font-size:12px"></span></div>'
         + '<div class="form-group hidden" id="amWarn" style="border-left:3px solid var(--warning);padding:8px 12px;font-size:12px"><b id="amWarnText"></b><br><label><input type="checkbox" id="amAck"> I understand</label></div></div>'
@@ -3727,9 +3732,12 @@
       q('amFind').onclick = async () => {
         q('amErr').textContent = ''; const r = await window.pdfAPI.assistantModelList({ url: q('amUrl').value.trim() });
         if (!r.success) { q('amErr').textContent = r.error; return; }
-        q('amModels').replaceChildren(...r.models.map(id => el('option', { value: id }))); if (r.models.length && !q('amModel').value) q('amModel').value = r.models[0];
+        const cur = q('amModel').value.trim(), pick = r.models.includes(cur) ? cur : defaultAssistantModel(r.models);
+        q('amPick').replaceChildren(el('option', { value: '', textContent: 'Choose a model…' }), ...r.models.map(id => el('option', { value: id, textContent: id })));
+        q('amPick').value = pick; q('amPick').classList.toggle('hidden', !r.models.length); if (pick) q('amModel').value = pick;
         q('amTestOut').textContent = r.models.length + ' model' + (r.models.length === 1 ? '' : 's') + ' found';
       };
+      q('amPick').onchange = () => { if (q('amPick').value) q('amModel').value = q('amPick').value; };
       q('amTest').onclick = async () => {
         q('amErr').textContent = ''; q('amTestOut').textContent = 'Testing…';
         const r = await window.pdfAPI.assistantModelTest({ url: q('amUrl').value.trim(), model: q('amModel').value.trim(), reasoning: q('amReason').checked ? 'server' : 'off' });
