@@ -129,7 +129,7 @@ test('sticky notes are real /Text comments that round-trip ASCII and non-ASCII t
   assert.deepEqual(raw.lookup(0, PDFDict).lookup(PDFName.of('Rect'), PDFArray).asArray().map(n => n.asNumber()), [20, 51, 44, 75]); // x = 0.1 * 200, top at y = 100 - 0.25 * 100, 24 x 24
   const notes = (await (await (await open(data)).getPage(1)).getAnnotations()).filter(a => a.subtype === 'Text');
   assert.deepEqual(notes.map(n => n.contentsObj.str), texts);
-  for (const n of notes) assert.equal(n.titleObj.str, 'Pagewise');
+  for (const n of notes) assert.equal(n.titleObj.str, require('os').userInfo().username || 'Pagewise');
   const dict = (await PDFDocument.load(Buffer.from(data, 'base64'))).getPage(0).node.Annots().lookup(0, PDFDict);
   assert.equal(dict.get(PDFName.of('Name')).toString(), '/Comment');
   assert.equal(dict.get(PDFName.of('F')).asNumber(), 4);

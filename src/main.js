@@ -31,6 +31,17 @@ function loadSettings() {
 function saveSettings() {
   try { fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2)); } catch (e) {}
 }
+// Who comments, highlights and replies are by: the name set in the Comments panel, else the OS user
+const MAX_AUTHOR = 100;
+function defaultAuthor() { try { return require('os').userInfo().username || 'Pagewise'; } catch (e) { return 'Pagewise'; } }
+function getAuthor() { return typeof settings.author === 'string' && settings.author.trim() ? settings.author.trim() : defaultAuthor(); }
+ipcMain.handle('settings-author-get', () => getAuthor());
+ipcMain.handle('settings-author-set', (event, name) => {
+  if (typeof name !== 'string' || name.trim().length > MAX_AUTHOR) return { success: false, error: `The name can be at most ${MAX_AUTHOR} characters` };
+  if (name.trim()) settings.author = name.trim(); else delete settings.author;
+  saveSettings();
+  return { success: true, author: getAuthor() };
+});
 function rememberFile(filePath) {
   if (!recentFiles.includes(filePath)) {
     recentFiles.unshift(filePath);
@@ -3006,17 +3017,129 @@ function resizePage(page, W, H) {
   for (const box of ['BleedBox', 'TrimBox', 'ArtBox']) page.node.delete(PDFName.of(box));
 }
 
+const newAnnotId = () => require('crypto').randomUUID();
+const annotStamp = () => ({ M: PDFString.fromDate(new Date()), CreationDate: PDFString.fromDate(new Date()), NM: PDFString.of(newAnnotId()), T: PDFHexString.fromText(getAuthor()) });
+function pushAnnot(pdfDoc, page, dict) {
+  let annots = page.node.Annots();
+  if (!annots) { annots = pdfDoc.context.obj([]); page.node.set(PDFName.of('Annots'), annots); }
+  const ref = pdfDoc.context.register(dict);
+  annots.push(ref);
+  return ref;
+}
 // A real /Annot /Text comment; Contents is a hex string (UTF-16BE) so non-ASCII text survives
 function addTextNote(pdfDoc, page, x, y, text) {
   const size = 24;
-  const note = pdfDoc.context.obj({
+  pushAnnot(pdfDoc, page, pdfDoc.context.obj({
     Type: 'Annot', Subtype: 'Text', Rect: [x, y - size, x + size, y], Contents: PDFHexString.fromText(String(text)),
-    Name: 'Comment', T: PDFString.of('Pagewise'), C: [1, 0.85, 0.3], M: PDFString.fromDate(new Date()), F: 4, Open: false
-  });
-  let annots = page.node.Annots();
-  if (!annots) { annots = pdfDoc.context.obj([]); page.node.set(PDFName.of('Annots'), annots); }
-  annots.push(pdfDoc.context.register(note));
+    Name: 'Comment', C: [1, 0.85, 0.3], F: 4, Open: false, ...annotStamp()
+  }));
 }
+// Highlight / Underline / StrikeOut as real annotations with their own appearance stream, so every viewer draws them the same way and they can be listed, edited and deleted as comments
+const MARKUP_KINDS = { highlight: { Subtype: 'Highlight', color: [1, 0.94, 0.2] }, underline: { Subtype: 'Underline', color: [0, 0, 1] }, strikethrough: { Subtype: 'StrikeOut', color: [1, 0, 0] } };
+const HIGHLIGHT_OPACITY = 0.4;
+function addTextMarkup(pdfDoc, page, mod) {
+  const kind = MARKUP_KINDS[mod.type], { width: pw, height: ph } = page.getSize(), ctx = pdfDoc.context;
+  const num = (v, d) => Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : d;
+  const color = ['r', 'g', 'b'].map((k, i) => num(mod.color && mod.color[k], kind.color[i]));
+  const sw = Number.isFinite(mod.strokeWidth) && mod.strokeWidth > 0 ? Math.min(mod.strokeWidth, 20) : 1;
+  const boxes = (Array.isArray(mod.rects) && mod.rects.length ? mod.rects : [mod]).filter(r => [r.x, r.y, r.width, r.height].every(Number.isFinite))
+    .map(r => ({ l: r.x * pw, r: (r.x + r.width) * pw, t: ph - r.y * ph, b: ph - (r.y + r.height) * ph }));
+  if (!boxes.length) return;
+  const rect = [Math.min(...boxes.map(b => b.l)), Math.min(...boxes.map(b => b.b)), Math.max(...boxes.map(b => b.r)), Math.max(...boxes.map(b => b.t))];
+  const rgbOps = color.map(c => +c.toFixed(4)).join(' '), f = n => +n.toFixed(3);
+  let content;
+  if (mod.type === 'highlight') content = '/GS gs ' + rgbOps + ' rg ' + boxes.map(b => `${f(b.l)} ${f(b.b)} ${f(b.r - b.l)} ${f(b.t - b.b)} re f`).join(' ');
+  else content = rgbOps + ' RG ' + f(sw) + ' w ' + boxes.map(b => { const y = mod.type === 'underline' ? b.b + sw / 2 : (b.t + b.b) / 2; return `${f(b.l)} ${f(y)} m ${f(b.r)} ${f(y)} l S`; }).join(' ');
+  const resources = mod.type === 'highlight' ? { ExtGState: { GS: { Type: 'ExtGState', BM: 'Multiply', ca: HIGHLIGHT_OPACITY, CA: HIGHLIGHT_OPACITY, AIS: false } } } : {};
+  const ap = ctx.register(ctx.flateStream(content, { Type: 'XObject', Subtype: 'Form', FormType: 1, BBox: rect, Resources: resources }));
+  const dict = ctx.obj({
+    Type: 'Annot', Subtype: kind.Subtype, Rect: rect, QuadPoints: boxes.flatMap(b => [b.l, b.t, b.r, b.t, b.l, b.b, b.r, b.b]), C: color,
+    CA: mod.type === 'highlight' ? HIGHLIGHT_OPACITY : 1, F: 4, AP: { N: ap }, ...annotStamp()
+  });
+  if (typeof mod.contents === 'string' && mod.contents.trim()) dict.set(PDFName.of('Contents'), PDFHexString.fromText(mod.contents.trim().slice(0, MAX_COMMENT_TEXT)));
+  pushAnnot(pdfDoc, page, dict);
+}
+
+// ---------- Comments panel: reply, edit, delete and review state of annotations already in the file ----------
+const MAX_COMMENT_TEXT = 10000;
+const MARKUP_SUBTYPES = ['Text', 'FreeText', 'Highlight', 'Underline', 'StrikeOut', 'Squiggly', 'Ink', 'Square', 'Circle', 'Line', 'Polygon', 'PolyLine', 'Stamp', 'Caret', 'FileAttachment', 'Sound'];
+const subtypeOf = dict => { const st = dict instanceof PDFDict && dict.get(PDFName.of('Subtype')); return st instanceof PDFName ? st.decodeText() : ''; };
+// ref is pdf.js's annotation id ("12R", or "12R3" for generation 3). Returns the markup annotation, the page holding it and every page's /Annots
+async function openForComment(data, ref, text, { needText = false } = {}) {
+  if (typeof data !== 'string' || !data) throw new Error('No document');
+  if (needText && (typeof text !== 'string' || !text.trim() || text.length > MAX_COMMENT_TEXT)) throw new Error(`The text must be 1 to ${MAX_COMMENT_TEXT} characters`);
+  const match = /^(\d+)R(\d*)$/.exec(String(ref));
+  if (!match) throw new Error('Bad comment reference');
+  const pdfDoc = await PDFDocument.load(Buffer.from(data, 'base64'), { ignoreEncryption: true });
+  const pref = PDFRef.of(parseInt(match[1]), match[2] ? parseInt(match[2]) : 0), dict = pdfDoc.context.lookup(pref);
+  if (!(dict instanceof PDFDict)) throw new Error('That comment was not found');
+  if (!MARKUP_SUBTYPES.includes(subtypeOf(dict))) throw new Error('That is not a comment');
+  const page = pdfDoc.getPages().find(pg => { const a = pg.node.Annots(); return a && a.asArray().some(r => r instanceof PDFRef && r.tag === pref.tag); });
+  if (!page) throw new Error('That comment is not on a page');
+  return { pdfDoc, pref, dict, page };
+}
+const saveComments = async pdfDoc => ({ success: true, data: Buffer.from(await pdfDoc.save({ updateFieldAppearances: false })).toString('base64') });
+const failure = error => ({ success: false, error: error.message });
+function replyTo(pdfDoc, page, pref, dict, extra, flags) {
+  const parentRect = dict.lookup(PDFName.of('Rect'));
+  const rect = parentRect instanceof PDFArray && parentRect.size() === 4 ? parentRect.asArray().map(n => n.asNumber()) : [0, 0, 0, 0];
+  return pushAnnot(pdfDoc, page, pdfDoc.context.obj({ Type: 'Annot', Subtype: 'Text', Rect: rect, Name: 'Comment', IRT: pref, F: flags, ...extra, ...annotStamp() }));
+}
+
+// A reply is a /Text annotation with /IRT. NoView (32) keeps it from drawing a second pin on the page: readers list it as a reply instead
+ipcMain.handle('comment-reply', async (event, { data, ref, text } = {}) => {
+  try {
+    const { pdfDoc, pref, dict, page } = await openForComment(data, ref, text, { needText: true });
+    replyTo(pdfDoc, page, pref, dict, { RT: 'R', Contents: PDFHexString.fromText(text.trim()) }, 32);
+    return await saveComments(pdfDoc);
+  } catch (error) { return failure(error); }
+});
+
+// Only the text changes. A FreeText draws its text from the /AP, which Pagewise cannot regenerate, so the /AP is dropped and readers redraw it from /Contents (they need /DA for that)
+ipcMain.handle('comment-update', async (event, { data, ref, text } = {}) => {
+  try {
+    const { pdfDoc, dict } = await openForComment(data, ref, text, { needText: true });
+    dict.set(PDFName.of('Contents'), PDFHexString.fromText(text.trim()));
+    dict.set(PDFName.of('M'), PDFString.fromDate(new Date()));
+    dict.delete(PDFName.of('RC'));
+    if (subtypeOf(dict) === 'FreeText') dict.delete(PDFName.of('AP'));
+    return await saveComments(pdfDoc);
+  } catch (error) { return failure(error); }
+});
+
+// Removes the comment, its popup and every reply to it (and replies to those), from every page
+ipcMain.handle('comment-delete', async (event, { data, ref } = {}) => {
+  try {
+    const { pdfDoc, pref } = await openForComment(data, ref);
+    const doomed = new Map([[pref.tag, pref]]), all = [], key = name => PDFName.of(name);
+    for (const pg of pdfDoc.getPages()) { const a = pg.node.Annots(); if (a) for (const r of a.asArray()) if (r instanceof PDFRef) all.push({ r, d: pdfDoc.context.lookup(r) }); }
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const { r, d } of all) {
+        if (!(d instanceof PDFDict) || doomed.has(r.tag)) continue;
+        const up = d.get(key('IRT')) instanceof PDFRef ? d.get(key('IRT')) : subtypeOf(d) === 'Popup' ? d.get(key('Parent')) : null;
+        if (up instanceof PDFRef && doomed.has(up.tag)) { doomed.set(r.tag, r); grew = true; }
+      }
+      for (const { r, d } of all) if (doomed.has(r.tag) && d instanceof PDFDict && d.get(key('Popup')) instanceof PDFRef && !doomed.has(d.get(key('Popup')).tag)) { doomed.set(d.get(key('Popup')).tag, d.get(key('Popup'))); grew = true; }
+    }
+    for (const pg of pdfDoc.getPages()) {
+      const a = pg.node.Annots();
+      for (let i = a ? a.size() - 1 : -1; i >= 0; i--) { const r = a.get(i); if (r instanceof PDFRef && doomed.has(r.tag)) a.remove(i); }
+    }
+    for (const r of doomed.values()) pdfDoc.context.delete(r);
+    return await saveComments(pdfDoc);
+  } catch (error) { return failure(error); }
+});
+
+// Review state: a hidden reply carrying /State. The newest reply decides, so reopening adds a /None one
+ipcMain.handle('comment-status', async (event, { data, ref, state } = {}) => {
+  try {
+    if (state !== 'Completed' && state !== 'None') throw new Error('Unknown review state');
+    const { pdfDoc, pref, dict, page } = await openForComment(data, ref);
+    replyTo(pdfDoc, page, pref, dict, { StateModel: PDFString.of('Review'), State: PDFString.of(state), Contents: PDFHexString.fromText(`${state} set by ${getAuthor()}`) }, 34);
+    return await saveComments(pdfDoc);
+  } catch (error) { return failure(error); }
+});
 
 // Apply annotations and modifications to PDF
 ipcMain.handle('apply-modifications', async (event, { originalData, modifications }) => {
@@ -3057,32 +3180,9 @@ ipcMain.handle('apply-modifications', async (event, { originalData, modification
           break;
 
         case 'highlight':
-          page.drawRectangle({
-            x: mod.x * width,
-            y: height - (mod.y * height) - (mod.height * height),
-            width: mod.width * width,
-            height: mod.height * height,
-            color: rgb(mod.color?.r || 1, mod.color?.g || 1, mod.color?.b || 0),
-            opacity: 0.3
-          });
-          break;
-
         case 'underline':
-          page.drawLine({
-            start: { x: mod.x * width, y: height - (mod.y * height) },
-            end: { x: (mod.x + mod.width) * width, y: height - (mod.y * height) },
-            thickness: mod.strokeWidth || 1,
-            color: rgb(mod.color?.r || 0, mod.color?.g || 0, mod.color?.b || 1)
-          });
-          break;
-
         case 'strikethrough':
-          page.drawLine({
-            start: { x: mod.x * width, y: height - (mod.y * height) + (mod.height * height / 2) },
-            end: { x: (mod.x + mod.width) * width, y: height - (mod.y * height) + (mod.height * height / 2) },
-            thickness: mod.strokeWidth || 1,
-            color: rgb(mod.color?.r || 1, mod.color?.g || 0, mod.color?.b || 0)
-          });
+          addTextMarkup(pdfDoc, page, mod);
           break;
 
         case 'cover':
