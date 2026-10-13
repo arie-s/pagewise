@@ -15,7 +15,7 @@
 
 - **Open images as PDFs:** open or drop PNG/JPEG photos, screenshots and scans; each image becomes a page (phone-photo rotation is applied), ready for OCR, Smart Extract and editing. Saving writes a new PDF and never overwrites the images.
 - **Read and search:** thumbnails, zoom, selectable text, find, a clickable bookmarks panel (the document outline) and printing.
-- **Edit and annotate:** text, highlights, underline, strikethrough, pen, shapes, stamps, images, drawn signatures and sticky notes (saved as real PDF comments, shown by other viewers). Annotations are baked into the PDF on save.
+- **Edit and annotate:** text, highlights, underline, strikethrough, pen, shapes, stamps, images, signatures and initials (drawn, typed or uploaded, saved for reuse, movable and resizable once placed; **Tools > Sign Document** finds the signature lines in a form and dates them) and sticky notes (saved as real PDF comments, shown by other viewers). Annotations are baked into the PDF on save.
 - **Organize pages:** drag to reorder, rotate one or all pages, insert blank pages or pages from another PDF or image, replace a page with one from another PDF, crop (hides content, doesn't delete it), resize pages to A4/Letter/Legal/A5, extract and delete.
 - **Reduce file size:** *File → Reduce File Size...* downsamples and re-encodes large images (Smallest, Balanced or High quality); text and vector graphics are untouched.
 - **Document tools:** merge, split by page count or ranges, add page numbers, headers, footers and watermarks; export pages as PNG/JPEG.
