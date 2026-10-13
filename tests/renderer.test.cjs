@@ -720,7 +720,7 @@ function replaceHarness({ pending = [], signed = false, replaced = 1, matchCount
     undoStack: ['older'], redoStack: ['stale'], currentPage: 1, formsDirty: false, hasUnsavedChanges: false,
     find: { query: 'cat', matchCase: false, wholeWord: true, matches: Array.from({ length: matchCount }, (_, n) => match(n)), index: 1 }
   };
-  const { functions } = loadRendererFunctions(['replaceMatches', 'describeReplace', 'docSnapshot', 'pushDocSnapshot', 'trimDocSnapshots', 'matchPdfBox', 'partBox', 'collectModifications', 'editSnapshot'], {
+  const { functions } = loadRendererFunctions(['replaceMatches', 'describeReplace', 'docSnapshot', 'pushDocSnapshot', 'trimDocSnapshots', 'matchPdfBox', 'partBox', 'collectModifications', 'editSnapshot', 'bakePending'], {
     state, elements: { replaceInput: { value: 'dog' }, searchBar: { classList: { toggle() {}, add() {}, remove() {} } } },
     api: {
       applyModifications: async req => { calls.push(['bake', req.originalData, req.modifications.length]); return { success: true, data: 'QkFLRUQ=' }; },
