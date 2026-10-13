@@ -200,6 +200,5 @@ contextBridge.exposeInMainWorld('pdfAPI', {
 
   // Menu event listeners - Help
   onMenuAssistant: (callback) => ipcRenderer.on('menu-assistant', callback),
-  onMenuShortcuts: (callback) => ipcRenderer.on('menu-shortcuts', callback),
-  onMenuCheckUpdates: (callback) => ipcRenderer.on('menu-check-updates', callback)
+  onMenuShortcuts: (callback) => ipcRenderer.on('menu-shortcuts', callback)
 });

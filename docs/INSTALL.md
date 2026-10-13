@@ -37,7 +37,7 @@ Build the installer from PowerShell in the repository root:
 npm run build
 ```
 
-Open `dist\Pagewise Setup 1.0.0.exe`, follow the installation wizard, choose an installation directory, then launch **Pagewise** from the Start menu or desktop shortcut.
+Open `dist\Pagewise-Setup-1.0.0.exe`, follow the installation wizard, choose an installation directory, then launch **Pagewise** from the Start menu or desktop shortcut.
 
 For a portable app:
 

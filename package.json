@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@cantoo/pdf-lib": "^2.11.1",
+    "electron-updater": "^6.8.9",
     "pdfjs-dist": "^4.0.379",
     "tesseract.js": "^7.0.0"
   },
@@ -33,6 +34,13 @@
     "directories": {
       "output": "dist"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "arie-s",
+        "repo": "pagewise"
+      }
+    ],
     "files": [
       "src/**/*",
       "node_modules/**/*",
@@ -85,7 +93,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "artifactName": "${productName}-Setup-${version}.${ext}"
     }
   }
 }

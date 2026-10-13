@@ -60,6 +60,104 @@ function persistBoundsSoon() {
   }, 500);
 }
 
+// ---------- updates ----------
+// Online only on request (Help menu) or when the user turns on the startup check.
+const RELEASES_URL = 'https://github.com/arie-s/pagewise/releases/';
+let updateBusy = false, updateProgressHooked = false;
+// Installer (Windows) and AppImage (Linux) can replace themselves; unsigned macOS, .deb and portable can't.
+function canSelfUpdate() {
+  if (!app.isPackaged) return false;
+  if (process.platform === 'win32') return !process.env.PORTABLE_EXECUTABLE_FILE;
+  return process.platform === 'linux' && !!process.env.APPIMAGE;
+}
+function isNewerVersion(latest, current) {
+  const parse = v => { const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(v).split(/[-+]/)[0]); return m && m.slice(1).map(Number); };
+  const a = parse(latest), b = parse(current);
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return false;
+}
+const updateBox = opts => mainWindow ? dialog.showMessageBox(mainWindow, opts) : dialog.showMessageBox(opts);
+async function fetchLatestRelease() {
+  const res = await new Promise((resolve, reject) => {
+    const req = net.request({ method: 'GET', url: 'https://api.github.com/repos/arie-s/pagewise/releases/latest' });
+    req.setHeader('User-Agent', 'Pagewise');
+    req.setHeader('Accept', 'application/vnd.github+json');
+    const timer = setTimeout(() => { req.abort(); reject(new Error('The request timed out')); }, 15000);
+    req.on('response', r => { clearTimeout(timer); resolve(r); });
+    req.on('error', e => { clearTimeout(timer); reject(e); });
+    req.end();
+  });
+  if (res.statusCode !== 200) throw new Error('GitHub answered HTTP ' + res.statusCode);
+  let body = '';
+  res.setEncoding('utf8');
+  for await (const chunk of res) body += chunk;
+  const rel = JSON.parse(body);
+  if (typeof rel.tag_name !== 'string') throw new Error('Unexpected reply from GitHub');
+  return { version: rel.tag_name.replace(/^v/, ''), url: typeof rel.html_url === 'string' ? rel.html_url : '' };
+}
+async function selfUpdate() {
+  const { autoUpdater } = require('electron-updater');
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = null;
+  if (!updateProgressHooked) {
+    updateProgressHooked = true;
+    autoUpdater.on('download-progress', p => { if (mainWindow) mainWindow.setProgressBar(p.percent / 100); });
+  }
+  const result = await autoUpdater.checkForUpdates();
+  if (!result) return null; // no app-update.yml in this build: let the release-page check answer
+  if (!result.isUpdateAvailable) return false;
+  const version = result.updateInfo.version;
+  const { response } = await updateBox({
+    type: 'info', title: 'Update available',
+    message: `Pagewise ${version} is available (you have ${app.getVersion()}).`,
+    buttons: ['Download and Install', 'Later'], defaultId: 0, cancelId: 1, noLink: true
+  });
+  if (response !== 0) return true;
+  try { await autoUpdater.downloadUpdate(); }
+  catch (e) { throw new Error('The download failed: ' + ((e && e.message) || e)); }
+  finally { if (mainWindow) mainWindow.setProgressBar(-1); }
+  if (unsavedFlag) {
+    await updateBox({ type: 'info', title: 'Update ready', message: 'The update is ready.', detail: 'Save your document; Pagewise installs the update when you quit.' });
+    return true;
+  }
+  const r = await updateBox({
+    type: 'info', title: 'Update ready', message: 'The update is ready.', detail: 'Restart Pagewise to install it.',
+    buttons: ['Restart Now', 'Later'], defaultId: 0, cancelId: 1, noLink: true
+  });
+  if (r.response === 0) autoUpdater.quitAndInstall();
+  return true;
+}
+async function checkForUpdates({ quiet }) {
+  if (updateBusy) {
+    if (!quiet) await updateBox({ type: 'info', title: 'Check for Updates', message: 'Already checking for updates' });
+    return;
+  }
+  updateBusy = true;
+  try {
+    let found = canSelfUpdate() ? await selfUpdate() : null;
+    if (found === null) {
+      const latest = await fetchLatestRelease();
+      found = isNewerVersion(latest.version, app.getVersion());
+      if (found) {
+        const { response } = await updateBox({
+          type: 'info', title: 'Update available',
+          message: `Pagewise ${latest.version} is available (you have ${app.getVersion()}).`,
+          detail: 'Download it from the release page.',
+          buttons: ['Open Download Page', 'Later'], defaultId: 0, cancelId: 1, noLink: true
+        });
+        if (response === 0) shell.openExternal(latest.url.startsWith(RELEASES_URL) ? latest.url : RELEASES_URL + 'latest');
+      }
+    }
+    if (!found && !quiet) await updateBox({ type: 'info', title: 'Check for Updates', message: "You're up to date", detail: `Pagewise v${app.getVersion()} is the latest version.` });
+  } catch (e) {
+    if (!quiet) await updateBox({ type: 'warning', title: 'Check for Updates', message: "Couldn't check for updates", detail: String((e && e.message) || e) });
+  } finally {
+    updateBusy = false;
+  }
+}
+
 // Single-letter tool shortcuts are handled by the renderer, which ignores keys typed into
 // text fields. Menu accelerators would capture them first, so only display them (Windows/Linux);
 // macOS can't display without registering, so it omits them.
@@ -555,6 +653,11 @@ function buildMenuTemplate() {
           accelerator: 'CmdOrCtrl+/',
           click: () => mainWindow.webContents.send('menu-shortcuts')
         },
+        { label: 'Check for Updates...', click: () => checkForUpdates({ quiet: false }) },
+        {
+          label: 'Check for Updates at Startup', type: 'checkbox', checked: settings.checkUpdatesAtStartup === true,
+          click: item => { settings.checkUpdatesAtStartup = item.checked; saveSettings(); }
+        },
         { type: 'separator' },
         {
           label: 'About Pagewise',
@@ -838,7 +941,12 @@ function openGuide() {
 }
 
 const cliArgs = getCliArgs();
-app.whenReady().then(() => { loadSettings(); cliArgs ? runCli(cliArgs) : createWindow(); });
+app.whenReady().then(() => {
+  loadSettings();
+  if (cliArgs) { runCli(cliArgs); return; }
+  createWindow();
+  if (settings.checkUpdatesAtStartup === true) setTimeout(() => checkForUpdates({ quiet: true }), 10000);
+});
 
 // Don't leave llama-server running (and holding engine files) after the app exits.
 app.on('will-quit', () => { if (engineAlive()) stopEngine(); stopWriter(); });

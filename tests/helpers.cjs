@@ -28,6 +28,7 @@ function loadMainHandlers(overrides = {}) {
     require(name) {
       if (name === 'electron') return electron;
       if (name === '@cantoo/pdf-lib') return wrappedPdfLib;
+      if (overrides.modules && name in overrides.modules) return overrides.modules[name];
       return require(name);
     },
     __dirname: path.join(root, 'src'), __filename: path.join(root, 'src/main.js'),

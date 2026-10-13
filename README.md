@@ -8,7 +8,7 @@
 
 - **Offline AI reading.** Read Tables & Handwriting runs a local `dots.ocr` vision model through llama.cpp and transcribes pages to Markdown, including tables, formulas and handwriting. Output quality depends on the document and model.
 - **Nothing leaves your machine.** Editing, OCR and AI extraction run locally; page images go only to a server bound to `127.0.0.1`.
-- **No accounts, subscriptions or telemetry.** Internet access is needed only to install dependencies, download OCR language data on first use, and download the optional AI models. After that, document processing works offline.
+- **No accounts, subscriptions or telemetry.** Internet access is needed only to install dependencies, download OCR language data on first use, and download the optional AI models. After that, document processing works offline. Help → Check for Updates contacts GitHub only when you choose it (or at startup, if you turn that on).
 - **Free and MIT licensed.**
 
 ## Features
@@ -44,12 +44,14 @@ Text replacement covers the original text with a white rectangle and adds new te
 
 | Platform | File |
 |---|---|
-| Windows x64 | `Pagewise.Setup.<version>.exe` (installer) or `Pagewise.<version>.exe` (portable) |
+| Windows x64 | `Pagewise-Setup-<version>.exe` (installer) or `Pagewise.<version>.exe` (portable) |
 | macOS Apple Silicon | `Pagewise-<version>-arm64.dmg` |
 | macOS Intel | `Pagewise-<version>.dmg` |
 | Linux x64 | `Pagewise-<version>.AppImage` or `pagewise_<version>_amd64.deb` |
 
 The builds are not code-signed yet. On Windows, SmartScreen may show "Windows protected your PC": choose **More info**, then **Run anyway**. On macOS, open the app once, then allow it under **System Settings > Privacy & Security > Open Anyway**. Windows and macOS builds pass automated checks in CI but have had limited hands-on testing; please open an issue if something doesn't work.
+
+The Windows installer and the Linux AppImage update themselves via **Help → Check for Updates**. On macOS, and for the .deb and the portable EXE, it opens the release page so you can download the new version.
 
 **Run from source** (Node.js 24 or newer, and Git):
 

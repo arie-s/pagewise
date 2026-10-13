@@ -56,6 +56,8 @@ jobs:
             dist/*.exe
             dist/*.dmg
             dist/*.zip
+            dist/latest*.yml
+            dist/*.blockmap
 
   release:
     needs: build
