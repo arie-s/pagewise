@@ -111,7 +111,7 @@ Open the generated `.dmg` in `dist/`, drag **Pagewise.app** into **Applications*
 
 Signing and notarization credentials are not configured in this repository. If macOS blocks an unsigned build that you trust, try opening it once, then use **System Settings → Privacy & Security → Open Anyway**, following [Apple's instructions](https://support.apple.com/en-us/102445).
 
-The base editor can be built for Intel or Apple Silicon; the automatic AI engine installer downloads the matching arm64 or x64 macOS llama.cpp build. Intel Macs run Smart Extract on the CPU.
+The base editor can be built for Intel or Apple Silicon; the automatic AI reading model installer downloads the matching arm64 or x64 macOS llama.cpp build. Intel Macs run Read Tables & Handwriting on the CPU.
 
 ### Updating and the previous name
 
@@ -121,19 +121,19 @@ This app was previously named **Local PDF Desk** and, before that, **PDF Studio 
 
 ## OCR and local AI setup
 
-**Searchable PDF OCR:** choose **Tools → Make Searchable — offline OCR**. The first use of a language downloads and caches its Tesseract language data; subsequent use can work offline. No GPU is needed.
+**Searchable PDF OCR:** choose **Tools → Scanned Pages → Recognize Text (fast, built-in)**. The first use of a language downloads and caches its Tesseract language data; subsequent use can work offline. No GPU is needed.
 
-**Smart Extract:** choose **Tools → Setup AI Reading Engine…**, then **Download & Install**, and **Test Engine**. The installer downloads [llama.cpp](https://github.com/ggml-org/llama.cpp) from GitHub and a `dots.ocr` model plus vision encoder from Hugging Face. Allow several GB of free disk space; the exact download size depends on the selected model files. Linux/macOS extraction needs `unzip` (or Python 3 for ZIP files), or `tar` for a tar archive.
+**Read Tables & Handwriting:** choose **Tools → Scanned Pages → Download AI Reading Model…**, then **Download & Install**, and **Test AI Model**. The installer downloads [llama.cpp](https://github.com/ggml-org/llama.cpp) from GitHub and a `dots.ocr` model plus vision encoder from Hugging Face. Allow several GB of free disk space; the exact download size depends on the selected model files. Linux/macOS extraction needs `unzip` (or Python 3 for ZIP files), or `tar` for a tar archive.
 
-On Windows and Linux x64 the installer tries the Vulkan (GPU) build of llama.cpp and keeps it only if llama.cpp finds a real GPU; otherwise it installs the CPU build. On Linux the Vulkan build is tried only when a GPU device and the Vulkan loader (`libvulkan.so.1`) are present. macOS uses the arm64 or x64 build. The setup dialog shows whether the engine uses a GPU or the CPU. Engines installed by older versions keep their previous build until you choose **Remove Engine** and install again. Speed depends on the hardware: as a rough guide, a page takes a few seconds on a GPU and around a minute on a fast desktop CPU.
+On Windows and Linux x64 the installer tries the Vulkan (GPU) build of llama.cpp and keeps it only if llama.cpp finds a real GPU; otherwise it installs the CPU build. On Linux the Vulkan build is tried only when a GPU device and the Vulkan loader (`libvulkan.so.1`) are present. macOS uses the arm64 or x64 build. The setup dialog shows whether the AI reading model uses a GPU or the CPU. AI reading models installed by older versions keep their previous build until you choose **Remove AI Model** and install again. Speed depends on the hardware: as a rough guide, a page takes a few seconds on a GPU and around a minute on a fast desktop CPU.
 
-The AI server binds to `127.0.0.1:8731`; page images are sent to that local server, not a cloud service. Use **Tools → Smart Extract** after setup. Smart Extract produces a Markdown transcript, which can be saved as a `.md` file, and exports any tables it finds as CSV. It does not add a searchable text layer to the PDF.
+The AI server binds to `127.0.0.1:8731`; page images are sent to that local server, not a cloud service. Use **Tools → Scanned Pages → Read Tables & Handwriting with AI** after setup. Read Tables & Handwriting produces a Markdown transcript, which can be saved as a `.md` file, and exports any tables it finds as CSV. It does not add a searchable text layer to the PDF.
 
-**Removing the AI engine:** open **Tools → Setup AI Reading Engine…** and choose **Remove Engine**, or run `pagewise cli engine-remove`. This deletes llama.cpp and the model, which frees several GB. Settings and OCR language data are kept. Smart Extract can be set up again later.
+**Removing the AI reading model:** open **Tools → Scanned Pages → Download AI Reading Model…** and choose **Remove AI Model**, or run `pagewise cli engine-remove`. This deletes llama.cpp, the model and the AI writing helper (if installed), which frees several GB. Settings and OCR language data are kept. Read Tables & Handwriting can be set up again later.
 
 ## Uninstalling and removing data
 
-Pagewise keeps settings, OCR language data (`tesseract-data`) and the optional AI engine and model (`ocr-engine`) in its app-data folder:
+Pagewise keeps settings, OCR language data (`tesseract-data`) and the optional AI reading model (`ocr-engine`) in its app-data folder:
 
 | Platform | App-data folder |
 |---|---|
@@ -143,7 +143,7 @@ Pagewise keeps settings, OCR language data (`tesseract-data`) and the optional A
 
 If you used an earlier version, the data may be in a folder with an old name instead: `Local PDF Desk`, `local-pdf-desk`, `PDF Studio Pro` or `pdf-studio-pro`, in the same parent folder.
 
-- **Windows:** the uninstaller asks whether to delete this data, including the AI engine and model. Updating the app never deletes it.
-- **macOS and Linux:** removing the app, the AppImage or the `.deb` package leaves this folder in place. To free the space, first use **Remove Engine** as above, or delete the app-data folder yourself after uninstalling.
+- **Windows:** the uninstaller asks whether to delete this data, including the AI reading model. Updating the app never deletes it.
+- **macOS and Linux:** removing the app, the AppImage or the `.deb` package leaves this folder in place. To free the space, first use **Remove AI Model** as above, or delete the app-data folder yourself after uninstalling.
 
 Your PDF files are never stored there and are not affected.

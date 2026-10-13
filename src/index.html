@@ -659,12 +659,12 @@
       if (ai) {
         const st = await window.pdfAPI.engineStatus();
         if (!st.installed) {
-          showNotification(st.hasFiles ? 'Smart Extract needs an AI engine update (small download)' : 'Smart Extract needs the AI engine (one-time ~4.5GB download)', 'warning');
+          showNotification(st.hasFiles ? 'The AI reading model needs an update (small download)' : 'This needs the AI reading model (one-time ~4.5GB download)', 'warning');
           showEngineSetup();
           return;
         }
       }
-      if (!confirm(ai ? 'Adds an invisible, searchable text layer using the AI reading engine.\n\nBetter than standard OCR on hard scans (faxes, shadows, photos), but slower.\n\nProceed?' : 'Adds an invisible, searchable text layer to this PDF.\n\nRuns offline on any computer — no GPU or download needed beyond a one-time 15MB language pack.\n\nBest for typed/printed pages. For scans with tables, columns, or handwriting, use "Smart Extract" instead.\n\nProceed?')) return;
+      if (!confirm(ai ? 'Like Recognize Text, but uses the AI reading model, which does better on poor scans, faxes and unusual layouts. Slower.\n\nAdds an invisible, searchable text layer using the AI reading model.\n\nBetter than standard OCR on hard scans (faxes, shadows, photos), but slower.\n\nProceed?' : 'For scanned pages: finds the words in the page image so you can search, select and copy them. The page looks the same.\n\nAdds an invisible, searchable text layer to this PDF.\n\nRuns offline on any computer — no GPU or download needed beyond a one-time 15MB language pack.\n\nBest for typed/printed pages. For scans with tables, columns, or handwriting, use "Read Tables & Handwriting with AI" instead.\n\nProceed?')) return;
       setLoading(true, 'OCR: preparing...');
       let stagingDoc = null;
       try {
@@ -720,12 +720,13 @@
 
     function showEngineSetup() {
       let m = document.createElement('div'); m.className = 'modal-overlay'; m.id = 'engineSetupModal';
-      m.innerHTML = '<div class="modal"><div class="modal-header"><span class="modal-title">Advanced OCR Engine</span><button class="modal-close" data-close>&times;</button></div><div class="modal-body">' +
-        '<div style="margin-bottom:12px;"><b>Smart Extract</b> uses an AI document model (dots.ocr) instead of the built-in OCR. It reads tables, multi-column layouts, formulas and handwriting in clean markdown.\n\nRuns entirely on this machine. One-time download of ~4.5GB; after that it works offline. On computers without a GPU it uses the CPU (slower — about a minute per page).</div>' +
+      m.innerHTML = '<div class="modal"><div class="modal-header"><span class="modal-title">Download AI Reading Model</span><button class="modal-close" data-close>&times;</button></div><div class="modal-body">' +
+        '<div style="margin-bottom:12px;">Downloads an AI model (about 4.5 GB, once) that runs on this computer. Nothing is sent online. It\'s needed for: Recognize Text with AI, Read Tables &amp; Handwriting, and Word export of scanned pages.</div>' +
+        '<div style="margin-bottom:12px;"><b>Read Tables &amp; Handwriting</b> uses an AI document model (dots.ocr) instead of the built-in OCR. It reads tables, multi-column layouts, formulas and handwriting in clean markdown.\n\nRuns entirely on this machine. One-time download of ~4.5GB; after that it works offline. On computers without a GPU it uses the CPU (slower — about a minute per page).</div>' +
         '<div class="panel-row"><span class="panel-label" id="engineStatusText">Checking...</span></div>' +
         '<div id="engineProgress" style="display:none;"><div class="form-section-title" id="enginePhase"></div><div style="background:var(--bg-hover);border-radius:4px;height:8px;overflow:hidden;"><div id="engineBar" style="background:var(--primary);height:100%;width:0%;transition:width 0.2s;"></div></div></div>' +
         '<div id="engineError" style="color:var(--danger);font-size:12px;margin-top:8px;"></div>' +
-        '</div><div class="modal-footer"><button class="modal-btn" id="engineRemoveBtn" style="margin-right:auto;display:none;color:var(--danger);">Remove Engine</button><button class="modal-btn" id="engineStopBtn">Stop Server</button><button class="modal-btn" id="engineInstallBtn">Download &amp; Install</button><button class="modal-btn primary" id="engineStartBtn">Test Engine</button></div></div>';
+        '</div><div class="modal-footer"><button class="modal-btn" id="engineRemoveBtn" style="margin-right:auto;display:none;color:var(--danger);">Remove AI Model</button><button class="modal-btn" id="engineStopBtn">Stop Server</button><button class="modal-btn" id="engineInstallBtn">Download &amp; Install</button><button class="modal-btn primary" id="engineStartBtn">Test AI Model</button></div></div>';
       $('modalContainer').appendChild(m);
       m.querySelector('[data-close]').onclick = () => { m.remove(); progi && clearInterval(progi); };
       let progi = null;
@@ -743,16 +744,16 @@
       };
       m.querySelector('#engineStartBtn').onclick = async () => {
         err(''); m.querySelector('#engineStartBtn').textContent = 'Starting...';
-        if (!(await refreshStatus()).installed) { err('Not installed yet — download first.'); m.querySelector('#engineStartBtn').textContent = 'Test Engine'; return; }
+        if (!(await refreshStatus()).installed) { err('Not installed yet — download first.'); m.querySelector('#engineStartBtn').textContent = 'Test AI Model'; return; }
         const r = await window.pdfAPI.engineStart();
-        m.querySelector('#engineStartBtn').textContent = 'Test Engine';
-        if (!r.success) err(r.error); else { await refreshStatus(); showNotification('Engine running'); }
+        m.querySelector('#engineStartBtn').textContent = 'Test AI Model';
+        if (!r.success) err(r.error); else { await refreshStatus(); showNotification('AI model running'); }
       };
       m.querySelector('#engineStopBtn').onclick = async () => { await window.pdfAPI.engineStop(); await refreshStatus(); };
       m.querySelector('#engineRemoveBtn').onclick = async () => {
-        if (!confirm('Remove the AI engine and model? This frees several GB. Smart Extract will need to download them again.')) return;
+        if (!confirm('Remove the AI reading model? This frees several GB. The AI features will need to download it again.')) return;
         err(''); const r = await window.pdfAPI.engineRemove();
-        if (!r.success) err(r.error); else { const mb = r.freedBytes / 1048576; showNotification('AI engine removed, ' + (mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB') + ' freed'); await refreshStatus(); }
+        if (!r.success) err(r.error); else { const mb = r.freedBytes / 1048576; showNotification('AI reading model removed, ' + (mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB') + ' freed'); await refreshStatus(); }
       };
       (async () => { await refreshStatus(); progi = setInterval(refreshStatus, 3000);
         const obs = new MutationObserver(() => { if (!document.getElementById('engineSetupModal')) { clearInterval(progi); obs.disconnect(); } });
@@ -769,7 +770,7 @@
       modal.style.maxWidth = '800px';
       pre.style.cssText = 'white-space:pre-wrap;font-size:12px;max-height:60vh;overflow:auto;background:var(--bg-lighter);padding:12px;border-radius:4px;';
       const header = el('div', 'modal-header'), x = el('button', 'modal-close', '×');
-      header.append(el('span', 'modal-title', 'Smart Extract result'), x);
+      header.append(el('span', 'modal-title', 'Tables & Handwriting result'), x);
       const body = el('div', 'modal-body'), footer = el('div', 'modal-footer');
       body.appendChild(pre);
       const btn = (label, onclick, cls) => { const b = el('button', 'modal-btn' + (cls ? ' ' + cls : ''), label); b.onclick = onclick; footer.appendChild(b); return b; };
@@ -800,15 +801,16 @@
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
       const st = await window.pdfAPI.engineStatus();
       if (!st.installed) {
-        showNotification(st.hasFiles ? 'Smart Extract needs an AI engine update (small download)' : 'Smart Extract needs the AI engine (one-time ~4.5GB download)', 'warning');
+        showNotification(st.hasFiles ? 'The AI reading model needs an update (small download)' : 'This needs the AI reading model (one-time ~4.5GB download)', 'warning');
         showEngineSetup();
         return;
       }
-      setLoading(true, 'Smart Extract: preparing engine...');
+      showNotification('Reads the page into text you can copy or export, including tables (to CSV/Excel) and handwriting.');
+      setLoading(true, 'Reading with AI: preparing...');
       try {
         const pages = [];
         for (let i = 1; i <= state.pdfDoc.numPages; i++) {
-          $('loadingText').textContent = 'Smart Extract: page ' + i + ' of ' + state.pdfDoc.numPages + '...';
+          $('loadingText').textContent = 'Reading with AI: page ' + i + ' of ' + state.pdfDoc.numPages + '...';
           const page = await state.pdfDoc.getPage(i);
           const vp = page.getViewport({ scale: await extractScale(page, pdfjsLib.OPS) });
           const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
@@ -821,7 +823,7 @@
         state.extractCache = { doc: state.pdfDoc, pages };
         setLoading(false);
         await showExtractResult(pages);
-      } catch (e) { setLoading(false); showNotification('Smart Extract error: ' + e.message, 'error'); }
+      } catch (e) { setLoading(false); showNotification('Read Tables & Handwriting error: ' + e.message, 'error'); }
     }
 
     // Digital page text to document blocks: lines by baseline, items left to right, paragraphs by vertical gap or font-size change, headings by size against the page median.
@@ -907,7 +909,7 @@
     async function engineReady() {
       const st = await window.pdfAPI.engineStatus();
       if (st.installed) return true;
-      showNotification(st.hasFiles ? 'Smart Extract needs an AI engine update (small download)' : 'Smart Extract needs the AI engine (one-time ~4.5GB download)', 'warning');
+      showNotification(st.hasFiles ? 'The AI reading model needs an update (small download)' : 'This needs the AI reading model (one-time ~4.5GB download)', 'warning');
       showEngineSetup();
       return false;
     }
@@ -917,7 +919,7 @@
       const total = state.pdfDoc.numPages, installed = (await window.pdfAPI.engineStatus()).installed;
       const content = '<div class="form-group"><label class="form-label">Pages (e.g. 1-3,5; leave empty for all ' + total + ')</label><input type="text" class="form-input" id="docxPages" placeholder="All"></div>' +
         '<div class="form-group"><label class="form-label"><input type="checkbox" id="docxAi"' + (installed ? '' : ' disabled') + '> Use AI reading for every page (better tables and layout, slower)</label>' +
-        (installed ? '' : '<div class="form-label" style="margin-top:6px;opacity:0.7;">The AI engine is not installed (Tools &rarr; Setup AI Reading Engine). Digital pages convert without it; scanned pages need it.</div>') + '</div>';
+        (installed ? '' : '<div class="form-label" style="margin-top:6px;opacity:0.7;">The AI reading model is not installed (Tools &rarr; Scanned Pages &rarr; Download AI Reading Model). Digital pages convert without it; scanned pages need it.</div>') + '</div>';
       showModal('Export as Word Document', content, [{ label: 'Cancel', action: 'cancel' }, { label: 'Export', action: 'export', primary: true, handler: m => {
         const pages = parsePageRange(m.querySelector('#docxPages').value, total);
         if (!pages) { showNotification('Enter pages like 1-3,5 between 1 and ' + total, 'warning'); return 'keep-open'; }
@@ -2086,7 +2088,7 @@
         if (state.formsDirty) await commitFormValues();
         const r = await window.pdfAPI.flattenForm({ data: state.originalData });
         if (!r.success) { showNotification(r.error, 'warning'); return; }
-        if (!confirm('Flatten the form? Fields become fixed page content and can no longer be edited.')) return;
+        if (!confirm('Turns the filled-in answers into ordinary page content. They can no longer be edited, and every PDF reader shows them the same.\n\nFlatten the form? Fields become fixed page content and can no longer be edited.')) return;
         state.originalData = r.data; setUnsavedChanges(true);
         state.pdfDoc = await pdfjsLib.getDocument({ data: Uint8Array.from(atob(r.data), c => c.charCodeAt(0)) }).promise;
         await renderThumbnails(); await renderAllPages(); goToPage(state.currentPage); showNotification('Form flattened');
@@ -2114,6 +2116,7 @@
     }
     async function makeFillable() {
       if (!state.pdfDoc) { showNotification('Open a PDF first', 'warning'); return; }
+      showNotification('Finds the blank lines and boxes on a form that has no fillable fields and makes them fillable.');
       setLoading(true, 'Detecting fields...');
       try {
         await commitFormValues();
@@ -2160,7 +2163,7 @@
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
     }
     // Form fields by hand: drawing a new field, moving/resizing existing ones, and field properties
-    const FIELD_TOOL_LABELS = { fieldText: 'Text Field', fieldCheck: 'Checkbox', fieldDropdown: 'Dropdown', editFields: 'Edit Form Fields' };
+    const FIELD_TOOL_LABELS = { fieldText: 'Text Field', fieldCheck: 'Checkbox', fieldDropdown: 'Dropdown', editFields: 'Move & Resize Fields' };
     // Resolves with read(modal) on OK, or null on Cancel, Esc or the close button. read may throw to keep the dialog open
     function askModal(title, content, okLabel, read, init) {
       return new Promise(resolve => {
@@ -2233,7 +2236,7 @@
         await runFormOp(d => window.pdfAPI.addFormFields({ data: d, fields: [field] }), 'Field added');
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
     }
-    // Edit Form Fields mode: every widget as a draggable, resizable box above the page
+    // Move & Resize Fields mode: every widget as a draggable, resizable box above the page
     async function buildFieldEditLayers() {
       const gen = state.fieldEditGen = (state.fieldEditGen || 0) + 1;
       document.querySelectorAll('.field-edit-layer').forEach(l => l.remove());
@@ -2602,7 +2605,7 @@
         if (!g.success) throw new Error(g.error);
         const ids = g.profiles.map(p => p.id);
         setLoading(false);
-        showProfileReview({ title: 'Save Answers to Profile', profiles: g.profiles, selfId: ids.includes(g.lastSelf) ? g.lastSelf : ids[0] || '', spouseId: ids.includes(g.lastSpouse) ? g.lastSpouse : null, load: (selfId, spouseId) => window.pdfAPI.answersToProfile({ pages, selfId, spouseId }) });
+        showProfileReview({ title: 'Save Filled Answers to a Profile', profiles: g.profiles, selfId: ids.includes(g.lastSelf) ? g.lastSelf : ids[0] || '', spouseId: ids.includes(g.lastSpouse) ? g.lastSpouse : null, load: (selfId, spouseId) => window.pdfAPI.answersToProfile({ pages, selfId, spouseId }) });
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
       finally { setLoading(false); }
     }
@@ -2619,11 +2622,11 @@
             const st = await window.pdfAPI.engineStatus();
             if (!st.installed) {
               setLoading(false);
-              showNotification(st.hasFiles ? 'Smart Extract needs an AI engine update (small download)' : 'Smart Extract needs the AI engine (one-time ~4.5GB download)', 'warning');
+              showNotification(st.hasFiles ? 'The AI reading model needs an update (small download)' : 'This needs the AI reading model (one-time ~4.5GB download)', 'warning');
               showEngineSetup();
               return;
             }
-            $('loadingText').textContent = 'Reading page ' + i + ' of ' + n + ' with Smart Extract...';
+            $('loadingText').textContent = 'Reading page ' + i + ' of ' + n + ' with AI...';
             const vp = page.getViewport({ scale: await extractScale(page, pdfjsLib.OPS) });
             const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
             await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
@@ -2651,7 +2654,7 @@
         if (!g.success) throw new Error(g.error);
         const first = r.proposals.find(p => p.key === 'firstName'), last = r.proposals.find(p => p.key === 'lastName');
         setLoading(false);
-        showProfileReview({ title: 'New Profile from Document', profiles: g.profiles, selfId: '', spouseId: null, newName: [first, last].filter(Boolean).map(p => p.value).join(' ').slice(0, 60),
+        showProfileReview({ title: 'Create Profile from This Document', profiles: g.profiles, selfId: '', spouseId: null, newName: [first, last].filter(Boolean).map(p => p.value).join(' ').slice(0, 60),
           load: async (selfId) => ({ success: true, proposals: rediffProposals(r.proposals, selfId ? g.profiles.find(p => p.id === selfId)?.details : null) }) });
       } catch (e) { showNotification('Error: ' + e.message, 'error'); }
       finally { installing = false; setLoading(false); }
@@ -2945,7 +2948,7 @@
           const texts = widgets.filter(a => a.fieldType === 'Tx');
           for (const a of texts) if ((storage.getRawValue(a.id)?.value ?? a.fieldValue)) skipIds.push(a.id);
           const words = pageWords((await page.getTextContent()).items, vp), entry = { page: i, width: vp.width, height: vp.height, scale, fields: texts.map(field), sigFields: widgets.filter(a => a.fieldType === 'Sig').map(field), words };
-          if (pngs < 12 && words.some(w => SIGN_WORD.test(w.text))) { // a printed line with no field of its own (the W-9 has fields, but not for the signature): find the blank lines as Make Fillable does
+          if (pngs < 12 && words.some(w => SIGN_WORD.test(w.text))) { // a printed line with no field of its own (the W-9 has fields, but not for the signature): find the blank lines as Detect Fields Automatically does
             pngs++;
             const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
             await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
